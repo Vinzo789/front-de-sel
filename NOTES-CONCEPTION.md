@@ -44,7 +44,7 @@ d'effets, et les modules 3D les mettent en scène à chaque image, à travers
 l'objet global `R3D`. On peut donc modifier les règles sans toucher au rendu,
 et inversement.
 
-Chaque balise `<script>` porte un numéro de version (`?v=21` au 13 novembre 2026 : équilibrage des camps mis en pause et retiré du jeu, voir plus bas). **Il faut
+Chaque balise `<script>` porte un numéro de version (`?v=24` au 13 novembre 2026 : seconde passe de fluidité, voir « Fluidité » à la fin). **Il faut
 l'augmenter à chaque modification d'un fichier**, sinon le navigateur garde
 l'ancienne version en mémoire.
 
@@ -857,7 +857,14 @@ par la valeur `sable` de chaque ambiance. Non vérifié : la fluidité avant et
 après, la qualité Basse à l'écran, les cinématiques. Pistes écartées pour
 l'instant : végétation, flou de profondeur, caméra basse, sol plus détaillé.
 
-## Fluidité (13 novembre 2026, `?v=22`) : moteur et interface (`jeu.js`)
+## Fluidité (13 novembre 2026) : deux passes
+
+Première passe (`?v=22` et `?v=23`) : à-coups supprimés (shaders compilés au chargement, interface
+allégée) ; détail ci-dessous. Seconde passe (`?v=24`) : coût de chaque image (carte graphique
+saturée) et derniers blocages ; détail dans « Seconde passe » plus bas. Ce qui suit, jusqu'à la
+seconde passe, décrit l'état `?v=22` ; les points devenus faux sont signalés.
+
+### Première passe (`?v=22`) : moteur et interface (`jeu.js`)
 
 Le propriétaire signale « quelques lags » sur un portable à carte graphique
 intégrée. La mesure « avant » montre que la simulation et l'IA comptent peu
@@ -870,8 +877,8 @@ fait ceci, sans toucher aux règles ni aux décisions des ordinateurs.
   chargement, après le choix de la qualité, puis à chaque changement de
   qualité au menu. S'il n'existe pas, rien ne se passe. Sa durée est lue dans
   `dureePrechauffage`.
-- **Vignettes** (`R3D.Vignettes.suspendre`) : leur production est suspendue
-  dans trois cas. Pendant le chargement, jusqu'à 1,5 s après la première
+- **Vignettes** (`R3D.Vignettes.suspendre`) — *remplacé en `?v=24`, voir
+  plus bas* : leur production est suspendue dans trois cas. Pendant le chargement, jusqu'à 1,5 s après la première
   image. Pendant les cinématiques. Pendant les grosses batailles, à partir de
   `SEUIL_BATAILLE` = 40 projectiles et effets en cours ; elle reprend après
   3 s sous ce seuil.
@@ -889,8 +896,8 @@ fait ceci, sans toucher aux règles ni aux décisions des ordinateurs.
 - **Ordinateurs** : une seule réflexion par pas. Ce garde-fou ne s'est jamais
   déclenché sur 4 800 pas mesurés à quatre camps : les décalages de départ
   suffisent déjà.
-- **Réglages** : la case « Résolution adaptative » du menu (cochée par
-  défaut, mémorisée) règle `R3D.adaptatif`. La case « Afficher les
+- **Réglages** : la case « Résolution adaptative » du menu (décochée par
+  défaut depuis le 13 novembre, mémorisée) règle `R3D.adaptatif`. La case « Afficher les
   performances » de la fenêtre Commandes (mémorisée), ou la touche **F8**,
   affiche au-dessus de la minicarte : images par seconde, ms par image, appels
   de dessin, triangles et résolution. Ces chiffres viennent de `R3D.perf()`
@@ -922,3 +929,99 @@ Non mesuré ou pas encore effectif : le gain du préchauffage dépend de
 de 3 minutes montrait encore une première image de 1 096 ms et des images de
 109 à 276 ms. La fluidité ressentie sur le portable du propriétaire reste à
 confirmer avec F8.
+
+Entre-temps (`?v=23`), les modules de rendu ont reçu leur `prechauffer` :
+plus aucun programme de shaders n'est compilé en pleine partie.
+
+### Seconde passe (`?v=24`)
+
+Constat de départ (mesures de l'agent de la première passe, requêtes de
+temps GPU) : la carte graphique est saturée à chaque image ; en vue de base,
+le shader du sol prend 15 à 20 ms sur 26 à 33 ms de travail GPU ; en Moyenne
+et Élevée, avec une densité d'écran de 1,25, le jeu calculait 1707 × 960
+pixels pour une fenêtre de 1366 × 768. Décisions : **Moyenne devient le
+réglage fluide** (densité plafonnée à 1, sol allégé), **Élevée garde tout**,
+**Basse reste le repli le plus léger**. Les fichiers `r3d-*.js` (sol,
+densité, modèles, effets) ont été traités par d'autres agents, chacun dans
+son fichier ; ce qui suit concerne `jeu.js`, `front-de-sel.html` et
+`r3d-vignettes.js`.
+
+- **Vignettes : plus aucune production en pleine partie.** Une vignette
+  bloque la page de 40 à 344 ms. Elles sont toutes produites pendant le
+  chargement, le menu et le briefing ; leurs shaders sont compilés d'un coup
+  dès que le module est prêt (`compilerShaders`). En partie non mise en
+  pause : rien, sauf les images manquantes de l'onglet de la barre de
+  construction que le joueur vient d'ouvrir (`autoriserVignettesOnglet`),
+  une au plus toutes les 3 s. En pause : production normale. Si la partie est
+  lancée avant la fin (lien direct `?mission=…`), l'écran de lancement attend
+  au plus 2 s de plus (`ATTENTE_VIGNETTES_MS`) ; les vignettes restantes
+  gardent leur pictogramme jusqu'à une pause.
+- **Lancement d'une partie** (« Lancer la partie », « Commencer », `?demo`) :
+  le bouton affiche « Préparation des effets… », puis, au tour suivant, la
+  partie est créée, puis `R3D.Unites.preparerCamps()` (modèles aux couleurs
+  des camps réels) et `R3D.prechauffer()` sont appelés s'ils existent. La
+  première image ne construit ni ne compile rien. Durées dans
+  `mesuresLancement`.
+- **Changement de qualité au menu** : « Préparation des effets… » s'affiche à
+  côté de la liste, puis le travail est lancé au tour suivant.
+- **Liste « Graphismes »** : chaque qualité dit en une ligne ce qu'elle
+  apporte (Basse : la plus légère ; Moyenne : fluide, recommandée ; Élevée :
+  image la plus fine, pour carte graphique puissante).
+- **Résolution adaptative** : case gardée, décochée par défaut. Elle ne
+  concerne plus que la qualité Élevée sur un écran dense (`r3d-scene.js` ne
+  descend jamais sous la résolution native de la fenêtre) ; l'info-bulle le
+  dit.
+- **Recherche de chemin** (`trouverChemin`) réécrite sans changer son
+  résultat : tas binaire dans un tableau typé, voisins en tableaux plats,
+  tests de case et heuristique en ligne. Même ordre d'exploration, mêmes
+  égalités, même plafond de 7 000 itérations.
+
+Mesures de cette passe (navigateur intégré, onglet en arrière-plan, carte
+graphique et processeur partagés avec d'autres agents : temps bruités) :
+
+- **Pics de simulation.** Chronométrage par sous-fonction (`majUnite`,
+  `majBatiment`, `majIA`, `trouverChemin`, `compacter`, `separer`,
+  `majMission`) et taille du tas mémoire avant et après chaque pas.
+  - Missions `karsk-3` et `karsk-4` (robots de `?verif`) : les pas les plus
+    longs (13 à 20 ms) tombaient tous sur des rafales de 15 à 40 recherches
+    de chemin dans un même pas (ordres donnés à un groupe ; appelant :
+    `allerVers`), sans ramassage de mémoire. Ils se reproduisaient au même
+    instant d'une partie à l'autre (t = 13,1 s : 17 recherches). C'est donc
+    du code. Après la réécriture, sur `karsk-3` : 5,4 ms à t = 13,1 s et
+    7,7 ms au pire (39 recherches, 7 ms) au lieu de 20 ms (40 recherches,
+    18,6 ms). Rejeu des 19 rafales réelles de `karsk-4` (300 recherches),
+    ancienne et nouvelle fonction en alternance dans la même page, 5 fois :
+    1,8 à 2,9 ms contre 0,4 à 0,6 ms pour la pire rafale, 9,7 à 14,2 ms
+    contre 2,5 à 3,3 ms au total. Chemins identiques : 720 trajets tirés au
+    hasard et ces 300 recherches. Décisions identiques : partie à quatre
+    ordinateurs `avecGraine(7)` de 240 s, même empreinte (camps, réserves,
+    effectifs, valeur d'armée) avec l'ancienne et la nouvelle fonction.
+  - Duel `avecGraine(7, duelIA('ultra', 'ultra', 'halden', 300))` : le seul
+    pas au-dessus de 15 ms (22,7 ms, t = 68,8 s) contenait une libération de
+    131 Mo du tas : un ramassage de mémoire. Rejoué avec la même graine, et
+    avec un autre duel (graine 11, Karsk), aucun pas au-dessus de 2,9 ms. Le
+    pic de 36 ms à t = 214 s signalé avant cette passe n'a pas été reproduit.
+  - Premier pas d'une mission : 5,1 ms (code pas encore optimisé), puis
+    1,5 et 0,9 ms. Un premier pas à 43 ms vu une fois sur `karsk-4` ne s'est
+    pas reproduit.
+- **Vignettes.** Shaders des vignettes : 19 à 20 programmes, compilés en
+  1,6 à 3,4 s au chargement (53 modèles). Ensuite, aucun programme nouveau
+  pendant les 20 vignettes suivantes ni en partie. Une vignette coûte 38 à
+  224 ms dans ces conditions. Escarmouche de 3 minutes simulées, mission
+  `karsk-1` lancée par lien direct, `?demo` et `?surprise=30` (invasion,
+  cinématique, alliance) : aucune vignette produite en partie non mise en
+  pause ; en pause, la production reprend. Onglet ouvert en partie : deux
+  images produites à 4,5 s d'écart. Attente au lancement : 2,0 s au plus
+  (2001 à 2027 ms mesurées).
+- **Lancement.** `preparerCamps` 167 à 359 ms, `prechauffer` 91 à 230 ms ;
+  aucun programme compilé pendant les images qui suivent (compteur
+  `renderer.info.programs` inchangé).
+- **Changement de qualité au menu** (Moyenne vers Élevée) : 550 ms de
+  préchauffage, message affiché pendant ce temps.
+
+Non mesuré : le temps GPU par image après les changements des autres
+fichiers (voir leurs comptes rendus) ; la fluidité ressentie sur le portable
+du propriétaire (touche F8) ; le coût des vignettes produites en pause sur ce
+portable. Pendant les essais, `r3d-scene.js`, en cours de modification par un
+autre agent, affichait l'avertissement « U_SOLEIL_SOL is not defined » au
+préchauffage : à revérifier une fois ce fichier terminé.

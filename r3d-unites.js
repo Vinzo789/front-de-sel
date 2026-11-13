@@ -86,10 +86,28 @@
   function matieres(rugosite, metal, teintes){ for(const t of teintes) MATIERES[t] = [rugosite, metal]; }
 
   // Accumulateur de géométrie fusionnée.
-  function Piece(){ this.p = []; this.n = []; this.c = []; this.u = []; this.m = []; this.mt = null; }
+  // Niveau de détail (novembre 2026) : chaque primitive ajoutée par g() note sa plage de sommets et
+  // sa taille ; geo() en tire une seconde géométrie, geo.lod, sans les petites pièces et avec des
+  // cylindres et sphères moins facettés (voir geoLod). Les coques, voilures et triangles bruts sont
+  // gardés tels quels (silhouette).
+  function Piece(){ this.p = []; this.n = []; this.c = []; this.u = []; this.m = []; this.mt = null; this.s = []; }
   // Impose une matière aux ajouts suivants (sans argument : retour à la table des teintes).
   Piece.prototype.matiere = function(rugosite, metal){ this.mt = rugosite === undefined ? null : [rugosite, metal]; return this; };
   Piece.prototype.g = function(geo, coul, m, chenille){
+    if(!this.lodEnCours){
+      // taille de la primitive : boîte du prototype × échelle de la matrice (dimensions triées)
+      if(!geo.boundingBox) geo.computeBoundingBox();
+      const bb = geo.boundingBox, e = m ? m.elements : null;
+      const k = j => e ? Math.hypot(e[j*4], e[j*4+1], e[j*4+2]) : 1;
+      const d = [(bb.max.x - bb.min.x)*k(0), (bb.max.y - bb.min.y)*k(1), (bb.max.z - bb.min.z)*k(2)].sort((a, b) => b - a);
+      let rempl = null;
+      const P0 = geo.parameters;
+      if(geo.type === 'CylinderGeometry' && P0 && P0.radiusBottom === 1 && P0.height === 1 && P0.radialSegments > (lodFort ? 4 : 6))
+        rempl = geoCyl(Math.max(lodFort ? 4 : 6, Math.round(P0.radialSegments/2)), P0.radiusTop);
+      else if(geo === SPHERE1 || geo === SPHERE_LISSE) rempl = SPHERE0;
+      this.s.push({debut:this.p.length/3, fin:0, d0:d[0], d1:d[1], rempl, coul, m:rempl && m ? m.clone() : null, chenille, mt:this.mt});
+    }
+    const seg = this.lodEnCours ? null : this.s[this.s.length - 1];
     const g = geo.index ? geo.toNonIndexed() : geo.clone();
     if(m) g.applyMatrix4(m);
     const P = g.attributes.position.array, N = g.attributes.normal.array, U = g.attributes.uv ? g.attributes.uv.array : null;
@@ -102,6 +120,7 @@
       if(chenille && U) this.u.push(U[2*k]*chenille, U[2*k+1]*0.5); else this.u.push(0.5, 0.78);
     }
     g.dispose();
+    if(seg) seg.fin = this.p.length/3;
     return this;
   };
   // Triangle brut (sommets [x, y, z]) à facette plane ; « vers » : direction approximative de la
@@ -130,6 +149,16 @@
   //        dessus, ventre, seuil (ordonnée normalisée sous laquelle la teinte de ventre s'applique),
   //        bouchon (teinte des deux extrémités fermées ; absent : extrémités ouvertes)}.
   Piece.prototype.coque = function(S, o){
+    // version simplifiée : un point de profil sur deux (extrémités gardées), mêmes sections
+    if(!this.lodEnCours && o.profil.length >= 5){
+      const pr = o.profil.filter((q, i) => i % 2 === 0 || i === o.profil.length - 1);
+      const seg = {debut:this.p.length/3, fin:0, d0:Infinity, d1:Infinity, mt:this.mt, refaire:L => L.coque(S, Object.assign({}, o, {profil:pr}))};
+      this.s.push(seg);
+      this.lodEnCours = true;
+      try { this.coque(S, o); } finally { this.lodEnCours = false; }
+      seg.fin = this.p.length/3;
+      return this;
+    }
     const prof = o.profil, k = prof.length, nA = 2*k - 2, pos = [], cols = [], nor = [];
     const seuil = o.seuil === undefined ? -0.3 : o.seuil;
     for(const s of S){
@@ -234,8 +263,40 @@
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.c, 3));
     g.setAttribute('uv', new THREE.Float32BufferAttribute(this.u, 2));
     g.setAttribute('aMatiere', new THREE.Float32BufferAttribute(this.m, 2));
+    g.setAttribute('aAccent', new THREE.BufferAttribute(new Float32Array(this.p.length/3), 1));   // voir marquer
     g.computeBoundingSphere(); g.computeBoundingBox();
+    if(!this.lodEnCours) g.lod = this.geoLod(g.boundingBox);
     return g;
+  };
+  // Géométrie simplifiée (vue éloignée et passe d'ombres). On retire les primitives petites devant
+  // la pièce (plus grande dimension < 10 % de la pièce, ou deuxième dimension < 3,5 %) ; cylindres et
+  // sphères passent à moins de facettes ; les coques (fuselages) gardent un point de profil sur deux. Renvoie null si le gain est trop faible (la pièce sert alors telle quelle).
+  // Fantassins (lodFort, posé par modele) : seuils plus forts, car un soldat ne fait que 7 à 10 pixels
+  // de haut en vue éloignée.
+  const LOD_PETIT = 0.1, LOD_MINCE = 0.035, LOD_PETIT_F = 0.16, LOD_MINCE_F = 0.07;
+  let lodFort = false;
+  Piece.prototype.geoLod = function(bb){
+    const S = Math.max(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
+    const kP = lodFort ? LOD_PETIT_F : LOD_PETIT, kM = lodFort ? LOD_MINCE_F : LOD_MINCE;
+    const L = new Piece(); L.lodEnCours = true;
+    const src = this, copier = (a, b) => {
+      for(let i = a*3; i < b*3; i++){ L.p.push(src.p[i]); L.n.push(src.n[i]); L.c.push(src.c[i]); }
+      for(let i = a*2; i < b*2; i++){ L.u.push(src.u[i]); L.m.push(src.m[i]); }
+    };
+    let cur = 0;
+    for(const s of this.s){
+      if(s.debut > cur) copier(cur, s.debut);
+      cur = s.fin;
+      if(s.d0 < S*kP || s.d1 < S*kM) continue;
+      if(s.refaire){ L.mt = s.mt; s.refaire(L); }
+      else if(s.rempl){ L.mt = s.mt; L.g(s.rempl, s.coul, s.m, s.chenille); }
+      else copier(s.debut, s.fin);
+    }
+    const n = this.p.length/3;
+    if(n > cur) copier(cur, n);
+    this.s = [];
+    if(L.p.length > this.p.length*0.85 || !L.p.length) return null;
+    return L.geo();
   };
   Piece.prototype.vide = function(){ return this.p.length === 0; };
 
@@ -244,6 +305,7 @@
   // correction selon l'orientation (dessous assombris, dessus légèrement éclaircis).
   // Donne du volume et ancre les modèles au sol, surtout vus de haut.
   function ombrer(geo, dy, bas, haut, min, kDessus){
+    if(geo && geo.lod) ombrer(geo.lod, dy, bas, haut, min, kDessus);
     if(!geo || geo.userData.ombre) return;
     geo.userData.ombre = true;
     const P = geo.attributes.position.array, N = geo.attributes.normal.array, C = geo.attributes.color.array;
@@ -322,7 +384,7 @@
     g.fillStyle = '#2a2826'; g.fillRect(20, 0, 3, 16);            // creux
   });
   const PHASES_CHENILLE = 16, texChenilles = [];
-  for(let i = 0; i < PHASES_CHENILLE; i++){
+  for(let i = 0; i < 1; i++){     // une seule texture : la phase est un décalage par instance (matChenille)
     const t = new THREE.CanvasTexture(toileChenille);
     t.wrapS = THREE.RepeatWrapping; t.wrapT = THREE.ClampToEdgeWrapping;
     t.encoding = THREE.sRGBEncoding; t.offset.x = i / PHASES_CHENILLE; t.anisotropy = 4;
@@ -341,6 +403,7 @@
   // (ciel / horizon / sable, voir creerEnvironnement).
   function parSommet(mat, iris){
     mat.onBeforeCompile = function(sh){
+      teinteCampShader(sh);
       sh.vertexShader = sh.vertexShader
         .replace('#include <common>', '#include <common>\nattribute vec2 aMatiere;\nvarying vec2 vMatiere;')
         .replace('#include <begin_vertex>', '#include <begin_vertex>\nvMatiere = aMatiere;');
@@ -358,7 +421,7 @@
         totalEmissiveRadiance += irisC * irisF*irisF * vMatiere.y * 0.06;`);
     };
     // (la clé de cache du programme tient compte du texte de onBeforeCompile : les deux variantes sont distinctes)
-    mat.customProgramCacheKey = function(){ return iris ? 'matiere-iris' : 'matiere'; };
+    mat.customProgramCacheKey = function(){ return iris ? 'matiere-iris-camp' : 'matiere-camp'; };
     return mat;
   }
   const matCorps = parSommet(new THREE.MeshStandardMaterial({vertexColors:true, roughness:1, metalness:1, envMapIntensity:1.0}));
@@ -375,7 +438,21 @@
   const matFeu = new THREE.MeshBasicMaterial({vertexColors:true, toneMapped:false, transparent:true, depthWrite:false,
     blending:THREE.AdditiveBlending, side:THREE.DoubleSide, fog:false, color:new THREE.Color(1.25, 1.25, 1.25)});
   const matEpave = new THREE.MeshStandardMaterial({vertexColors:true, color:couleur('#5c4e42'), roughness:0.95, metalness:0.1});   // calciné mais lisible (pas un « trou » noir)
-  const matsChenille = texChenilles.map(t => new THREE.MeshStandardMaterial({vertexColors:true, map:t, roughness:0.9, metalness:0.25}));
+  // Teinte de camp par instance (voir marquer) : feux et épaves aussi.
+  matLum.onBeforeCompile = sh => teinteCampShader(sh); matLum.customProgramCacheKey = () => 'lum-camp';
+  matEpave.onBeforeCompile = sh => teinteCampShader(sh); matEpave.customProgramCacheKey = () => 'epave-camp';
+  const MATS_CAMP = new Set([matCorps, matCorpsK, matFantassin, matLum, matEpave]);   // lots munis d'un indice de camp
+  // Chenilles : une seule matière ; le défilement des patins est un décalage de texture PAR INSTANCE
+  // (attribut aDecal, voir agrandir). Avant novembre 2026 : 16 matières (une par phase), donc
+  // jusqu'à 16 lots et appels de dessin par type de char.
+  const matChenille = new THREE.MeshStandardMaterial({vertexColors:true, map:texChenilles[0], roughness:0.9, metalness:0.25});
+  matChenille.onBeforeCompile = function(sh){
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float aDecal;')
+      .replace('#include <uv_vertex>', '#include <uv_vertex>\n#ifdef USE_UV\nvUv.x += aDecal;\n#endif');
+  };
+  matChenille.customProgramCacheKey = function(){ return 'chenille-decal'; };
+  const matsChenille = [matChenille];
   const matFlou = new THREE.MeshBasicMaterial({color:couleur('#2a3138'), transparent:true, opacity:0.28, depthWrite:false});
   const matPointage = new THREE.MeshBasicMaterial({visible:false});   // non dessiné, mais touché par le raycaster
   const LUMINEUX = new Set([matLum, matFeu, matFlou]);                 // pièces éteintes à la mort, sans ombre reçue
@@ -2003,6 +2080,7 @@
   // le reste -> gris clair à blanc, les noirs restent sombres.
   const ARDOISE = couleur('#5d7380');
   function neutraliser(geo){
+    if(geo && geo.lod) neutraliser(geo.lod);
     if(!geo || !geo.attributes.color) return;
     const C = geo.attributes.color.array;
     for(let i = 0; i < C.length; i += 3){
@@ -2042,6 +2120,7 @@
   const LUM_H = couleur(H.lum);
   function memeTeinte(C, i, t){ return Math.abs(C[i] - t.r) < 2e-4 && Math.abs(C[i+1] - t.g) < 2e-4 && Math.abs(C[i+2] - t.b) < 2e-4; }
   function recolorer(geo, vif, fonce, lum){
+    if(geo && geo.lod) recolorer(geo.lod, vif, fonce, lum);
     if(!geo || !geo.attributes.color) return;
     const C = geo.attributes.color.array;
     for(let i = 0; i < C.length; i += 3){
@@ -2059,6 +2138,86 @@
     if(cacheClaires[cle]) return cacheClaires[cle];
     const c = new THREE.Color(hex); c.r += (1 - c.r)*k; c.g += (1 - c.g)*k; c.b += (1 - c.b)*k;
     return (cacheClaires[cle] = c.convertSRGBToLinear());
+  }
+  // Novembre 2026 : la couleur de camp n'est plus cuite dans une copie des géométries par camp
+  // (4 camps = 4 jeux de lots et d'appels de dessin par type). Les sommets d'accent sont MARQUÉS
+  // (attribut aAccent : 1 bleu, 2 rouge, 3 bleu foncé, 4 rouge foncé, 5 feu Halden) et le shader les
+  // multiplie, PAR INSTANCE, par le rapport (teinte du camp / teinte d'origine) : même résultat
+  // qu'avant à la précision du calcul près. L'instance porte l'indice du camp dans PALETTE
+  // (instanceColor.x ; 0 = couleurs d'origine). Les calculs de teintes sont ceux de colorerModele.
+  const ORIG_ACCENTS = [ACCENTS[0], ACCENTS[1], ACCENTS_F[0], ACCENTS_F[1], LUM_H];
+  function marquer(geo, lum){
+    if(!geo) return;
+    if(geo.lod) marquer(geo.lod, lum);
+    const A = geo.attributes.aAccent, Cc = geo.attributes.color;
+    if(!A || !Cc) return;
+    const C = Cc.array, F = A.array;
+    for(let i = 0, v = 0; i < C.length; i += 3, v++){
+      F[v] = memeTeinte(C, i, ACCENTS[0]) ? 1 : memeTeinte(C, i, ACCENTS[1]) ? 2
+           : memeTeinte(C, i, ACCENTS_F[0]) ? 3 : memeTeinte(C, i, ACCENTS_F[1]) ? 4
+           : (lum && memeTeinte(C, i, LUM_H)) ? 5 : F[v];
+    }
+    A.needsUpdate = true;
+  }
+  function marquerModele(M){
+    const R = g => marquer(g, false), RL = g => marquer(g, true);
+    if(M.genre === 'fantassin'){
+      R(M.jambe); for(const k in M.torse) R(M.torse[k]);
+      if(M.outil) R(M.outil.geo);
+      RL(M.lum);
+    } else if(M.genre === 'drone'){
+      R(M.corps); R(M.pale); RL(M.lum);
+    } else if(M.genre === 'avion'){
+      R(M.corps); RL(M.lum);
+    } else if(M.genre === 'helico'){
+      R(M.corps); R(M.rotor); R(M.queue); R(M.arme); RL(M.lum);
+    } else if(M.genre === 'vehicule'){
+      R(M.coque); R(M.tourelle); R(M.canon); R(M.charge);
+      if(M.radar) R(M.radar.geo);
+      if(M.train.type === 'roues') R(M.train.geo);
+      RL(M.lum); RL(M.gyro);
+    }
+  }
+  const MAX_TEINTES = 8;
+  const MULT_CAMP = {value:[]};
+  for(let i = 0; i < MAX_TEINTES*5; i++) MULT_CAMP.value.push(new THREE.Vector3(1, 1, 1));
+  const palette = new Map();      // '#rrggbb' -> indice (1 … MAX_TEINTES - 1)
+  function indiceTeinte(hex){
+    if(!hex) return 0;
+    let i = palette.get(hex);
+    if(i !== undefined) return i;
+    if(palette.size >= MAX_TEINTES - 1) palette.clear();    // (nouvelle partie aux couleurs inédites : on repart à zéro)
+    i = palette.size + 1;
+    palette.set(hex, i);
+    const vif = couleur(hex), bleu = hex === H.bleu, rouge = hex === K.rouge;
+    const fonce = bleu ? couleur(H.bleuF) : rouge ? couleur(K.rougeF) : new THREE.Color(vif.r*0.28, vif.g*0.28, vif.b*0.28);
+    const lum = bleu ? LUM_H : claire(hex, 0.45);
+    const cible = [vif, vif, fonce, fonce, lum];
+    for(let f = 0; f < 5; f++){
+      const o = ORIG_ACCENTS[f], c = cible[f];
+      MULT_CAMP.value[i*5 + f].set(c.r/Math.max(o.r, 1e-6), c.g/Math.max(o.g, 1e-6), c.b/Math.max(o.b, 1e-6));
+    }
+    return i;
+  }
+  // Remplacement de color_vertex (three r128) : couleur de sommet, puis teinte de camp des accents.
+  const COULEUR_CAMP_VS = `
+    #if defined( USE_COLOR ) || defined( USE_INSTANCING_COLOR )
+      vColor = vec3( 1.0 );
+    #endif
+    #ifdef USE_COLOR
+      vColor *= color;
+    #endif
+    #ifdef USE_INSTANCING_COLOR
+    {
+      int ciCamp = int( instanceColor.x + 0.5 ), flCamp = int( aAccent + 0.5 );
+      if( ciCamp > 0 && flCamp > 0 ) vColor *= uMultCamp[ ciCamp*5 + flCamp - 1 ];
+    }
+    #endif`;
+  function teinteCampShader(sh){
+    sh.uniforms.uMultCamp = MULT_CAMP;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float aAccent;\n#ifdef USE_INSTANCING_COLOR\nuniform vec3 uMultCamp[' + MAX_TEINTES*5 + '];\n#endif')
+      .replace('#include <color_vertex>', COULEUR_CAMP_VS);
   }
   function colorerModele(M, hex){
     // Couleurs par défaut des factions : teintes d'origine exactes (un duel bleu/rouge ne change pas).
@@ -2123,6 +2282,26 @@
     if(u.camp === 'N') return 'neutre';
     return TYPES_KARSK[u.type] ? 'karsk' : 'halden';
   }
+  // Fusion de géométries de Piece translatées : [[geo, x, y, z], ...].
+  function fusionner(liste){
+    const noms = ['position', 'normal', 'color', 'uv', 'aMatiere', 'aAccent'], tab = {};
+    for(const k of noms) tab[k] = [];
+    for(const [g0, x, y, z] of liste){
+      const g = g0;     // géométries complètes : une ombre simplifiée assombrissait le fantassin (ombre propre décalée)
+      for(const k of noms){
+        const A = g.attributes[k];
+        if(!A){ tab[k] = null; continue; }
+        if(!tab[k]) continue;
+        const a = A.array, T = tab[k];
+        if(k === 'position') for(let i = 0; i < a.length; i += 3) T.push(a[i] + x, a[i+1] + y, a[i+2] + z);
+        else for(let i = 0; i < a.length; i++) T.push(a[i]);
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    for(const k of noms) if(tab[k]) g.setAttribute(k, new THREE.Float32BufferAttribute(tab[k], k === 'aAccent' ? 1 : k === 'uv' || k === 'aMatiere' ? 2 : 3));
+    g.computeBoundingSphere();
+    return g;
+  }
   const modeles = {};
   // Modèle d'un type pour une faction. Les 10 types d'origine gardent leurs couleurs
   // propres pour Halden et Karsk ; seule la faction 'neutre' en a une variante.
@@ -2138,7 +2317,7 @@
                    : avion ? (faction === 'karsk' ? 'karsk' : faction === 'neutre' ? 'neutre' : 'halden')
                    : alien ? '' : (faction === 'neutre' ? 'neutre' : '');
     if(alien || variante === 'neutre') teinte = null;                       // ni Régie ni envahisseurs
-    const cle = type + '|' + variante + (teinte ? '|' + teinte : '');
+    const cle = type + '|' + variante;     // (la teinte de camp est appliquée par instance : voir marquer)
     if(modeles[cle]) return modeles[cle];
     let f = collecteur ? () => modeleCollecteur(variante) : camion ? () => modeleCamion(variante) : avion ? () => avion(variante) : FABRIQUES[type];
     if(!f && forme === 'infanterie'){ // fantassin d'un type inconnu : silhouette selon son rôle et sa faction
@@ -2156,12 +2335,16 @@
         : forme === 'atelier' ? (k ? modeleDepanneuse : modeleAtelier)
         : forme === 'dard' ? modeleDard : forme === 'rodeur' ? modeleRodeur : modeleLynx;
     }
-    const M = f();
+    const tM = performance.now();
+    lodFort = forme === 'infanterie' || forme === 'ouvrier';
+    let M;
+    try { M = f(); } finally { lodFort = false; }
+    diagImg.modele = (diagImg.modele || 0) + performance.now() - tM;
     if(camion || avion){ if(variante === 'neutre') neutraliserModele(M); M.mat = M.matK ? matCorpsK : matCorps; }
     else if(alien) M.mat = matAlien;
     else if(variante === 'neutre'){ neutraliserModele(M); M.mat = matCorps; }
     else M.mat = (TYPES_KARSK[type] || M.matK || f === modeleGrele || f === modeleSentinelle) ? matCorpsK : matCorps;
-    if(teinte) colorerModele(M, teinte);                                    // avant l'occlusion cuite
+    if(!alien && variante !== 'neutre'){ marquerModele(M); M.teintable = true; }   // avant l'occlusion cuite
     // Occlusion ambiante cuite (voir ombrer)
     if(M.genre === 'fantassin'){
       ombrer(M.jambe, HANCHE, 0, 12.5, 0.55);
@@ -2186,8 +2369,15 @@
       if(M.radar) ombrer(M.radar.geo, yT + M.radar.pos[1], 1.5, hh + 3, 0.42);
       ombrer(M.train.geo, M.train.type === 'roues' ? M.train.r : 0, 0, 8, 0.55, 1);
     }
+    // Fantassin : ombre portée par UNE silhouette fixe (torse au repos et deux jambes droites)
+    // au lieu de trois ou quatre pièces : un seul lot d'ombre par type.
+    if(M.genre === 'fantassin'){
+      const pose = [[M.torse.normal, 0, 0, 0], [M.jambe, 0, HANCHE, -1.15], [M.jambe, 0, HANCHE, 1.15]];
+      if(M.outil) pose.push([M.outil.geo, M.outil.x, M.outil.y, M.outil.z]);
+      M.silhouette = fusionner(pose);
+    }
     // Les InstancedMesh (roues, pales) sont cullés via la sphère de leur géométrie : on l'élargit au véhicule.
-    if(M.train && M.train.type === 'roues'){ M.train.geo = M.train.geo.clone(); M.train.geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 4, 0), M.l*0.6); }
+    if(M.train && M.train.type === 'roues'){ const lodR = M.train.geo.lod; M.train.geo = M.train.geo.clone(); M.train.geo.lod = lodR || null; M.train.geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 4, 0), M.l*0.6); }
     if(M.pale){ M.pale.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 14); }
     return (modeles[cle] = M);
   }
@@ -2214,69 +2404,132 @@
   let partsCourantes = null;  // tableau des pièces de l'unité en cours de création
   function maillage(geo, mat, ombre){
     const a = new THREE.Object3D();
-    a.geometry = geo; a.material = mat; a.ombre = ombre !== false;
+    a.geometry = geo; a.material = mat; a.ombre = ombre === 'seule' ? 'seule' : ombre !== false;
     partsCourantes.push(a);
     return a;
   }
+  // Chaque lot a DEUX InstancedMesh qui partagent le même tampon d'instances : im (géométrie
+  // complète, vue rapprochée) et imL (géométrie simplifiée geo.lod, ou la même s'il n'y en a pas).
+  //   vue rapprochée : im dessiné à l'écran, imL seulement dans la passe d'ombres ;
+  //   vue éloignée   : imL seul, à l'écran et dans les ombres.
+  // La passe d'ombres n'utilise donc jamais que la version simplifiée. ombre === 'seule' : pièce
+  // qui ne sert qu'à l'ombre (silhouette des fantassins), jamais dessinée à l'écran.
+  // Les deux objets de chaque lot sont créés au préchauffage : aucun programme neuf en partie.
   function lot(geo, mat, ombre){
     const cle = geo.uuid + '|' + mat.uuid;
     let L = lots.get(cle);
     if(!L){
-      L = {geo, mat, ombre, im:null, n:0, cap:0};
+      L = {geo, geoL:geo.lod || geo, mat, ombre:ombre !== false, seule:ombre === 'seule', im:null, imL:null, n:0, cap:0,
+        neuf:true, vL:false, decal:null};
       lots.set(cle, L);
-      agrandir(L, 16);
+      agrandir(L, CAP_LOT);
     }
     return L;
   }
+  const CAP_LOT = 32;
   function agrandir(L, cap){
-    if(L.im){ groupe.remove(L.im); L.im.dispose && L.im.dispose(); }
+    diagImg.nAgrandir = (diagImg.nAgrandir || 0) + 1;
+    if(L.im){ groupe.remove(L.im); groupe.remove(L.imL); L.im.dispose && L.im.dispose(); }
     const im = new THREE.InstancedMesh(L.geo, L.mat, cap);
     im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     im.frustumCulled = false; im.raycast = rien;
     im.matrixAutoUpdate = false;       // toujours à l'origine du groupe : pas de recomposition par image
-    im.castShadow = L.ombre; im.receiveShadow = !LUMINEUX.has(L.mat);
+    im.castShadow = false; im.receiveShadow = !LUMINEUX.has(L.mat);
     im.count = 0;
-    groupe.add(im);
-    L.im = im; L.cap = cap;
+    const imL = new THREE.InstancedMesh(L.geoL, L.mat, 0);
+    imL.instanceMatrix = im.instanceMatrix;
+    imL.frustumCulled = false; imL.raycast = rien; imL.matrixAutoUpdate = false;
+    imL.castShadow = L.ombre; imL.receiveShadow = im.receiveShadow;
+    imL.count = 0; imL.visible = false;
+    // chenilles : décalage de texture par instance (défilement des patins), une seule matière
+    if(L.mat === matChenille){
+      const a = new THREE.InstancedBufferAttribute(new Float32Array(cap), 1);
+      a.setUsage(THREE.DynamicDrawUsage);
+      if(L.decal) a.array.set(L.decal.array.subarray(0, Math.min(L.decal.count, cap)));
+      L.decal = a;
+      L.geo.setAttribute('aDecal', a); L.geoL.setAttribute('aDecal', a);
+    }
+    // matières teintables : indice de camp par instance (instanceColor.x, voir marquer)
+    if(MATS_CAMP.has(L.mat)){
+      const a = new THREE.InstancedBufferAttribute(new Float32Array(cap*3), 3);
+      a.setUsage(THREE.DynamicDrawUsage);
+      if(L.camp) a.array.set(L.camp.array.subarray(0, Math.min(L.camp.array.length, cap*3)));
+      L.camp = im.instanceColor = imL.instanceColor = a;
+      for(const g of [L.geo, L.geoL]) if(!g.attributes.aAccent) g.setAttribute('aAccent', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count), 1));
+    }
+    groupe.add(im); groupe.add(imL);
+    L.im = im; L.imL = imL; L.cap = cap;
   }
-  function deposer(a){
-    const L = lot(a.geometry, a.material, a.ombre);
+  function deposer(a, ci){
+    let L = a.lot;
+    if(!L || a.lotG !== a.geometry || a.lotM !== a.material){ L = a.lot = lot(a.geometry, a.material, a.ombre); a.lotG = a.geometry; a.lotM = a.material; }
     if(L.n >= L.cap){
       const ancien = L.im.instanceMatrix.array, n = L.n;
       agrandir(L, L.cap * 2);
       L.im.instanceMatrix.array.set(ancien.subarray(0, n*16));
     }
     L.im.instanceMatrix.array.set(a.matrixWorld.elements, L.n*16);
+    if(L.decal) L.decal.array[L.n] = a.decal || 0;
+    if(L.camp) L.camp.array[L.n*3] = ci || 0;
     L.n++;
   }
+  // Vue éloignée (géométries simplifiées), avec hystérésis : pas de va-et-vient au seuil.
+  const LOD_LOIN = 1100, LOD_PRES = 1000;
+  let loin = false;
+  function majLoin(){
+    const mode = R3D.Unites && R3D.Unites.lod;
+    if(mode === 'non'){ loin = false; return; }
+    if(mode === 'oui'){ loin = true; return; }
+    const d = R3D.vue && typeof R3D.vue.distance === 'number' ? R3D.vue.distance : 0;
+    if(!loin && d > LOD_LOIN) loin = true;
+    else if(loin && d < LOD_PRES) loin = false;
+  }
+  // Passe d'ombres : les versions simplifiées des lots porteurs d'ombre y sont visibles le temps de
+  // la passe (le rendu principal a déjà établi sa liste d'objets quand three.js la lance).
+  let rendererCrochet = null;
+  function poserCrochetOmbres(){
+    const R = R3D.renderer;
+    if(!R || !R.shadowMap || rendererCrochet === R) return;
+    rendererCrochet = R;
+    const sm = R.shadowMap, f = sm.render;
+    sm.render = function(){
+      for(const L of lotsActifs) if(L.ombre && L.n > 0) L.imL.visible = true;
+      try { return f.apply(this, arguments); }
+      finally { for(const L of lotsActifs) L.imL.visible = L.vL; }
+    };
+  }
+  const lotsActifs = [];
   function deposerUnite(o){
     o.racine.updateMatrixWorld(true);
-    const P = o.parts;
+    const P = o.parts, ci = indiceTeinte(o.hex);
     for(let i = 0; i < P.length; i++){
       const a = P[i];
       if(!a.visible) continue;
       // une pièce dont un parent est masqué est masquée aussi
-      deposer(a);
+      deposer(a, ci);
     }
   }
 
   function creer(u){
-    const M = modele(u.type, u.def && u.def.forme, factionDe(u), couleurCampDe(u));
+    const hex = couleurCampDe(u);
+    const M = modele(u.type, u.def && u.def.forme, factionDe(u), hex);
     const racine = new THREE.Group(); racine.userData.entId = u.id;
     const o = {u, M, racine, px:u.x, py:u.y, ang:u.angle, vit:0, vitF:0, acc:0, roul:0, pas:Math.random()*6, ampl:0,
       tPouss:Math.random()*0.1, tFumee:Math.random()*0.3, mort:false, tMort:0, vu:0, aerien:!!u.def.aerien,
       h0:0, inclX:0, inclZ:0, rotor:Math.random()*6, elev:0, radarA:Math.random()*6, phase:Math.random()*10, parts:[],
-      ombreCase:OMBRE.rectangle, ombreK:0.75};
+      ombreCase:OMBRE.rectangle, ombreK:0.75, hex:M.teintable ? hex : null};
     partsCourantes = o.parts;
     const pointage = new THREE.Mesh(geoPointage, matPointage);
     racine.add(pointage);
 
     if(M.genre === 'fantassin'){
       const corps = new THREE.Group(); racine.add(corps);
-      o.torse = maillage(M.torse.normal, matFantassin); corps.add(o.torse);
-      o.jambeG = maillage(M.jambe, matFantassin); o.jambeG.position.set(0, HANCHE, -1.15); corps.add(o.jambeG);
-      o.jambeD = maillage(M.jambe, matFantassin); o.jambeD.position.set(0, HANCHE, 1.15); corps.add(o.jambeD);
-      if(M.outil){ o.outil = maillage(M.outil.geo, matFantassin); o.outil.position.set(M.outil.x, M.outil.y, M.outil.z); corps.add(o.outil); }
+      // (ombre portée : la silhouette seule, voir modele)
+      o.torse = maillage(M.torse.normal, matFantassin, false); corps.add(o.torse);
+      o.jambeG = maillage(M.jambe, matFantassin, false); o.jambeG.position.set(0, HANCHE, -1.15); corps.add(o.jambeG);
+      o.jambeD = maillage(M.jambe, matFantassin, false); o.jambeD.position.set(0, HANCHE, 1.15); corps.add(o.jambeD);
+      if(M.outil){ o.outil = maillage(M.outil.geo, matFantassin, false); o.outil.position.set(M.outil.x, M.outil.y, M.outil.z); corps.add(o.outil); }
+      if(M.silhouette){ o.mSil = maillage(M.silhouette, matFantassin, 'seule'); corps.add(o.mSil); }
       if(M.lum){ o.mLum = maillage(M.lum, matLum, false); corps.add(o.mLum); }
       // lance-roquettes : éclair de bouche + souffle arrière (montrés au tir)
       if(M.feu){ o.mEclair = maillage(M.feu, matFeu, false); o.mEclair.visible = false; corps.add(o.mEclair); o.tirVu = u.tirT; }
@@ -2853,7 +3106,7 @@
     // train de roulement
     if(o.chenilles){
       const ph = ((o.roul / PAS_CHENILLE) % 1 + 1) % 1;
-      o.chenilles.material = matsChenille[Math.floor(ph * PHASES_CHENILLE) % PHASES_CHENILLE];
+      o.chenilles.decal = Math.floor(ph * PHASES_CHENILLE) / PHASES_CHENILLE;   // mêmes 16 crans qu'avant
     } else if(d > 0) majRoues(o);
     // poussière
     const E = Fx();
@@ -3282,7 +3535,7 @@
         // camp X : ses unités terrestres ; camp N : ses convois ; camps colorés : ceux de leur faction
         if(id === 'X' ? !TYPES_ALIENS[type] : id === 'N' ? !TYPES_NEUTRES[type] : (permis ? !permis.has(type) : TYPES_ALIENS[type])) continue;
         const u = {camp:id, type};
-        const cle = type + '|' + factionDe(u) + '|' + couleurCampDe(u);
+        const cle = type + '|' + factionDe(u);     // (un modèle sert à toutes les couleurs de camp)
         if(dejaPrecrees.has(cle)) continue;
         dejaPrecrees.add(cle);
         out.push([id, type]);
@@ -3311,7 +3564,6 @@
       lotsVus.add(cle);
       lot(a.geometry, a.material, a.ombre);
       if(!LUMINEUX.has(a.material) && !geosEpave.has(a.geometry)){ geosEpave.add(a.geometry); lot(a.geometry, matEpave, a.ombre); }
-      if(o.chenilles === a) for(const m of matsChenille) lot(a.geometry, m, a.ombre);
     }
     liberer(o);
   }
@@ -3323,8 +3575,7 @@
       if(marque % 30 !== 1) return;
       const C = campsDuJeu();
       if(!C) return;
-      let s = '';
-      for(const id in C){ const c = C[id]; s += id + ':' + (c && c.faction) + ':' + (c && c.couleur) + ';'; }
+      const s = signatureDe(C);
       if(s === signatureCamps) return;
       signatureCamps = s;
       filePrecon = aConstruire(false);
@@ -3340,10 +3591,16 @@
     } while(filePrecon.length && performance.now() - t0 < PRECONSTRUCTION_MS);
   }
   const precon = {n:0, total:0, max:0, type:null};      // diagnostic (R3D.Unites.preconstruction())
+  function signatureDe(C){
+    let s = '';
+    for(const id in C){ const c = C[id]; s += id + ':' + (c && c.faction) + ':' + (c && c.couleur) + ';'; }
+    return s;
+  }
 
   // =================================================================
   // 9. INTERFACE
   // =================================================================
+  const diag = {pire:{ms:0}}, diagImg = {};
   R3D.Unites = {
     init(){
       groupe = new THREE.Group(); groupe.name = 'unites';
@@ -3353,7 +3610,22 @@
     },
     sync(ents, temps, dt){
       if(!groupe) return;
+      const tSync = performance.now();
+      diagImg.creer = diagImg.nCreer = diagImg.mourir = diagImg.nAgrandir = diagImg.precon = diagImg.modele = diagImg.anim = diagImg.dep = 0;
+      try { this.syncInterne(ents, temps, dt); }
+      finally {
+        const d = performance.now() - tSync;
+        if(d > diag.pire.ms){ diag.pire = Object.assign({ms:+d.toFixed(2), t:+(+temps || 0).toFixed(2)}, diagImg); }
+      }
+    },
+    // Diagnostic : pire sync depuis le dernier appel (ms) et sa décomposition (création d'unités,
+    // de lots, morts, modèles, préconstruction). raz : remet à zéro.
+    diagnostic(raz){ const r = diag.pire; if(raz) diag.pire = {ms:0}; return r; },
+    // Niveau de détail : 'auto' (selon le recul de la caméra), 'non' (toujours complet), 'oui' (toujours simplifié).
+    lod:'auto',
+    syncInterne(ents, temps, dt){
       dt = dt || 0;
+      majLoin(); poserCrochetOmbres();
       horloge += dt;
       marque++;
       vivantes.length = 0; nOmbres = 0; nAnneaux = 0;
@@ -3365,12 +3637,15 @@
         if(u.est !== 'unite') continue;
         if(u.def && u.def.rendu === 'aliens') continue;      // vaisseau-mère : rendu par R3D.Aliens
         let o = objets.get(u.id);
-        if(!o){ o = creer(u); objets.set(u.id, o); }
+        if(!o){ const t = performance.now(); o = creer(u); objets.set(u.id, o); diagImg.creer += performance.now() - t; diagImg.nCreer++; }
         o.u = u; o.vu = marque;
+        const t1 = performance.now();
         animer(o, u, temps, dt);
         if(o.mFaisceau) majSoin(o, u, temps, dt);
         vivantes.push(o.racine);
+        const t2 = performance.now();
         deposerUnite(o);
+        diagImg.anim += t2 - t1; diagImg.dep += performance.now() - t2;
         if(o.M.genre === 'avion' || o.M.genre === 'dard') traineesAeronef(o, u);
         ombre(o, 1);
         if(u.selectionne) anneau(o, u);
@@ -3378,7 +3653,9 @@
       for(const [id, o] of objets){
         if(o.vu === marque) continue;
         objets.delete(id);
+        const t = performance.now();
         if(o.u.mort) mourir(o); else liberer(o);
+        diagImg.mourir += performance.now() - t;
       }
       majEpaves(dt);
       for(const o of epaves){
@@ -3389,10 +3666,38 @@
       }
       entsCourants = null;
       majTrainees(dt);
-      for(const L of lots.values()){ L.im.count = L.n; L.im.visible = L.n > 0; if(L.n) L.im.instanceMatrix.needsUpdate = true; }
+      // Lots : la version complète ou simplifiée selon la vue ; un lot neuf reste visible (vide) à sa
+      // première image, pour que ses géométries partent vers la carte graphique avant tout usage.
+      lotsActifs.length = 0;
+      for(const L of lots.values()){
+        const n = L.n, neuf = L.neuf;
+        L.im.count = L.imL.count = n; L.neuf = false;
+        if(n){ L.im.instanceMatrix.needsUpdate = true; if(L.decal) L.decal.needsUpdate = true; if(L.camp) L.camp.needsUpdate = true; lotsActifs.push(L); }
+        L.im.visible = n > 0 ? !loin && !L.seule : neuf;
+        L.vL = L.imL.visible = n > 0 ? loin && !L.seule : neuf;
+      }
       ombres.count = nOmbres; ombres.instanceMatrix.needsUpdate = true;
       anneaux.count = nAnneaux; anneaux.instanceMatrix.needsUpdate = true; anneaux.instanceColor.needsUpdate = true;
+      const tp = performance.now();
       preconstruire();      // après la mise à jour des lots : les lots neufs restent visibles (vides) une image
+      diagImg.precon += performance.now() - tp;
+    },
+    // Préparation des camps (à appeler par le moteur pendant l'écran de lancement, une fois les camps
+    // de la partie connus, couleurs comprises) : construit d'un coup tous les modèles aux couleurs des
+    // camps et leurs lots, au lieu de les répartir sur les premières images de la partie (jusqu'à
+    // 70 ms sur une image auparavant). Les lots neufs restent visibles (vides) à la première image,
+    // qui envoie leurs géométries ; aucun programme n'est compilé (matières déjà préchauffées).
+    // Renvoie {modeles, lots, ms}.
+    preparerCamps(){
+      if(!groupe) return null;
+      const t0 = performance.now(), n0 = lots.size;
+      const C = campsDuJeu();
+      if(!C) return null;
+      signatureCamps = signatureDe(C);
+      const liste = filePrecon.concat(aConstruire(false));
+      filePrecon = [];
+      for(let i = 0; i < liste.length; i++) precreer(liste[i]);
+      return {modeles:liste.length, lots:lots.size - n0, ms:Math.round(performance.now() - t0)};
     },
     racines(){ return vivantes; },
     // Diagnostic de la préconstruction en partie : modèles faits, temps total et pire cas (ms), reste à faire.
@@ -3423,7 +3728,7 @@
       } finally {
         for(const id of fictifs) delete C[id];
       }
-      for(const L of lots.values()) L.im.visible = true;
+      for(const L of lots.values()){ L.im.visible = true; L.imL.visible = true; }
       if(meshTrainees) meshTrainees.visible = true;
       signatureCamps = '';            // la partie suivante revérifie ses camps
       return lots.size - n0;

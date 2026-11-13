@@ -655,6 +655,19 @@ float fdsOmbreNuages( vec3 posVue ) {
     C.lights_fragment_begin = CHUNKS_ORIGINE.frag
       .replace(sonde, '/* sonde de lumiere : sert aux ombres de nuages (r3d-scene.js) */')
       .replace(appel, appel + '\n\t\t#if UNROLLED_LOOP_INDEX == 0\n\t\tdirectLight.color *= fdsOmbreNuages( geometry.position );\n\t\t#endif');
+    // Matières Lambert (éclairage par sommet : sol allégé des qualités Basse et Moyenne, et celles
+    // des autres modules) : la sonde n'éclaire pas non plus (sans ce retrait, son décalage, qui
+    // grandit avec le temps, s'ajoutait à la lumière ambiante), et l'ombre des nuages est calculée
+    // par sommet. Un nuage mesure plus de 600 unités, les sommets du sol sont à 20 unités : l'écart
+    // avec le calcul par pixel ne se voit pas.
+    if(!CHUNKS_ORIGINE.lambert) CHUNKS_ORIGINE.lambert = C.lights_lambert_vertex;
+    const appelL = 'getDirectionalDirectLightIrradiance( directionalLights[ i ], geometry, directLight );';
+    const sondeL = /\n\s*v(Indirect(Front|Back)) \+= getLightProbeIrradiance\( lightProbe, (backG|g)eometry \);/g;
+    if(CHUNKS_ORIGINE.lambert.indexOf(appelL) >= 0 && (CHUNKS_ORIGINE.lambert.match(sondeL) || []).length === 2){
+      C.lights_lambert_vertex = CHUNKS_ORIGINE.lambert
+        .replace(sondeL, '')
+        .replace(appelL, appelL + '\n\t\t#if UNROLLED_LOOP_INDEX == 0\n\t\tdirectLight.color *= fdsOmbreNuages( geometry.position );\n\t\t#endif');
+    }
     return true;
   }
   // À chaque image : dérive des nuages et force. Rien en qualité Basse ; les ombres de nuages
@@ -1734,19 +1747,38 @@ float fdsOmbreNuages( vec3 posVue ) {
             normal = normalize(normal - (viewMatrix * vec4(pn.x, 0.0, pn.y, 0.0)).xyz);
           }`);
     };
-    // Variante légère pour la qualité Basse : éclairage par sommet (Lambert), même teinte du sol
-    // (texture, détail, bitume, sable mouillé assombri) ; sans relief fin ni brillant du sable mouillé.
-    // La carte d'environnement ne l'éclaire pas : uTeinteSol compense l'écart de couleur moyen,
-    // mesuré une fois sur l'image (calibrerSol).
+    // Variante allégée (qualités Basse et Moyenne) : éclairage par sommet (Lambert), ombres de
+    // nuages par sommet, même teinte du sol (texture, détail, bitume, sable mouillé assombri),
+    // ombres portées gardées ; sans relief fin, sans carte d'environnement ni calcul physique par
+    // pixel. Mesuré en vue de base à 1707 x 960 : 3,8 ms de carte graphique au lieu de 11,3.
+    // L'écart de couleur avec la matière complète est corrigé deux fois, mesuré sur l'image au
+    // chargement (calibrerSol) : uTeinteInd pour la lumière du ciel (les ombres), uTeinteSol pour
+    // celle du soleil. Le sable mouillé garde un léger reflet du ciel (uReflet), sans carte.
     const obc = mat.onBeforeCompile;
     matSolS = mat;
     matSolL = new THREE.MeshLambertMaterial({map:mat.map});
     matSolL.onBeforeCompile = sh => {
       obc(sh);
       sh.uniforms.uTeinteSol = U_TEINTE_SOL;
+      sh.uniforms.uTeinteInd = U_TEINTE_IND;
+      sh.uniforms.uReflet = U_REFLET;
+      sh.uniforms.uSoleilSol = U_SOLEIL_SOL;
+      // Relief fin sans normales par pixel : la pente de la texture de normales (mêmes deux échelles
+      // que la matière complète) éclaircit ou assombrit la lumière du soleil, comme le ferait le calcul
+      // complet sur un sol presque plat (uSoleilSol = direction du soleil au sol, divisée par sa hauteur).
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying float vLoinSol;')
+        .replace('#include <fog_vertex>', '#include <fog_vertex>\nvLoinSol = 1.0 - smoothstep(700.0, 2400.0, length(mvPosition.xyz));');
       sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', '#include <common>\nuniform vec3 uTeinteSol;')
-        .replace('#include <aomap_fragment>', 'reflectedLight.directDiffuse *= uTeinteSol; reflectedLight.indirectDiffuse *= uTeinteSol;\n#include <aomap_fragment>');
+        .replace('#include <common>', '#include <common>\nuniform vec3 uTeinteSol, uTeinteInd, uReflet;\nuniform vec2 uSoleilSol;\nvarying float vLoinSol;')
+        .replace('#include <aomap_fragment>', `{
+            vec2 pn = (texture2D(tNormales, vPosM.xz/67.0).rg - 0.5)*1.5 + (texture2D(tNormales, vPosM.xz/19.0 + 0.23).rg - 0.5)*0.9;
+            pn *= vLoinSol * (1.0 - 0.75*solBitume) * (1.0 - 0.6*solHumide);
+            reflectedLight.directDiffuse *= clamp(1.0 + dot(pn, uSoleilSol), 0.0, 2.0);
+          }
+          reflectedLight.directDiffuse *= uTeinteSol; reflectedLight.indirectDiffuse *= uTeinteInd;
+          totalEmissiveRadiance += uReflet * solHumide;
+          #include <aomap_fragment>`);
     };
     solCalibre = false; essaisSol = 0;
     sol = new THREE.Group();
@@ -1766,16 +1798,26 @@ float fdsOmbreNuages( vec3 posVue ) {
   }
   const BLOC_SOL = 40;                   // côté d'un bloc du sol, en cases (40 x 20 = 800 unités)
   let matSolS = null, matSolL = null, solCalibre = false;
-  const U_TEINTE_SOL = {value:new THREE.Vector3(1, 1, 1)};
+  const U_TEINTE_SOL = {value:new THREE.Vector3(1, 1, 1)}, U_TEINTE_IND = {value:new THREE.Vector3(1, 1, 1)};
+  const U_REFLET = {value:new THREE.Vector3(0, 0, 0)}, U_SOLEIL_SOL = {value:new THREE.Vector2(0, 0)};
+  // Diagnostic : corrections du sol allégé ; R3D.solAllege.calibrer() refait la mesure sur la vue courante.
+  R3D.solAllege = {
+    info(){ return {calibre:solCalibre, direct:U_TEINTE_SOL.value.toArray().map(v => +v.toFixed(3)), ciel:U_TEINTE_IND.value.toArray().map(v => +v.toFixed(3)),
+      reflet:U_REFLET.value.toArray().map(v => +v.toFixed(3))}; },
+    calibrer(){ solCalibre = false; essaisSol = 0; calibrerSol(); return this.info(); },
+  };
+  // Sol allégé (Lambert) : qualités Basse et Moyenne. La qualité Élevée garde la matière complète.
+  function solAllege(){ return R3D.qualite !== 'haute'; }
   // Matière du sol selon la qualité.
   function majMatiereSol(){
     if(!sol || !matSolS) return;
-    const m = R3D.qualite === 'basse' && matSolL ? matSolL : matSolS;
+    const m = solAllege() && matSolL ? matSolL : matSolS;
     for(const c of sol.children) c.material = m;
   }
   // Teinte de la variante Lambert : on rend le sol seul (petite image hors écran), avec la matière
   // complète puis la variante, et on corrige l'écart de couleur moyen, canal par canal.
   let essaisSol = 0;
+  const REFLET_HUMIDE = 0.12;            // part de la lumière du ciel renvoyée par le sable mouillé (sol allégé)
   function calibrerSol(){
     if(solCalibre || !sol || !matSolL || !renderer || essaisSol >= 3) return;
     solCalibre = true; essaisSol++;
@@ -1785,6 +1827,7 @@ float fdsOmbreNuages( vec3 posVue ) {
     const fond = scene.background, cc = renderer.getClearColor(new THREE.Color()), ca = renderer.getClearAlpha();
     const vp = renderer.getViewport(new THREE.Vector4()), sc = renderer.getScissor(new THREE.Vector4()), st = renderer.getScissorTest();
     const gl = renderer.getContext(), pr = renderer.getPixelRatio();
+    const iSoleil = soleil.intensity, iAppoint = appoint.intensity, brumeP = scene.fog.near, brumeL = scene.fog.far, expo = renderer.toneMappingExposure;
     try {
       for(const o of scene.children) if(o !== sol && o.visible && !o.isLight){ o.visible = false; caches.push(o); }
       renderer.shadowMap.autoUpdate = false;
@@ -1793,26 +1836,47 @@ float fdsOmbreNuages( vec3 posVue ) {
       renderer.setViewport(0, 0, 160, 100); renderer.setScissor(0, 0, 160, 100); renderer.setScissorTest(true);
       const W = Math.max(1, Math.floor(160*pr)), H = Math.max(1, Math.floor(100*pr));
       const px = new Uint8Array(W*H*4);
+      // Caméra de mesure : la vue de jeu (inclinaison moyenne, zoom large) au centre des bases (terre
+      // ferme), quelle que soit la vue du moment (le menu montre l'horizon, sous une lumière rasante).
+      const camCal = new THREE.PerspectiveCamera(40, 1.6, 10, 9000), inc = 0.9, dc = 1300;
+      let cx = (GX0 + GNX*GPAS/2), cz = (GZ0 + GNZ*GPAS/2);
+      if(BASES.length){ cx = 0; cz = 0; for(const b of BASES){ cx += b[0]/BASES.length; cz += b[1]/BASES.length; } }
+      camCal.position.set(cx, Math.sin(inc)*dc, cz + Math.cos(inc)*dc); camCal.lookAt(cx, 0, cz); camCal.updateMatrixWorld();
       const moyenne = m => {
         for(const c of sol.children) c.material = m;
-        renderer.clear(); renderer.render(scene, camera);
+        renderer.clear(); renderer.render(scene, camCal);
         gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px);
         const s = [0, 0, 0]; let nb = 0;
         for(let i = 0; i < px.length; i += 4) if(px[i+3] > 250){ s[0] += px[i]; s[1] += px[i+1]; s[2] += px[i+2]; nb++; }
         if(nb < 200) throw new Error('sol hors champ');
         return s.map(v => Math.pow(Math.max(v/nb, 1)/255, 2.2));
       };
-      const ref = moyenne(matSolS), k = U_TEINTE_SOL.value;
-      k.set(1, 1, 1);
+      // Sans brume (elle rapprocherait les deux images de sa couleur) : seulement ses distances, aucun
+      // nouveau programme. Deux mesures : lumière du ciel seule (soleil et appoint éteints), qui règle
+      // les zones d'ombre, puis lumière complète, qui règle la part du soleil.
+      scene.fog.near = 1e6; scene.fog.far = 2e6;
+      // (Lumière du ciel seule : exposition quadruplée, pour lire des valeurs précises sur 8 bits.)
+      const eteindre = oui => { soleil.intensity = oui ? 0 : iSoleil; appoint.intensity = oui ? 0 : iAppoint; renderer.toneMappingExposure = expo*(oui ? 4 : 1); };
+      // (La lumière du ciel du sol allégé ne vient que de l'hémisphère, réduite quand la carte
+      // d'environnement éclaire : sa correction peut être forte.)
+      const kd = U_TEINTE_SOL.value, ki = U_TEINTE_IND.value, pas = (k, r, l, max) => k.set(
+        clamp(k.x*Math.pow(r[0]/l[0], 1.2), 0.3, max), clamp(k.y*Math.pow(r[1]/l[1], 1.2), 0.3, max), clamp(k.z*Math.pow(r[2]/l[2], 1.2), 0.3, max));
+      U_REFLET.value.set(0, 0, 0);
+      eteindre(true); const refI = moyenne(matSolS);
+      eteindre(false); const refF = moyenne(matSolS);
+      kd.set(1, 1, 1); ki.set(1, 1, 1);
       for(let it = 0; it < 3; it++){
-        const l = moyenne(matSolL);
-        k.set(k.x*Math.pow(ref[0]/l[0], 1.3), k.y*Math.pow(ref[1]/l[1], 1.3), k.z*Math.pow(ref[2]/l[2], 1.3));
+        eteindre(true); pas(ki, refI, moyenne(matSolL), 10);
+        eteindre(false); pas(kd, refF, moyenne(matSolL), 3);
       }
-      k.set(clamp(k.x, 0.4, 2.5), clamp(k.y, 0.4, 2.5), clamp(k.z, 0.4, 2.5));
+      // Reflet du ciel sur le sable mouillé : une fraction de la couleur du ciel (hémisphère).
+      U_REFLET.value.set(hemi.color.r, hemi.color.g, hemi.color.b).multiplyScalar(hemi.intensity*REFLET_HUMIDE);
     } catch(e){
-      U_TEINTE_SOL.value.set(1, 1, 1);
+      U_TEINTE_SOL.value.set(1, 1, 1); U_TEINTE_IND.value.set(1, 1, 1);
       solCalibre = false;                 // nouvel essai à la prochaine occasion
     } finally {
+      soleil.intensity = iSoleil; appoint.intensity = iAppoint; renderer.toneMappingExposure = expo;
+      scene.fog.near = brumeP; scene.fog.far = brumeL;
       scene.background = fond; renderer.setClearColor(cc, ca);
       renderer.setViewport(vp); renderer.setScissor(sc); renderer.setScissorTest(st);
       for(const o of caches) o.visible = true;
@@ -3295,6 +3359,7 @@ float fdsOmbreNuages( vec3 posVue ) {
     R3D.ambiance = M.ambiance;
     dirSoleil.set(A.soleil[0], A.soleil[1], A.soleil[2]).normalize();
     R3D.dirSoleil = dirSoleil.clone();
+    U_SOLEIL_SOL.value.set(-dirSoleil.x, -dirSoleil.z).divideScalar(Math.max(dirSoleil.y, 0.15));
     HALOS = []; ROCS_PHARES = []; PHARES = []; DECOR_SUPP = []; faisceaux = [];
     FS.O = new Fusion(); FS.V = new Fusion(); FS.L = new Fusion(); FS.F = new Fusion(); FS.Fl = new Fusion();
     EAU.f = new FusionEau();
@@ -3303,6 +3368,7 @@ float fdsOmbreNuages( vec3 posVue ) {
     renderer.setPixelRatio(densitePixels());
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    installerOmbresSimplifiees();
     renderer.outputEncoding = THREE.sRGBEncoding;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = A.expo;
@@ -3378,6 +3444,40 @@ float fdsOmbreNuages( vec3 posVue ) {
     R3D.pret = true;
   };
 
+  // -----------------------------------------------------------------
+  //  Passe d'ombres allégée. Un module (unités, bâtiments…) peut fournir pour les ombres un maillage
+  //  simplifié : R3D.Ombres.inscrire(substitut), où substitut est un Object3D (souvent enfant du
+  //  modèle détaillé, pour en suivre la position). Le module retire alors castShadow à ses
+  //  maillages détaillés. Le substitut est invisible et sur le calque 1 : ni dessiné à l'écran, ni
+  //  touché par les clics ; il n'apparaît que pendant la passe d'ombres, où three le découpe par le
+  //  cadre de la lumière comme le reste. Sa matière ne sert pas (matière de profondeur commune,
+  //  déjà compilée). R3D.Ombres.retirer(substitut) quand le modèle disparaît.
+  // -----------------------------------------------------------------
+  const substitutsOmbre = new Set();
+  R3D.Ombres = {
+    inscrire(o){
+      if(!o || substitutsOmbre.has(o)) return o;
+      o.traverse(c => { c.layers.set(1); if(c.isMesh) c.castShadow = true; });
+      o.visible = false;
+      substitutsOmbre.add(o);
+      return o;
+    },
+    retirer(o){ substitutsOmbre.delete(o); return o; },
+    get nombre(){ return substitutsOmbre.size; },
+  };
+  function installerOmbresSimplifiees(){
+    const sm = renderer.shadowMap, origine = sm.render;
+    sm.render = function(lumieres, sc, cam){
+      if(!substitutsOmbre.size || !cam) return origine.apply(this, arguments);
+      // Les listes de l'image sont déjà faites : les substituts ne servent qu'à la passe d'ombres.
+      const calques = cam.layers.mask;
+      for(const o of substitutsOmbre) o.visible = true;
+      cam.layers.enable(1);
+      try { return origine.apply(this, arguments); }
+      finally { cam.layers.mask = calques; for(const o of substitutsOmbre) o.visible = false; }
+    };
+  }
+
   // Découpage des grands maillages fusionnés (rochers, maisons, structures…) en blocs de
   // BLOC_FUSION unités, selon le centre de chaque triangle : un bloc hors de l'image, ou hors du
   // cadre de la carte d'ombre, n'est plus dessiné. Mêmes triangles, même matière, même ordre de
@@ -3420,14 +3520,17 @@ float fdsOmbreNuages( vec3 posVue ) {
 
   // -----------------------------------------------------------------
   //  Qualité graphique : 'basse' | 'moyenne' | 'haute' (défaut 'moyenne')
-  //    basse   : pas de post-traitement, ombres réduites, densité de pixels 1, pas d'ombres de nuages
-  //    moyenne : bloom, étalonnage, anticrénelage FXAA, ombres de nuages
-  //    haute   : tout (occlusion ambiante et grain compris), ombres plus fines
+  //    basse   : pas de post-traitement, ombres réduites, densité de pixels 1, pas d'ombres de nuages,
+  //              sol allégé
+  //    moyenne : le réglage fluide. Bloom, étalonnage, anticrénelage FXAA, ombres de nuages, sol
+  //              allégé, densité de pixels 1 (la fenêtre à sa résolution native, jamais plus)
+  //    haute   : tout (occlusion ambiante et grain compris), sol complet, ombres plus fines,
+  //              densité de l'écran jusqu'à 1,75
   //  Le post-traitement lui-même est dans r3d-post.js (R3D.Post), facultatif.
   // -----------------------------------------------------------------
   const QUALITES = {
     basse:   {ratio:1,    ombres:1024},
-    moyenne: {ratio:1.5,  ombres:2048},
+    moyenne: {ratio:1,    ombres:2048},
     haute:   {ratio:1.75, ombres:4096},
   };
   let postPret = false, postPanne = false;
@@ -3442,8 +3545,8 @@ float fdsOmbreNuages( vec3 posVue ) {
     if(!renderer) return;
     const Q = QUALITES[R3D.qualite];
     // Résolution adaptative : chaque qualité repart de son plafond.
-    if(R3D.qualite !== qualiteAdapt){ qualiteAdapt = R3D.qualite; echelle = 1; adapt.haut = adapt.bas = 0; adapt.attente = 1; }
-    if(R3D.qualite === 'basse') calibrerSol();
+    if(R3D.qualite !== qualiteAdapt){ qualiteAdapt = R3D.qualite; changerEchelle(1); adapt.dureeHausse = ADAPT.tHausse; }
+    if(solAllege()) calibrerSol();
     majMatiereSol();
     // Densité de pixels : appliquée par R3D.redimensionner (elle dépend aussi de l'écran).
     if(largVue && renderer.getPixelRatio() !== densitePixels()) R3D.redimensionner(largVue, hautVue);
@@ -3535,55 +3638,86 @@ float fdsOmbreNuages( vec3 posVue ) {
     else camera.clearViewOffset();
     camera.updateProjectionMatrix();
   }
-  // Densité de pixels du rendu : celle de l'écran, plafonnée par la qualité choisie, puis réduite
-  // par la résolution adaptative (echelle).
+  // Densité de pixels du canevas : celle de l'écran, plafonnée par la qualité choisie. Elle ne change
+  // qu'avec la fenêtre ou la qualité, jamais en cours de partie (la résolution adaptative agit
+  // ailleurs, sur la seule cible de la scène).
   function densitePlafond(){
     return Math.min(window.devicePixelRatio || 1, QUALITES[R3D.qualite].ratio);
   }
   function densitePixels(){
-    const p = densitePlafond();
-    return Math.round(p*(R3D.adaptatif === false ? 1 : echelle)*1000)/1000;
+    return Math.round(densitePlafond()*1000)/1000;
   }
 
   // -----------------------------------------------------------------
-  //  Résolution adaptative (qualités Moyenne et Élevée) et mesure du temps par image.
+  //  Résolution adaptative et mesure du temps par image.
+  //  Le canevas ne change jamais de taille : seule la cible où la scène est dessinée est réduite
+  //  (R3D.echelleScene, lue par r3d-post.js), puis la passe finale l'agrandit à la taille de l'écran.
+  //  Un changement de palier ne coûte donc que la recréation de quelques cibles de rendu.
+  //  Plancher : la résolution native de la fenêtre (densité 1), jamais en dessous. Elle ne concerne
+  //  donc que la qualité Élevée sur un écran dense (densité de l'écran supérieure à 1), seule
+  //  qualité à dessiner plus de pixels que la fenêtre n'en a.
   //  Le temps entre deux images est lissé (moyenne glissante exponentielle). Au-dessus de 33 ms
-  //  pendant 1,5 s cumulée, la densité de pixels baisse d'un palier ; sous 22 ms pendant 4 s, elle
-  //  remonte d'un palier. Entre deux changements, 2 s d'attente (le temps lissé se recale). Une
-  //  remontée suivie d'une baisse en moins de 12 s double la durée exigée pour la remontée
-  //  suivante : pas d'oscillation. Les écarts de plus de 250 ms (onglet caché, chargement,
-  //  pause du navigateur) sont ignorés.
+  //  pendant 1,5 s cumulée, l'échelle baisse d'un palier ; sous 22 ms pendant 4 s, elle remonte d'un
+  //  palier. Entre deux changements, 2 s d'attente (le temps lissé se recale). Une remontée suivie
+  //  d'une baisse en moins de 12 s double la durée exigée pour la remontée suivante (jusqu'à 64 s) :
+  //  pas d'oscillation. Rien n'est mesuré au chargement, au menu, en pause, pendant une
+  //  cinématique, partie finie ou onglet caché, ni pendant les 2 s qui suivent : le compte reprend
+  //  à zéro. Les écarts de plus de 250 ms sont ignorés.
   // -----------------------------------------------------------------
-  const PALIERS = [1, 0.88, 0.77, 0.67, 0.58];
-  const ADAPT = {lent:33, rapide:22, tBaisse:1.5, tHausse:4, attente:2, plancher:0.7};
+  const PALIERS = [1, 0.9, 0.8, 0.7, 0.6];
+  const ADAPT = {lent:33, rapide:22, tBaisse:1.5, tHausse:4, attente:2};
   let echelle = 1, qualiteAdapt = null, tPrec = 0, msLisse = 16.7;
   const adapt = {haut:0, bas:0, attente:1, dureeHausse:ADAPT.tHausse, tHausse:-1e9, horloge:0};
   R3D.adaptatif = true;
+  R3D.echelleScene = 1;
+  // Paliers permis : de 1 jusqu'à la résolution native (1/densité), celle-ci comprise.
+  function paliers(){
+    const plancher = 1/densitePlafond();
+    if(plancher >= 0.999) return [1];
+    const l = PALIERS.filter(p => p > plancher + 0.02);
+    l.push(Math.round(plancher*1000)/1000);
+    return l;
+  }
   function changerEchelle(e){
     echelle = e;
+    R3D.echelleScene = e;
     adapt.haut = adapt.bas = 0; adapt.attente = ADAPT.attente;
-    if(largVue) R3D.redimensionner(largVue, hautVue);
+  }
+  // La mesure n'a de sens qu'en pleine partie, à l'écran.
+  function mesurable(){
+    try {
+      if(typeof document !== 'undefined' && document.hidden) return false;
+      if(enMenu()) return false;
+      if(typeof enPause !== 'undefined' && enPause) return false;
+      if(typeof partieFinie !== 'undefined' && partieFinie) return false;
+      if(typeof lancementEnCours !== 'undefined' && lancementEnCours) return false;
+      if(typeof surprise !== 'undefined' && surprise && surprise.etat === 'cinematique') return false;
+    } catch(e){ return false; }
+    return true;
   }
   function majAdaptatif(ms){
     const dtS = ms/1000;
     adapt.horloge += dtS;
-    const actif = R3D.adaptatif !== false && R3D.qualite !== 'basse';
+    const l = paliers();
+    const actif = R3D.adaptatif !== false && l.length > 1 && !!(R3D.Post && R3D.Post.actif);
     if(!actif){ if(echelle !== 1) changerEchelle(1); return; }
     if(adapt.attente > 0){ adapt.attente -= dtS; return; }
     if(msLisse > ADAPT.lent){ adapt.haut += dtS; adapt.bas = 0; }
     else if(msLisse < ADAPT.rapide){ adapt.bas += dtS; adapt.haut = Math.max(0, adapt.haut - dtS); }
     else { adapt.haut = Math.max(0, adapt.haut - dtS*0.5); adapt.bas = 0; }
-    const p = densitePlafond(), k = PALIERS.indexOf(echelle);
-    if(adapt.haut >= ADAPT.tBaisse && k < PALIERS.length - 1 && p*PALIERS[k + 1] >= Math.min(p, ADAPT.plancher) - 1e-6){
+    let k = l.indexOf(echelle);
+    if(k < 0){ k = l.length - 1; changerEchelle(l[k]); return; }   // la densité de l'écran a changé
+    if(adapt.haut >= ADAPT.tBaisse && k < l.length - 1){
       if(adapt.horloge - adapt.tHausse < 12) adapt.dureeHausse = Math.min(adapt.dureeHausse*2, 64);
-      changerEchelle(PALIERS[k + 1]);
+      changerEchelle(l[k + 1]);
     } else if(adapt.bas >= adapt.dureeHausse && k > 0){
       adapt.tHausse = adapt.horloge;
-      changerEchelle(PALIERS[k - 1]);
+      changerEchelle(l[k - 1]);
     }
   }
   function mesurerImage(){
     const t = performance.now();
+    if(!mesurable()){ tPrec = 0; adapt.attente = Math.max(adapt.attente, ADAPT.attente); adapt.haut = adapt.bas = 0; return; }
     if(tPrec){
       const ms = t - tPrec;
       if(ms > 0 && ms < 250){
@@ -3593,11 +3727,11 @@ float fdsOmbreNuages( vec3 posVue ) {
     }
     tPrec = t;
   }
-  // Diagnostic : temps lissé entre deux images (ms), rapport de résolution courant, appels de dessin
-  // et triangles de la dernière image.
+  // Diagnostic : temps lissé entre deux images (ms), échelle de la scène, appels de dessin et
+  // triangles de la dernière image.
   R3D.perf = function(){
     const i = renderer ? renderer.info.render : null;
-    return {ms:+msLisse.toFixed(2), echelle:R3D.adaptatif === false ? 1 : echelle, appels:i ? i.calls : 0, triangles:i ? i.triangles : 0};
+    return {ms:+msLisse.toFixed(2), echelle, appels:i ? i.calls : 0, triangles:i ? i.triangles : 0};
   };
   R3D.redimensionner = function(l, h){
     if(!renderer) return;
@@ -3753,7 +3887,7 @@ float fdsOmbreNuages( vec3 posVue ) {
     if(matFeux){ const k = 0.55 + 0.45*Math.max(0, Math.sin(tt*2.4)); matFeux.color.setRGB(k, k, k); }
     if(matFlammes) matFlammes.opacity = 0.7 + 0.25*Math.sin(tt*13.1)*Math.sin(tt*7.3 + 1);
     for(const f of faisceaux) f.rotation.y = tt*0.9;
-    if(R3D.qualite === 'basse' && !solCalibre && !enMenu()) calibrerSol();
+    if(solAllege() && !solCalibre && !enMenu()) calibrerSol();
     mesurerImage();
     renderer.info.reset();
     rendreImage(dt);
@@ -3765,6 +3899,7 @@ float fdsOmbreNuages( vec3 posVue ) {
   //  compilés et une image est rendue hors écran, sans découpage par le champ de la caméra, pour
   //  envoyer aussi géométries et textures à la carte graphique. Rien n'est compilé en pleine partie.
   // -----------------------------------------------------------------
+  let prechauffe = false;
   R3D.prechauffer = function(){
     if(!renderer) return null;
     const t0 = performance.now(), p0 = renderer.info.programs ? renderer.info.programs.length : 0;
@@ -3788,12 +3923,23 @@ float fdsOmbreNuages( vec3 posVue ) {
         cible = new THREE.WebGLRenderTarget(64, 64, {depthBuffer:true, stencilBuffer:false});
         cible.texture.encoding = THREE.sRGBEncoding;
       }
-      majMatiereSol();
       renderer.setRenderTarget(cible);
+      // Les deux matières du sol (complète et allégée) sont compilées à chaque fois : passer d'une
+      // qualité à l'autre ne recompile pas le sol. (Le programme est le même à l'écran et dans une cible.)
+      if(sol && matSolS && matSolL){
+        const autre = solAllege() ? matSolS : matSolL;
+        for(const c of sol.children) c.material = autre;
+        renderer.compile(scene, camera);
+      }
+      majMatiereSol();
       renderer.compile(scene, camera);
       // Une image sans découpage par le champ : envoi des tampons et textures, programmes des ombres.
       // (Hors écran avec le post-traitement ; à l'écran en Basse, sous l'écran de chargement.)
-      renderer.render(scene, camera);
+      // Aux préchauffages suivants (changement de qualité au menu), elle n'est refaite que si un
+      // nouveau programme est apparu : tout le reste est déjà sur la carte graphique.
+      const nouveaux = (renderer.info.programs ? renderer.info.programs.length : 0) - p0;
+      if(!prechauffe || nouveaux > 0) renderer.render(scene, camera);
+      prechauffe = true;
     } catch(e){
       if(typeof console !== 'undefined') console.warn('[R3D] préchauffage : ' + (e && e.message));
     } finally {
@@ -3804,7 +3950,7 @@ float fdsOmbreNuages( vec3 posVue ) {
     }
     // Post-traitement : ses programmes (qualité courante) sont compilés par une première image complète.
     try { renderer.info.reset(); rendreImage(0); } catch(e){ /* facultatif */ }
-    if(R3D.qualite === 'basse') calibrerSol();
+    if(solAllege()) calibrerSol();
     tPrec = 0;
     const res = {ms:Math.round(performance.now() - t0), programmes:(renderer.info.programs ? renderer.info.programs.length : 0) - p0};
     R3D.durees.prechauffage = res.ms;

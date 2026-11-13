@@ -571,6 +571,7 @@
   // Émet une particule du gabarit g (réserve en anneau : la plus ancienne est recyclée si pleine).
   // rotImposee : angle du sprite à l'écran pour le lot en cours (fuseaux de sillage) ; NaN = au hasard.
   let rotImposee = NaN;
+  const ALPHA_INVISIBLE = 0.01;
   function emettre(g, x, y, z, vx, vy, vz, ech, vieMul){
     if(!g) return;
     const P = g.add ? poolAdd : poolNorm;
@@ -630,6 +631,10 @@
       }
       const fi = g.fi > 0 && k < g.fi ? k / g.fi : 1;
       const alpha = g.a0 * fi * (g.fo === 1 ? 1 - k : Math.pow(1 - k, g.fo));
+      // Particule presque transparente (début de fondu d'entrée, fin de fondu de sortie) : elle continue
+      // de vivre mais n'est pas dessinée. Son sprite entier passerait par la carte graphique pour un apport
+      // inférieur à 1 % (novembre 2026, surdessin des grosses batailles).
+      if(alpha < ALPHA_INVISIBLE) continue;
       // Couleur : c0 → c1, ou c0 → cm → c1 quand le gabarit a une couleur médiane.
       let cr, cg, cb;
       const km = g.km;

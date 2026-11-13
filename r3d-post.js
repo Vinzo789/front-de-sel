@@ -21,6 +21,9 @@
    Coût en qualité moyenne : la scène (sans anticrénelage matériel), environ
    3,5 lectures de texture par pixel pour le bloom, une passe finale plein écran.
 
+   Résolution adaptative : R3D.echelleScene (entre 0 et 1, fixé par r3d-scene.js) réduit la cible de
+   la scène (et le bloom, l'occlusion qui en dérivent) ; le canevas garde sa taille.
+
    Interface : R3D.Post = { init(renderer, scene, camera), redimensionner(l, h),
    rendre(dt), definirQualite(q), regler(obj), etages, reglages, info() }.
    rendre renvoie false quand le post-traitement est coupé ou en panne : l'appelant
@@ -381,7 +384,12 @@
     const r = renderer;
     r.getDrawingBufferSize(_taille);
     if(_taille.x < 2 || _taille.y < 2) return false;
-    if(_taille.x !== larg || _taille.y !== haut || !cibleScene) dimensionner(_taille.x, _taille.y);
+    // Résolution adaptative (R3D.echelleScene, qualité Élevée sur écran dense) : seule la cible de la
+    // scène et les étages qui en dérivent changent de taille ; le canevas, jamais. La passe finale
+    // agrandit l'image à la taille de l'écran.
+    const ech = R3D.echelleScene > 0 && R3D.echelleScene < 1 ? R3D.echelleScene : 1;
+    const tl = Math.max(2, Math.round(_taille.x*ech)), th = Math.max(2, Math.round(_taille.y*ech));
+    if(tl !== larg || th !== haut || !cibleScene) dimensionner(tl, th);
     const autoClear = r.autoClear;
     try {
       r.autoClear = true;

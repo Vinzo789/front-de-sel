@@ -10,7 +10,16 @@
    « bâtisseur » qui fusionne des primitives en quelques géométries à couleurs
    de sommets, une par « canal » (opaque, métal, vitre, lumières…). Chaque
    bâtiment du jeu n'est qu'un jeu de maillages qui partagent ces géométries
-   et des matériaux communs (≤ 12 maillages par bâtiment).
+   et des matériaux communs.
+
+   Fluidité (novembre 2026) : à l'affichage, les canaux sont FUSIONNÉS (fusionner) en un seul
+   maillage « corps » par ensemble, qui porte son canal d'origine par sommet (aCanal) ; un seul
+   matériau (creerCorps) en déduit rugosité, métal, reflets, lueur des vitrages, couleur brute des
+   lumières, clignotement des feux. Les pièces tournantes (anims « rotation » et « balayage »)
+   sont réunies en un maillage animé dans le shader (animsFusionnees). Seuls les corps projettent
+   une ombre (plus le drapeau). Mesuré sur la vitrine ?demo (20 bâtiments, deux chantiers) :
+   245 appels de dessin (148 couleur + 97 ombre) avant, 136 (80 + 56) après. Le fantôme de
+   placement garde les canaux séparés (instancier(…, sansFusion)).
 
    Matériaux : physiques (rugosité, métal). Quand la scène fournit une carte d'environnement
    (R3D.scene.environment), les vitrages et les métaux la réfléchissent ; sinon on garde des
@@ -20,7 +29,10 @@
    sol, halos, faisceaux) et « nuitF » (halos des feux clignotants). Ils sont masqués en plein
    jour (aucun appel de dessin) et montent à l'aube, au crépuscule, dans la brume (R3D.ambiance)
    et quand le ciel s'assombrit (R3D.assombrir). Les fenêtres allumées sont déduites
-   automatiquement de chaque vitrage posé avec boite('vitre', …).
+   automatiquement de chaque vitrage posé avec boite('vitre', …). Branchées par sync() depuis
+   novembre 2026 (majNuit n'était appelée nulle part) et en qualité élevée seulement : jusqu'à deux
+   appels de dessin de plus par bâtiment quand elles sont allumées ; aucun en plein jour, et
+   aucune écriture quand rien ne change.
 
    Repère local d'un modèle : centré sur le bâtiment, X = est, Y = hauteur,
    Z = sud (façade principale tournée vers la caméra, au sud).
@@ -244,6 +256,56 @@
       }
       return out;
     }
+  }
+
+  // ---- Fusion des canaux (novembre 2026, fluidité) : un seul maillage « corps » par ensemble.
+  // Les canaux éclairés (opaque, métal, métal2, vitre, filet) et les canaux lumineux (emis,
+  // couvercle, jauge, feux) partagent un seul matériau : chaque sommet porte son canal d'origine
+  // (attribut aCanal) et le shader en déduit rugosité, métal, reflets, lueur des vitrages, ou rend
+  // la couleur brute d'un canal lumineux (voir creerCorps). Les canaux à double face (métal2,
+  // filet) sont doublés par des triangles retournés (aCanal + 10) : même rendu qu'un DoubleSide.
+  // Restent à part : les marquages (texture), le drapeau (ondulant) et les canaux de nuit (additifs).
+  const CANAL_CORPS = {opaque:0, metal:1, metal2:2, vitre:3, filet:4, emis:5, couvercle:6, jauge:7, feux:8};
+  const DOUBLE_FACE = {metal2:1, filet:1};
+  const FUSIONS = new WeakMap();
+  function fusionner(geos){
+    if(!geos) return geos;
+    if(FUSIONS.has(geos)) return FUSIONS.get(geos);
+    const out = {}, parts = [];
+    let n = 0;
+    for(const c in geos){
+      if(CANAL_CORPS[c] === undefined){ out[c] = geos[c]; continue; }
+      const nb = geos[c].attributes.position.count;
+      parts.push([c, geos[c], false]); n += nb;
+      if(DOUBLE_FACE[c]){ parts.push([c, geos[c], true]); n += nb; }
+    }
+    if(parts.length){
+      const P = new Float32Array(n*3), N = new Float32Array(n*3), C = new Float32Array(n*3), K = new Float32Array(n);
+      let o = 0;
+      for(const [c, g, copie] of parts){
+        const p = g.attributes.position.array, nm = g.attributes.normal.array, col = g.attributes.color.array, nb = p.length/3;
+        const k = CANAL_CORPS[c] + (copie ? 10 : 0);
+        for(let i = 0; i < nb; i++){
+          // Copie retournée : ordre des sommets inversé dans chaque triangle, normale opposée
+          const s = copie ? (i - i%3) + 2 - i%3 : i, d = (o + i)*3;
+          P[d] = p[s*3]; P[d+1] = p[s*3+1]; P[d+2] = p[s*3+2];
+          const f = copie ? -1 : 1;
+          N[d] = f*nm[s*3]; N[d+1] = f*nm[s*3+1]; N[d+2] = f*nm[s*3+2];
+          C[d] = col[s*3]; C[d+1] = col[s*3+1]; C[d+2] = col[s*3+2];
+          K[o + i] = k;
+        }
+        o += nb;
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(P, 3));
+      g.setAttribute('normal', new THREE.BufferAttribute(N, 3));
+      g.setAttribute('color', new THREE.BufferAttribute(C, 3));
+      g.setAttribute('aCanal', new THREE.BufferAttribute(K, 1));
+      g.computeBoundingBox(); g.computeBoundingSphere();
+      out.corps = g;
+    }
+    FUSIONS.set(geos, out);
+    return out;
   }
 
   // =================================================================
@@ -532,6 +594,9 @@
   // dessin sur 96 dans la passe d'ombre, mais efface des taches d'ombre visibles (jusqu'à 0,07 % des
   // pixels, écart de couleur maximal 404/765) : écarté. Toutes les pièces fixes gardent leur ombre.
   function ombreCanal(canal){ return !!OMBRE[canal]; }
+  // Novembre 2026 (fluidité) : seul le corps fusionné d'un ensemble projette une ombre (une passe
+  // par bâtiment et par pièce animée au lieu d'une par canal) ; le drapeau garde la sienne.
+  const OMBRE_DRAPEAU = true;
   const MATS = {};
   function materiau(canal, fac, etat){
     const marquage = canal === 'decal' || canal === 'drapeau';
@@ -559,6 +624,7 @@
   const REGISTRE = [];     // {mat, canal, etat} : tous les matériaux physiques, à réaccorder si l'environnement change
   let envVu = null;        // dernière carte d'environnement vue (null : aucune)
   function accorder(r){
+    if(r.canal === 'corps' || r.canal === 'corpsAnim'){ accorderCorps(r); return; }
     const p = PHYS[r.canal]; if(!p) return;
     const v = envVu ? p.env : p.sans, m = r.mat;
     m.roughness = v[0]; m.metalness = v[1];
@@ -592,6 +658,14 @@
     MATS_NUIT.push(m);
     return m;
   }
+  // Témoin de préchauffage : même programme, toujours visible, jamais réglé par majNuit.
+  let matTemoinNuit = null;
+  function temoinNuit(){
+    if(matTemoinNuit) return matTemoinNuit;
+    const m = materiauNuit('normal'); MATS_NUIT.splice(MATS_NUIT.indexOf(m), 1);
+    m.visible = true; m.color.setScalar(0);
+    return (matTemoinNuit = m);
+  }
   function creerMateriau(canal, fac, etat){
     const teinte = lin(TEINTES[etat]);
     switch(canal){
@@ -606,11 +680,162 @@
       case 'decal':  return inscrire(new THREE.MeshStandardMaterial({map:atlas(fac), color:teinte, alphaTest:0.5,
                        polygonOffset:true, polygonOffsetFactor:-2, polygonOffsetUnits:-2}), canal, etat);
       case 'drapeau':return inscrire(new THREE.MeshStandardMaterial({map:atlas(fac), color:teinte, side:THREE.DoubleSide}), canal, etat);
+      case 'corps':  return inscrire(creerCorps(etat, null), canal, etat);
+      case 'corpsAnim': return inscrire(creerCorps(etat, null, true), canal, etat);
       case 'nuit': case 'nuitF': return materiauNuit(etat);
       default:       // canaux lumineux : non affectés par l'éclairage ni par la tonalité
         return new THREE.MeshBasicMaterial({vertexColors:true, toneMapped:false,
           color:lin(etat === 'normal' ? '#ffffff' : etat === 'abime' ? '#8c8c8c' : '#333333')});
     }
+  }
+  // ---- Matériau « corps » (canaux fusionnés, voir fusionner). Un seul programme pour tous les
+  // camps et tous les états : l'état ne change que des uniformes (teinte, lueur, reflets, mode).
+  // Mode : 0 normal ; 1 critique (les lumières « emis » vacillent) ; 2 chantier (canaux lumineux
+  // et copies retournées masqués : le matériau de chantier est déjà à double face).
+  // Une pièce masquée est rejetée au sommet (hors du volume de vue), jamais par discard : le test
+  // de profondeur anticipé de la carte graphique reste actif.
+  // Phase propre à chaque bâtiment (clignotement des feux, vacillement) : tirée de sa position,
+  // la même formule sert en JavaScript (phaseLumieres) pour les halos de nuit des feux.
+  const U_TEMPS = {value:0};
+  const CANAUX_PHYS = ['opaque', 'metal', 'metal2', 'vitre', 'filet'];
+  const GLSL_MASQUE = `
+    float cBrut = aCanal, copie = step(9.5, cBrut), cc = cBrut - 10.0*copie;
+    float lum = step(4.5, cc);
+    vec4 mw = modelMatrix[3];
+    float phaseB = fract(mw.x*0.01371 + mw.z*0.02913);
+    float cache = 0.0;
+    if(abs(cc - 8.0) < 0.5) cache = step(0.4, fract(uTemps*0.8 + phaseB));
+    if(uMode > 1.5) cache = max(cache, max(lum, copie));
+    else if(uMode > 0.5 && abs(cc - 5.0) < 0.5) cache = max(cache, step(sin(uTemps*23.0 + phaseB*40.0), 0.3));
+    if(cache > 0.5) gl_Position = vec4(0.0, 0.0, -2.0, 1.0);`;
+  function phaseLumieres(x, z){ const v = x*0.01371 + z*0.02913; return v - Math.floor(v); }
+  // Pièces tournantes (anims « rotation » et « balayage », fonctions du seul temps) : regroupées
+  // en un maillage par bâtiment, animé dans le shader. Chaque sommet porte son pivot et sa vitesse
+  // (aPivot), son amplitude, son angle de base et son type (aAnimB : 1 rotation, 2 balayage).
+  // Même loi qu'avant (majBatiment), la phase du bâtiment étant tirée de sa position.
+  const GLSL_ANIM_DECL = `
+    attribute vec4 aPivot;
+    attribute vec3 aAnimB;
+    uniform float uTempsA;
+    vec3 tournerY(vec3 v, float a){ float c = cos(a), s = sin(a); return vec3(c*v.x + s*v.z, v.y, -s*v.x + c*v.z); }
+    float angleAnim(){
+      vec4 mw = modelMatrix[3];
+      float ph = fract(mw.x*0.01371 + mw.z*0.02913)*6.28;
+      return aAnimB.z < 1.5 ? ph + uTempsA*aPivot.w : aAnimB.y + sin(uTempsA*aPivot.w + ph)*aAnimB.x;
+    }`;
+  const GLSL_ANIM_POS = '\n  float angA = angleAnim();\n  transformed = tournerY(transformed - aPivot.xyz, angA) + aPivot.xyz;';
+  function shaderAnim(sh, normales){
+    sh.uniforms.uTempsA = U_TEMPS;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>' + GLSL_ANIM_DECL)
+      .replace('#include <begin_vertex>', '#include <begin_vertex>' + GLSL_ANIM_POS);
+    if(normales) sh.vertexShader = sh.vertexShader
+      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n  objectNormal = tournerY(objectNormal, angleAnim());');
+  }
+  function shaderCorps(sh, u){
+    sh.uniforms.uPhys = u.uPhys; sh.uniforms.uLum = u.uLum; sh.uniforms.uMode = u.uMode; sh.uniforms.uTemps = U_TEMPS;
+    if(u.anim) shaderAnim(sh, true);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float aCanal;\nuniform vec3 uPhys[5];\nuniform float uMode;\nuniform float uTemps;\nvarying vec4 vMat;\nvarying float vLum;')
+      .replace('#include <project_vertex>', '#include <project_vertex>' + GLSL_MASQUE +
+        '\n    vLum = lum;\n    int ic = int(min(cc, 4.0) + 0.5);\n    vMat = vec4(uPhys[ic], step(2.5, cc)*step(cc, 3.5));');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform vec3 uLum;\nvarying vec4 vMat;\nvarying float vLum;')
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor *= vMat.x;')
+      .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor *= vMat.y;')
+      .replace('#include <envmap_physical_pars_fragment>', THREE.ShaderChunk.envmap_physical_pars_fragment.replace(/envMapIntensity;/g, '(envMapIntensity*vMat.z);'))
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance *= vMat.w;')
+      // Canal lumineux : couleur brute, ni éclairage, ni ombre, ni tonalité (comme MeshBasicMaterial)
+      .replace('#include <tonemapping_fragment>', '#include <tonemapping_fragment>\nif(vLum > 0.5) gl_FragColor = vec4(vColor*uLum, 1.0);');
+  }
+  function creerCorps(etat, uCoupe, anim){
+    const m = new THREE.MeshStandardMaterial({vertexColors:true, color:lin(TEINTES[etat]), roughness:1, metalness:1, emissive:lin('#123047').clone()});
+    const u = {uPhys:{value:CANAUX_PHYS.map(() => new THREE.Vector3())},
+      uLum:{value:lin(etat === 'normal' ? '#ffffff' : etat === 'abime' ? '#8c8c8c' : '#333333').clone()},
+      uMode:{value:uCoupe ? 2 : etat === 'critique' ? 1 : 0}, anim:!!anim};
+    m.userData.u = u;
+    m.onBeforeCompile = sh => shaderCorps(sh, u);
+    const cle = anim ? 'corps-bati-anim' : 'corps-bati';
+    m.customProgramCacheKey = () => cle;
+    if(uCoupe) rendreCoupable(m, uCoupe, true);
+    return m;
+  }
+  function accorderCorps(r){
+    const m = r.mat, u = m.userData.u;
+    m.roughness = 1; m.metalness = 1;
+    CANAUX_PHYS.forEach((c, i) => { const v = envVu ? PHYS[c].env : PHYS[c].sans; u.uPhys.value[i].set(v[0], v[1], v[2]); });
+    m.envMapIntensity = r.etat === 'abime' ? 0.7 : r.etat === 'critique' ? 0.45 : 1;
+    m.emissive.copy(lin((envVu ? LUEUR_VITRE.env : LUEUR_VITRE.sans)[r.etat] || '#0b1d2c'));
+  }
+  // Ombre du corps : une seule passe par bâtiment. Les canaux lumineux n'en projettent pas (comme
+  // avant) ; les copies retournées restent (elles rendent l'ombre d'une pièce à double face).
+  const matsOmbreCorps = {};
+  function ombreCorps(anim){
+    const k = anim ? 'anim' : 'fixe';
+    if(matsOmbreCorps[k]) return matsOmbreCorps[k];
+    const m = new THREE.MeshDepthMaterial({depthPacking:THREE.RGBADepthPacking});
+    m.onBeforeCompile = sh => {
+      sh.uniforms.uTemps = U_TEMPS;
+      if(anim) shaderAnim(sh, false);
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float aCanal;')
+        .replace('#include <project_vertex>', '#include <project_vertex>\n  float cc = aCanal - 10.0*step(9.5, aCanal);\n  if(cc > 4.5) gl_Position = vec4(0.0, 0.0, -2.0, 1.0);');
+    };
+    const cle = 'ombre-corps-bati-' + k;
+    m.customProgramCacheKey = () => cle;
+    return (matsOmbreCorps[k] = m);
+  }
+  // Maillage de corps : seul porteur d'ombre de son ensemble.
+  function maillageCorps(geo, mat, canal){
+    const me = new THREE.Mesh(geo, mat);
+    me.userData.canal = canal || 'corps'; me.castShadow = true; me.receiveShadow = true;
+    me.customDepthMaterial = ombreCorps(!!geo.attributes.aPivot);
+    return me;
+  }
+  // Pièces tournantes d'un modèle réunies en une géométrie (voir GLSL_ANIM_DECL). Une anim n'y
+  // entre que si elle n'a que des canaux du corps et pas de sous-ensemble. Mis en cache sur le modèle.
+  function animShader(a){ return (a.type === 'rotation' || a.type === 'balayage') && a.geos && !a.enfant; }
+  function animsFusionnees(m){
+    if(m.animsF !== undefined) return m.animsF;
+    const parts = [];
+    for(const a of m.anims){
+      if(!animShader(a)) continue;
+      const f = fusionner(a.geos), cles = Object.keys(f);
+      if(cles.length !== 1 || !f.corps) continue;
+      parts.push([a, f.corps]);
+    }
+    if(!parts.length) return (m.animsF = null);
+    let n = 0; for(const [, g] of parts) n += g.attributes.position.count;
+    const P = new Float32Array(n*3), N = new Float32Array(n*3), C = new Float32Array(n*3), K = new Float32Array(n),
+          PV = new Float32Array(n*4), AB = new Float32Array(n*3);
+    let o = 0;
+    for(const [a, g] of parts){
+      const nb = g.attributes.position.count;
+      const p = g.attributes.position.array;
+      for(let i = 0; i < nb; i++){
+        P[(o+i)*3] = p[i*3] + a.x; P[(o+i)*3+1] = p[i*3+1] + a.y; P[(o+i)*3+2] = p[i*3+2] + a.z;
+        PV[(o+i)*4] = a.x; PV[(o+i)*4+1] = a.y; PV[(o+i)*4+2] = a.z; PV[(o+i)*4+3] = a.vitesse;
+        AB[(o+i)*3] = a.amplitude || 0; AB[(o+i)*3+1] = a.base || 0; AB[(o+i)*3+2] = a.type === 'rotation' ? 1 : 2;
+      }
+      N.set(g.attributes.normal.array, o*3); C.set(g.attributes.color.array, o*3); K.set(g.attributes.aCanal.array, o);
+      o += nb;
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(P, 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(N, 3));
+    g.setAttribute('color', new THREE.BufferAttribute(C, 3));
+    g.setAttribute('aCanal', new THREE.BufferAttribute(K, 1));
+    g.setAttribute('aPivot', new THREE.BufferAttribute(PV, 4));
+    g.setAttribute('aAnimB', new THREE.BufferAttribute(AB, 3));
+    // Enveloppe : chaque pièce peut tourner autour de son pivot (rayon horizontal max)
+    g.computeBoundingBox();
+    const bb = g.boundingBox;
+    for(const [a, gg] of parts){
+      gg.computeBoundingBox(); const b = gg.boundingBox;
+      const r = Math.max(Math.hypot(b.min.x, b.min.z), Math.hypot(b.max.x, b.max.z), Math.hypot(b.min.x, b.max.z), Math.hypot(b.max.x, b.min.z));
+      bb.expandByPoint(new THREE.Vector3(a.x - r, a.y + b.min.y, a.z - r)); bb.expandByPoint(new THREE.Vector3(a.x + r, a.y + b.max.y, a.z + r));
+    }
+    g.boundingSphere = bb.getBoundingSphere(new THREE.Sphere());
+    return (m.animsF = {g, anims:new Set(parts.map(([a]) => a))});
   }
   // ---- Niveau de nuit : 0 en plein jour, 1 au crépuscule ; suit aussi l'assombrissement du ciel.
   const NUIT_AMBIANCE = {midi:0, aube:0.5, crepuscule:1, brume:0.65};
@@ -632,14 +857,22 @@
     const dt = Math.max(0, Math.min(0.1, t - tNuit)); tNuit = t;
     nuit = nuit < 0 ? cible : nuit + (cible - nuit)*Math.min(1, dt*0.9);
     if(Math.abs(cible - nuit) < 0.003) nuit = cible;
-    // Qualité basse : pas de lumières additives (un appel de dessin de moins par bâtiment)
-    const actif = nuit > 0.02 && R3D.qualite !== 'basse';
+    // Qualités basse et moyenne : pas de lumières additives (jusqu'à deux appels de dessin de plus
+    // par bâtiment au crépuscule) ; la qualité élevée garde tout.
+    const actif = nuit > 0.02 && R3D.qualite === 'haute';
+    // Rien n'a changé depuis l'appel précédent : aucune écriture (cas courant en plein jour)
+    const sig = actif ? nuit : -1;
+    if(sig === sigNuit && MATS_NUIT.length === nbMatsNuit) return;
+    sigNuit = sig; nbMatsNuit = MATS_NUIT.length;
     for(const m of MATS_NUIT){ m.visible = actif; if(actif) m.color.setScalar(nuit*m.userData.gain); }
   }
+  let sigNuit = null, nbMatsNuit = 0;
   // Coupe horizontale (chantier) : tout fragment au-dessus de uCoupe (hauteur monde) est écarté ;
   // une fine bande incandescente marque le front de construction ; l'intérieur est assombri.
-  function rendreCoupable(m, uniforme){
+  function rendreCoupable(m, uniforme, enchainer){
+    const avant = enchainer ? m.onBeforeCompile : null;   // corps : garder le shader des canaux fusionnés
     m.onBeforeCompile = sh => {
+      if(avant) avant(sh);
       sh.uniforms.uCoupe = uniforme;
       sh.vertexShader = 'varying float vHautMonde;\n' + sh.vertexShader.replace('#include <project_vertex>',
         '#include <project_vertex>\n  vHautMonde = (modelMatrix * vec4(transformed, 1.0)).y;');
@@ -648,7 +881,8 @@
         .replace('#include <dithering_fragment>', '#include <dithering_fragment>\n  if(!gl_FrontFacing) gl_FragColor.rgb *= 0.35;\n' +
           '  if(vHautMonde > uCoupe - 0.7) gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0, 0.72, 0.32), 0.75);');
     };
-    m.customProgramCacheKey = () => 'coupe-chantier';
+    const cleAvant = avant ? m.customProgramCacheKey() : '';
+    m.customProgramCacheKey = () => avant ? 'coupe-chantier-' + cleAvant : 'coupe-chantier';
     m.side = THREE.DoubleSide;
     m.needsUpdate = true;
   }
@@ -671,6 +905,7 @@
   function rendrePoste(p){ if(p){ p.libre = true; p.u.value = -1e6; } }
   function matCoupable(p, canal, fac){
     const cle = canal + '_' + fac;
+    if(!p.mats[cle] && (canal === 'corps' || canal === 'corpsAnim')) p.mats[cle] = inscrire(creerCorps('normal', p.u, canal === 'corpsAnim'), canal, 'normal');
     if(!p.mats[cle]){
       p.mats[cle] = materiau(canal, fac, 'normal').clone(); rendreCoupable(p.mats[cle], p.u);
       inscrire(p.mats[cle], canal, 'normal');   // le clone suit lui aussi la carte d'environnement
@@ -678,7 +913,7 @@
     return p.mats[cle];
   }
   // Canaux qui peuvent être coupés (tous sauf les canaux lumineux, masqués pendant un chantier).
-  const CANAUX_COUPABLES = ['opaque', 'metal', 'metal2', 'vitre', 'filet', 'decal', 'drapeau'];
+  const CANAUX_COUPABLES = ['corps', 'corpsAnim', 'decal', 'drapeau'];
 
   // =================================================================
   //  6. MODÈLES DES BÂTIMENTS
@@ -2172,23 +2407,30 @@
   // =================================================================
   const matInvisible = new THREE.MeshBasicMaterial({visible:false});
   let groupe, geoProxy;
-  function instancier(m, fnMat){
+  // sansFusion : canaux séparés comme avant (fantôme de placement : ses matériaux sont à face
+  // simple et teintent toutes les pièces, lumineuses comprises).
+  function instancier(m, fnMat, sansFusion){
     const g = new THREE.Group(), meshes = [];
     const ajouter = (parent, geos) => {
+      if(!sansFusion) geos = fusionner(geos);
       for(const canal in geos){
-        const me = new THREE.Mesh(geos[canal], fnMat(canal));
-        me.userData.canal = canal; me.castShadow = ombreCanal(canal, geos[canal]); me.receiveShadow = !LUMINEUX[canal];
+        const me = canal === 'corps' ? maillageCorps(geos[canal], fnMat(canal)) : new THREE.Mesh(geos[canal], fnMat(canal));
+        me.userData.canal = canal;
+        if(canal !== 'corps'){ me.castShadow = sansFusion ? ombreCanal(canal) : false; me.receiveShadow = !LUMINEUX[canal]; }
         // Pièce fixe dans son groupe (transformation identité) : matrice locale calculée une fois.
         me.matrixAutoUpdate = false;
         parent.add(me); meshes.push(me);
       }
     };
     ajouter(g, m.geos);
-    const anims = m.anims.map(a => {
+    // Pièces tournantes : un seul maillage animé dans le shader (hors fantôme)
+    const AF = sansFusion || (R3D.Batiments && R3D.Batiments.animsJS) ? null : animsFusionnees(m);   // animsJS : essai A/B seulement
+    if(AF){ const me = maillageCorps(AF.g, fnMat('corpsAnim'), 'corpsAnim'); me.matrixAutoUpdate = false; g.add(me); meshes.push(me); }
+    const anims = m.anims.filter(a => !(AF && AF.anims.has(a))).map(a => {
       const p = new THREE.Group(); p.position.set(a.x, a.y, a.z); g.add(p);
       if(a.type === 'drapeau'){
         const me = new THREE.Mesh(geoDrapeau(m.base).g,fnMat('drapeau')); me.userData.canal = 'drapeau';
-        me.castShadow = true; p.add(me); meshes.push(me);
+        me.castShadow = OMBRE_DRAPEAU && !sansFusion; p.add(me); meshes.push(me);
       } else ajouter(p, a.geos);
       // Sous-ensemble porté par le pivot (canon qui recule dans la tourelle qui pivote)
       let enfant = null;
@@ -2269,7 +2511,7 @@
       if(LUMINEUX[c]){ me.visible = false; continue; }
       me.material = matCoupable(poste, c, s.fac); me.castShadow = false;
     }
-    const mk = (geos, parent) => { for(const c in geos){ const me = new THREE.Mesh(geos[c], materiau(c, s.fac, 'normal')); me.castShadow = c !== 'vitre'; me.receiveShadow = true; parent.add(me); } };
+    const mk = (geos, parent) => { geos = fusionner(geos); for(const c in geos) parent.add(c === 'corps' ? maillageCorps(geos[c], materiau(c, s.fac, 'normal')) : new THREE.Mesh(geos[c], materiau(c, s.fac, 'normal'))); };
     const echaf = new THREE.Group(); mk(E.echaf, echaf); s.racine.add(echaf); objets.push(echaf);
     const niveau = new THREE.Group(); mk(E.niveau, niveau); s.racine.add(niveau); objets.push(niveau);
     const grue = new THREE.Group(); mk(E.mat, grue); s.racine.add(grue); objets.push(grue);
@@ -2280,7 +2522,7 @@
     const C = s.chantier; if(!C) return;
     for(const o of C.objets) s.racine.remove(o);
     rendrePoste(C.poste);   // matériaux conservés (pas de dispose) : programmes gardés en vie
-    for(const me of s.inst.meshes){ me.visible = true; me.castShadow = ombreCanal(me.userData.canal); }
+    for(const me of s.inst.meshes){ me.visible = true; me.castShadow = me.userData.canal === 'corps'; }
     s.chantier = null;
     appliquerEtat(s);
   }
@@ -2322,7 +2564,7 @@
   function feu(x, y, h, k){ const e = E(); if(e && e.emettreFeu) e.emettreFeu(x, y, h, k); }
 
   function majBatiment(s, b, temps, dt){
-    const H = R3D.hauteurSol(b.x, b.y), m = s.m;
+    const H = R3D.hauteurSol(b.x, b.y), m = s.m, phL = phaseLumieres(b.x, b.y);
     s.racine.position.set(b.x, H, b.y);
     // Chantier : le bâtiment se révèle de bas en haut
     if(b.enCours && !s.chantier) demarrerChantier(s);
@@ -2368,8 +2610,9 @@
     // Animations
     for(const a of s.inst.anims){
       const d = a.def;
-      if(d.type === 'rotation') a.pivot.rotation.y = s.phase*6.28 + temps*d.vitesse;
-      else if(d.type === 'balayage') a.pivot.rotation.y = d.base + Math.sin(temps*d.vitesse + s.phase*6.28)*d.amplitude;
+      // (phase tirée de la position, comme les pièces tournantes animées dans le shader)
+      if(d.type === 'rotation') a.pivot.rotation.y = phL*6.28 + temps*d.vitesse;
+      else if(d.type === 'balayage') a.pivot.rotation.y = d.base + Math.sin(temps*d.vitesse + phL*6.28)*d.amplitude;
       else if(d.type === 'porte') a.pivot.scale.y = Math.max(0.06, 1 - 0.94*s.activite);
       else if(d.type === 'pont') a.pivot.position.z = d.z + Math.sin(temps*0.45 + s.phase*6.28)*d.amplitude*s.activite;
       else if(d.type === 'arme'){
@@ -2389,9 +2632,11 @@
       }
     }
     // Feux d'obstacle clignotants ; lumières instables quand le bâtiment brûle
-    const allume = ((temps*0.8 + s.phase) % 1) < 0.4;
+    // (les feux et les lumières « emis » du corps suivent la même règle dans son shader, avec la
+    // même phase tirée de la position : voir GLSL_MASQUE)
+    const allume = ((temps*0.8 + phL) % 1) < 0.4;
     for(const f of s.feux) f.visible = !s.chantier && allume;
-    if(!s.chantier && etat === 'critique'){ const vac = Math.sin(temps*23 + s.phase*40) > 0.3; for(const l of s.lumieres) l.visible = vac; }
+    if(!s.chantier && etat === 'critique'){ const vac = Math.sin(temps*23 + phL*40) > 0.3; for(const l of s.lumieres) l.visible = vac; }
     else if(!s.chantier) for(const l of s.lumieres) l.visible = true;
     // Sélection et ralliement
     s.sel.visible = !!b.selectionne;
@@ -2415,7 +2660,8 @@
     const geos = geoDecombres(taille, s.fac, v, s.m.type);
     if(decombres.length >= MAX_DECOMBRES) enleverDecombres(decombres[0]);
     const g = new THREE.Group();
-    for(const c in geos){ const me = new THREE.Mesh(geos[c], materiau(c, s.fac, 'normal')); me.castShadow = true; me.receiveShadow = true; g.add(me); }
+    const fg = fusionner(geos);
+    for(const c in fg){ const me = c === 'corps' ? maillageCorps(fg[c], materiau(c, s.fac, 'normal')) : new THREE.Mesh(fg[c], materiau(c, s.fac, 'normal')); me.receiveShadow = true; g.add(me); }
     const sol = R3D.hauteurSol(b.x, b.y);
     g.position.set(b.x, sol, b.y);
     g.rotation.y = aero ? 0 : Math.floor(Math.random()*4)*Math.PI/2;
@@ -2628,7 +2874,7 @@
   }
   function construireFantome(type, fac){
     const m = modele(type, fac), racine = new THREE.Group();
-    const inst = instancier(m, () => matFantomeOK);
+    const inst = instancier(m, () => matFantomeOK, true);
     // Ni marquages ni lumières de nuit sur le fantôme (ils se dessineraient en aplats)
     for(const me of inst.meshes){ me.castShadow = me.receiveShadow = false; if(me.userData.canal === 'decal' || CANAUX_NUIT[me.userData.canal]) me.visible = false; }
     racine.add(inst.groupe);
@@ -2689,15 +2935,17 @@
     const poser = (geo, mat, ombre) => {
       const me = new THREE.Mesh(geo, mat);
       me.frustumCulled = false; me.castShadow = !!ombre; me.receiveShadow = true;
+      if(geo.attributes.aCanal) me.customDepthMaterial = ombreCorps(!!geo.attributes.aPivot);   // ombre du corps : son propre programme
       P.add(me); nbMaillages++;
     };
     // États abîmé et critique : mêmes réglages que l'état normal, donc même programme ; leurs
     // matériaux sont créés ici (inscrits au registre) mais sans maillage de plus.
     const poserGeos = (geos, fac) => {
       if(!geos) return;
+      geos = fusionner(geos);
       for(const c in geos){
-        if(CANAUX_NUIT[c]) continue;   // canaux de nuit : matériaux masqués, jamais dessinés
-        poser(geos[c], materiau(c, fac, 'normal'), ombreCanal(c, geos[c]));
+        if(CANAUX_NUIT[c]) continue;   // canaux de nuit : un témoin par programme suffit (plus bas)
+        poser(geos[c], materiau(c, fac, 'normal'), c === 'corps' || (c === 'drapeau' && OMBRE_DRAPEAU));
         materiau(c, fac, 'abime'); materiau(c, fac, 'critique');
       }
     };
@@ -2710,9 +2958,11 @@
         msModeles += performance.now() - a0;
         nbModeles++;
         poserGeos(m.geos, fac);
+        const AF = animsFusionnees(m);
+        if(AF){ poser(AF.g, materiau('corpsAnim', fac, 'normal'), true); materiau('corpsAnim', fac, 'abime'); materiau('corpsAnim', fac, 'critique'); }
         for(const a of m.anims){
           if(a.type === 'drapeau') poser(geoDrapeau(m.base).g, materiau('drapeau', fac, 'normal'), true);
-          poserGeos(a.geos, fac);
+          if(!(AF && AF.anims.has(a))) poserGeos(a.geos, fac);
           if(a.enfant){ poserGeos(a.enfant.geos, fac); if(a.enfant.eclair) poserGeos(a.enfant.eclair.geos, fac); }
         }
         const E = m.echafaudage;
@@ -2724,8 +2974,16 @@
     }
     // Chaque matériau de canal, même si aucun modèle fabriqué ne l'emploie encore : la clé d'un
     // programme ne dépend que du matériau, une boîte suffit pour le compiler.
-    for(const fac of variantes) for(const c of ['opaque', 'metal', 'metal2', 'vitre', 'filet', 'decal', 'drapeau', 'emis', 'feux', 'couvercle', 'jauge'])
-      poser(geoProxy, materiau(c, fac, 'normal'), ombreCanal(c));
+    // Le corps a besoin de son attribut aCanal : témoin fusionné d'un gabarit de boîte.
+    const temoinCorps = fusionner(new Bati(1).boite('opaque', '#888888', 0, 0, 0, 1, 1, 1).construire());
+    for(const fac of variantes){
+      poser(temoinCorps.corps, materiau('corps', fac, 'normal'), true);
+      materiau('corps', fac, 'abime'); materiau('corps', fac, 'critique');
+      for(const c of ['decal', 'drapeau']) poser(geoProxy, materiau(c, fac, 'normal'), c === 'drapeau' && OMBRE_DRAPEAU);
+    }
+    // Lumières de nuit (additives) : un témoin toujours visible, même programme que les vraies
+    // (même fonction, même clé), qui ne s'allument qu'au crépuscule ou dans la brume.
+    poser(geoProxy, temoinNuit());
     // Fantôme de placement (couleurs de sommets ou non), crochets de sélection, ralliement
     const tailles = new Set(); for(const type in BATIMENTS) tailles.add(BATIMENTS[type].taille);
     const unModele = MODELES[Object.keys(MODELES)[0]];
@@ -2815,6 +3073,9 @@
       geoTemoin.setAttribute('normal', new THREE.Float32BufferAttribute([0,1,0, 0,1,0, 0,1,0], 3));
       geoTemoin.setAttribute('uv', new THREE.Float32BufferAttribute([0,0, 0,0, 0,0], 2));
       geoTemoin.setAttribute('color', new THREE.Float32BufferAttribute([1,1,1, 1,1,1, 1,1,1], 3));
+      geoTemoin.setAttribute('aCanal', new THREE.Float32BufferAttribute([0, 0, 0], 1));   // corps fusionné
+      geoTemoin.setAttribute('aPivot', new THREE.Float32BufferAttribute(new Array(12).fill(0), 4));   // pièces tournantes
+      geoTemoin.setAttribute('aAnimB', new THREE.Float32BufferAttribute([0,0,1, 0,0,1, 0,0,1], 3));
       temoins = new THREE.Group(); temoins.name = 'temoins-chantier';
       for(const fac of Object.keys(FACTIONS)) for(const c of CANAUX_COUPABLES){
         const me = new THREE.Mesh(geoTemoin, matCoupable(temoin, c, fac));
@@ -2838,6 +3099,8 @@
       if(imagesTemoins > 0 && --imagesTemoins === 0) temoins.visible = false;
       if(imagesPrechauffe > 0 && --imagesPrechauffe === 0 && prechauffe){ groupe.remove(prechauffe); prechauffe = null; }
       for(const fac in DRAPEAUX) onduler(DRAPEAUX[fac], temps);
+      U_TEMPS.value = temps;   // feux et vacillement des lumières du corps (shader)
+      majNuit();
       const pulse = 0.7 + 0.3*Math.sin(temps*6);
       matSelJ.opacity = matSelI.opacity = matSelN.opacity = pulse;
       const vus = new Set();

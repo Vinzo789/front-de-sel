@@ -288,16 +288,17 @@ select{font:inherit;background:var(--bouton);color:var(--texte);border:1px solid
      <option value="ultra" title="L’ordinateur ne triche pas : même revenu, mêmes prix, mêmes règles que vous.">Ultra</option>
     </select>
    </label>
-   <label title="Basse : pour un ordinateur lent. Élevée : tous les effets visuels.">Graphismes
+   <label title="Basse : la plus légère. Moyenne : fluide, recommandée. Élevée : image la plus fine, pour carte graphique puissante.">Graphismes
     <select id="qualite">
-     <option value="basse">Basse</option>
-     <option value="moyenne" selected>Moyenne</option>
-     <option value="haute">Élevée</option>
+     <option value="basse">Basse : la plus légère</option>
+     <option value="moyenne" selected>Moyenne : fluide, recommandée</option>
+     <option value="haute">Élevée : image la plus fine, pour carte graphique puissante</option>
     </select>
+    <span id="etatQualite" aria-live="polite" style="font-size:13px;color:var(--doux)"></span>
    </label>
    <div class="musique"><button id="bMusiqueMenu" class="petit">Musique</button><input id="volMusiqueMenu" type="range" min="0" max="100" title="Volume de la musique"></div>
    <label title="La vue se déplace quand le curseur touche un bord de la fenêtre."><input type="checkbox" id="defilementBord" checked style="accent-color:var(--accent);vertical-align:middle"> Défilement au bord</label>
-   <label title="Qualités Moyenne et Élevée : la finesse de l’image baisse un peu quand l’ordinateur peine, puis remonte dès qu’il le peut."><input type="checkbox" id="resAdaptative" checked style="accent-color:var(--accent);vertical-align:middle"> Résolution adaptative</label>
+   <label title="Qualité Élevée sur écran à haute densité seulement : la finesse de l’image baisse un peu quand la carte graphique peine, puis remonte dès qu’elle le peut. Sans effet en Basse et en Moyenne."><input type="checkbox" id="resAdaptative" style="accent-color:var(--accent);vertical-align:middle"> Résolution adaptative</label>
   </div>
   <p id="noteUltra" class="cache" style="font-size:13px;color:var(--doux);margin:-4px 0 12px;max-width:640px">Ultra : l’ordinateur ne triche pas. Il a exactement le même revenu, les mêmes prix, les mêmes durées et la même limite d’effectifs que vous ; il gagne par ses décisions. En mission de campagne, Ultra reprend les réglages de Difficile, sans ces comportements (les missions sont scénarisées).</p>
 
@@ -435,30 +436,30 @@ if(/[?&]mission=/.test(location.search)){
      L'ORDRE COMPTE : chaque fichier s'appuie sur ceux qui le précèdent (jeu.js en dernier).
      onerror : un fichier absent est ignoré sans bruit ; le jeu démarre sans lui quand il est facultatif
      (musique, post-traitement, envahisseurs, vignettes), sinon jeu.js affiche le message « Rendu 3D indisponible ». -->
-<script src="musique.js?v=23" onerror="void 0"></script>
-<script src="cartes.js?v=23" onerror="void 0"></script>
-<script src="campagnes/campagnes.js?v=23" onerror="void 0"></script>
-<script src="campagnes/halden-1.js?v=23" onerror="void 0"></script>
-<script src="campagnes/halden-2.js?v=23" onerror="void 0"></script>
-<script src="campagnes/halden-3.js?v=23" onerror="void 0"></script>
-<script src="campagnes/halden-4.js?v=23" onerror="void 0"></script>
-<script src="campagnes/karsk-1.js?v=23" onerror="void 0"></script>
-<script src="campagnes/karsk-2.js?v=23" onerror="void 0"></script>
-<script src="campagnes/karsk-3.js?v=23" onerror="void 0"></script>
-<script src="campagnes/karsk-4.js?v=23" onerror="void 0"></script>
-<script src="r3d-scene.js?v=23" onerror="void 0"></script>
-<script src="r3d-post.js?v=23" onerror="void 0"></script>
-<script src="r3d-unites.js?v=23" onerror="void 0"></script>
-<script src="r3d-batiments.js?v=23" onerror="void 0"></script>
-<script src="r3d-effets.js?v=23" onerror="void 0"></script>
-<script src="r3d-aliens.js?v=23" onerror="void 0"></script>
+<script src="musique.js?v=24" onerror="void 0"></script>
+<script src="cartes.js?v=24" onerror="void 0"></script>
+<script src="campagnes/campagnes.js?v=24" onerror="void 0"></script>
+<script src="campagnes/halden-1.js?v=24" onerror="void 0"></script>
+<script src="campagnes/halden-2.js?v=24" onerror="void 0"></script>
+<script src="campagnes/halden-3.js?v=24" onerror="void 0"></script>
+<script src="campagnes/halden-4.js?v=24" onerror="void 0"></script>
+<script src="campagnes/karsk-1.js?v=24" onerror="void 0"></script>
+<script src="campagnes/karsk-2.js?v=24" onerror="void 0"></script>
+<script src="campagnes/karsk-3.js?v=24" onerror="void 0"></script>
+<script src="campagnes/karsk-4.js?v=24" onerror="void 0"></script>
+<script src="r3d-scene.js?v=24" onerror="void 0"></script>
+<script src="r3d-post.js?v=24" onerror="void 0"></script>
+<script src="r3d-unites.js?v=24" onerror="void 0"></script>
+<script src="r3d-batiments.js?v=24" onerror="void 0"></script>
+<script src="r3d-effets.js?v=24" onerror="void 0"></script>
+<script src="r3d-aliens.js?v=24" onerror="void 0"></script>
 <!-- Vignettes des boutons (images des modèles 3D) : facultatif, des pictogrammes neutres le remplacent. -->
-<script src="r3d-vignettes.js?v=23" onerror="void 0"></script>
-<script src="jeu.js?v=23" onerror="void 0"></script>
+<script src="r3d-vignettes.js?v=24" onerror="void 0"></script>
+<script src="jeu.js?v=24" onerror="void 0"></script>
 <!-- Outils de test (verif-missions-moteur.js) : chargés seulement avec ?verif ou &verif dans l'adresse. -->
 <script>
 if(/[?&]verif(=|&|$)/.test(location.search)){
-  const s = document.createElement('script'); s.src = 'verif-missions-moteur.js?v=22'; document.body.appendChild(s);
+  const s = document.createElement('script'); s.src = 'verif-missions-moteur.js?v=24'; document.body.appendChild(s);
 }
 </script>
 </body>

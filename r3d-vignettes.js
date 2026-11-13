@@ -24,8 +24,11 @@
    réduite à 160 × 120 (anticrénelage), deux lumières, fond dégradé. L'état
    du moteur de rendu (cible, couleur et opacité de fond, ombres, effacement
    automatique, compteurs) est restauré exactement après chaque image.
-   Cadence : au plus une image toutes les 100 ms (500 ms en pleine partie),
-   en temps libre, après une image de jeu rapide, jamais pendant une
+   Cadence (v24) : toutes les images sont produites hors partie (chargement,
+   menu, briefing), une toutes les 100 ms, en temps libre ; leurs shaders sont
+   compilés d'un coup avant la première (compilerShaders). En partie non mise
+   en pause : rien, sauf les clés passées par autoriser() (onglet que le joueur
+   vient d'ouvrir), une image au plus toutes les 3 s. Jamais pendant une
    cinématique, une suspension (suspendre(true)) ni quand l'onglet est masqué.
    ===================================================================== */
 (function(){
@@ -361,6 +364,48 @@
     }
   }
 
+  // Préchauffage des shaders des vignettes (v24) : une seule fois, dès que le bac à sable est prêt
+  // (chargement ou menu, jamais en pleine partie non mise en pause), tous les modèles des deux
+  // factions sont posés ensemble dans la scène des vignettes et compilés d'un coup
+  // (renderer.compile, même cible et mêmes lumières que les images) : aucune image produite ensuite
+  // ne compile de programme. Mesure : shaders.ms, shaders.programmes (etat()).
+  let shadersCompiles = false;
+  const shaders = {ms:0, programmes:0, modeles:0};
+  function compilerShaders(){
+    shadersCompiles = true;
+    if(typeof camps === 'undefined' || !camps) return;
+    const r = R3D.renderer, R = bac.R, t0 = performance.now();
+    const p0 = r.info.programs ? r.info.programs.length : 0;
+    const ajoutes = [];
+    for(const fac of FACS){
+      const id = '§vignette-' + fac;
+      if(!Object.prototype.hasOwnProperty.call(camps, id)){ camps[id] = {id, faction:fac, nom:'', ia:false}; ajoutes.push(id); }
+    }
+    const sauveCible = r.getRenderTarget();
+    try {
+      const unites = [], bats = [];
+      for(const cle of file){
+        const [genre, type, fac] = cle.split('|'), idCamp = '§vignette-' + fac;
+        if(genre === 'unite' && typeof UNITES !== 'undefined' && UNITES[type] && UNITES[type].rendu !== 'aliens')
+          unites.push(fausseUnite(type, UNITES[type], idCamp));
+        else if(genre === 'batiment' && typeof BATIMENTS !== 'undefined' && BATIMENTS[type])
+          bats.push(fauxBatiment(type, BATIMENTS[type], idCamp));
+      }
+      shaders.modeles = unites.length + bats.length;
+      R.Unites.sync(unites, 0, 0);
+      R.Batiments.sync(bats, [], 0, 0);
+      r.setRenderTarget(bac.rt);
+      r.compile(bac.scene, bac.camera);
+    } catch(e){ erreurs.push(['shaders', String(e && e.message || e)]); }
+    finally {
+      try { R.Unites.sync([], 0, 0); R.Batiments.sync([], [], 0, 0); } catch(e){ /* rien */ }
+      r.setRenderTarget(sauveCible);
+      for(const id of ajoutes) delete camps[id];
+    }
+    shaders.ms = Math.round(performance.now() - t0);
+    shaders.programmes = (r.info.programs ? r.info.programs.length : 0) - p0;
+  }
+
   // ---------------------------------------------------------------
   // 5. FILE D'ATTENTE ET CADENCE
   // ---------------------------------------------------------------
@@ -371,21 +416,32 @@
   function planifier(delai){
     if(minuteur || etat !== 'pret' || !file.length) return;
     minuteur = setTimeout(() => {
-      if(typeof requestIdleCallback === 'function') requestIdleCallback(pompe, {timeout:700});
+      if(!accelere && typeof requestIdleCallback === 'function') requestIdleCallback(pompe, {timeout:700});
       else pompe();
     }, Math.max(0, delai));
   }
-  // Allègement (13/11/2026) : en pleine partie, au plus une image par INTERVALLE_JEU ;
-  // jamais pendant une suspension demandée par le jeu (R3D.Vignettes.suspendre) ;
-  // seulement si l'image précédente du jeu a été rapide (R3D.perf().ms, s'il existe).
-  // Garde-fou : sur une machine durablement lente, on produit quand même après
-  // ATTENTE_MAX ms d'attente, sinon les boutons garderaient leurs pictogrammes.
-  const INTERVALLE_JEU = 500, SEUIL_RAPIDE = 28, ATTENTE_MAX = 4000;
-  let suspendu = false, attenteDepuis = 0;
-  const mesure = {n:0, ms:0, msMax:0, refusLent:0, liste:[]};
+  // Règle de production (v24, 13/11/2026) : une vignette bloque le fil principal 40 à 344 ms.
+  // - Hors partie (chargement, menu, briefing) et partie en pause : production continue, une image
+  //   toutes les INTERVALLE ms (aucune attente pendant l'écran de lancement : accelerer(true)).
+  // - En partie non mise en pause : AUCUNE production, sauf pour les clés autorisées par le jeu
+  //   (autoriser : images manquantes de l'onglet de la barre de construction que le joueur vient
+  //   d'ouvrir), et alors une image au plus toutes les INTERVALLE_PARTIE ms.
+  // Jamais pendant une suspension demandée par le jeu (R3D.Vignettes.suspendre) ; en partie,
+  // seulement si l'image précédente du jeu a été rapide (R3D.perf().ms, s'il existe), avec un
+  // garde-fou : sur une machine durablement lente, on produit quand même après ATTENTE_MAX ms.
+  const INTERVALLE_PARTIE = 3000, SEUIL_RAPIDE = 28, ATTENTE_MAX = 4000;
+  let suspendu = false, attenteDepuis = 0, accelere = false;
+  let permises = new Set();         // clés autorisées en pleine partie (onglet ouvert par le joueur)
+  const mesure = {n:0, ms:0, msMax:0, refusLent:0, liste:[], enPartie:0, enPause:0, horsPartie:0};
   function enPartie(){
     try { return typeof enJeu !== 'undefined' && !!enJeu && !(typeof partieFinie !== 'undefined' && partieFinie); }
     catch(e){ return false; }
+  }
+  // 'libre' (hors partie), 'pause' (partie en pause) ou 'partie' (partie en cours).
+  function regime(){
+    if(!enPartie()) return 'libre';
+    try { if(typeof enPause !== 'undefined' && enPause) return 'pause'; } catch(e){ /* rien */ }
+    return 'partie';
   }
   function imageRapide(){
     try {
@@ -394,32 +450,46 @@
       return !p || !isFinite(p.ms) || p.ms <= SEUIL_RAPIDE;
     } catch(e){ return true; }
   }
+  let enCours = false;              // une image en cours d'encodage : aucune autre ne démarre
   function pompe(){
+    if(enCours) return;             // un rappel en double (minuteur + temps libre) : finir() replanifie
     minuteur = null;
     if(etat !== 'pret' || !file.length) return;
     if(suspendu || enCinematique() || document.hidden){ planifier(500); return; }
+    const reg = regime();
+    if(!shadersCompiles && reg !== 'partie'){ compilerShaders(); planifier(accelere ? 0 : INTERVALLE); return; }
+    // En partie : seulement une clé autorisée ; sinon on revérifie une fois par seconde (pause, onglet).
+    let indice = 0;
+    if(reg === 'partie'){
+      indice = file.findIndex(c => permises.has(c));
+      if(indice < 0){ planifier(1000); return; }
+    }
     const maintenant = performance.now();
-    const ecart = maintenant - dernier, mini = enPartie() ? INTERVALLE_JEU : INTERVALLE;
-    if(ecart < mini){ planifier(mini - ecart); return; }
-    if(!imageRapide()){
+    const ecart = maintenant - dernier, mini = reg === 'partie' ? INTERVALLE_PARTIE : accelere ? 0 : INTERVALLE;
+    if(ecart < mini){ planifier(Math.min(1000, mini - ecart)); return; }
+    if(reg === 'partie' && !imageRapide()){
       if(!attenteDepuis) attenteDepuis = maintenant;
       if(maintenant - attenteDepuis < ATTENTE_MAX){ mesure.refusLent++; planifier(120); return; }
     }
     attenteDepuis = 0;
-    const cle = file.shift();   // reste dans enFile jusqu'à la fin de l'encodage (pas de doublon)
+    const cle = file.splice(indice, 1)[0];   // reste dans enFile jusqu'à la fin de l'encodage (pas de doublon)
+    permises.delete(cle);
+    mesure[reg === 'partie' ? 'enPartie' : reg === 'pause' ? 'enPause' : 'horsPartie']++;
     const [genre, type, fac] = cle.split('|');
     let res = null;
     const t0 = performance.now();
+    enCours = true; dernier = t0;
     try { res = produire(genre, type, fac); }
     catch(e){ res = null; erreurs.push([cle, String(e && e.message || e)]); }
     const duree = performance.now() - t0;
     mesure.n++; mesure.ms += duree; if(mesure.liste.length < 80) mesure.liste.push(Math.round(duree)); if(duree > mesure.msMax) mesure.msMax = duree;
     const finir = url => {
+      enCours = false;
       enFile.delete(cle);
       cache.set(cle, url || null);
       dernier = performance.now();
       if(url) annoncer(cle);
-      planifier(mini);
+      planifier(reg === 'partie' ? Math.min(1000, INTERVALLE_PARTIE) : accelere ? 0 : INTERVALLE);
     };
     // Encodage PNG asynchrone : la vignette suivante attend la fin de celui-ci (minuteur nul entre-temps).
     if(res && typeof res.then === 'function'){
@@ -477,7 +547,8 @@
       if(etat !== 'rien') return;
       if(typeof THREE === 'undefined' || !R3D.renderer){ return; }   // réessayé au prochain image()
       etat = 'chargement';
-      preparer().then(() => { etat = 'pret'; prechauffer(); planifier(0); })
+      // Shaders des vignettes compilés tout de suite, pendant le chargement, avec ceux du jeu.
+      preparer().then(() => { etat = 'pret'; prechauffer(); if(regime() !== 'partie') compilerShaders(); planifier(0); })
         .catch(e => { etat = 'echec'; bac = null; erreurs.push(['init', String(e && e.message || e)]); });
     },
     image(genre, type, faction){
@@ -497,9 +568,23 @@
       if(!suspendu){ attenteDepuis = 0; planifier(0); }
     },
     estSuspendu(){ return suspendu; },
+    // En pleine partie, seules ces clés (genre|type|faction) peuvent être produites, une image au plus
+    // toutes les 3 s : le jeu passe les images manquantes de l'onglet que le joueur vient d'ouvrir.
+    // Chaque appel remplace la liste précédente.
+    autoriser(cles){
+      permises = new Set((cles || []).filter(c => !cache.has(c)));
+      for(const c of permises) demander(c, false);
+      planifier(0);
+    },
+    // Écran de lancement : production sans attente entre deux images (accelerer(true)), le temps de finir.
+    accelerer(b){ accelere = !!b; if(accelere){ if(minuteur && minuteur !== -1){ clearTimeout(minuteur); minuteur = null; } planifier(0); } },
+    // Vrai quand plus rien n'est à produire (ou quand le module ne peut pas produire).
+    termine(){ return etat === 'echec' || (etat === 'pret' && !file.length && !enFile.size); },
     // Diagnostic (tests) : {etat, pretes, enFile, erreurs, suspendu, produites, msMoyen, msMax, refusLent}
     etat(){ let n = 0; for(const v of cache.values()) if(v) n++;
-      return {etat, pretes:n, enFile:file.length, erreurs:erreurs.slice(), suspendu,
+      return {etat, pretes:n, enFile:file.length, erreurs:erreurs.slice(), suspendu, accelere, permises:permises.size,
+        shaders:Object.assign({compiles:shadersCompiles}, shaders),
+        parRegime:{horsPartie:mesure.horsPartie, enPause:mesure.enPause, enPartie:mesure.enPartie},
         phases:{renduMs:+phases.rendu.toFixed(1), passes:phases.passes, pngMs:+phases.png.toFixed(1)},
         produites:mesure.n, msMoyen:mesure.n ? +(mesure.ms/mesure.n).toFixed(2) : 0, msMax:+mesure.msMax.toFixed(2), refusLent:mesure.refusLent, durees:mesure.liste.slice()}; },
   };
