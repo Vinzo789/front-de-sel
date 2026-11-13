@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Front de Sel — prototype</title>
+<style>
+:root{
+  --fond:#14181c; --panneau:#111519; --bord:#3a4550; --texte:#e8e3d6; --doux:#9aa3a8;
+  --accent:#e0b04a; --ok:#6fd67c; --alerte:#ff7a5c; --bouton:#252d34; --boutonSurvol:#313b44;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--fond);color:var(--texte);
+  font-family:"Segoe UI",system-ui,sans-serif;user-select:none}
+#jeu{position:fixed;inset:0;display:block;width:100vw;height:100vh}
+#calque{position:fixed;inset:0;pointer-events:none;z-index:2}
+#barre{position:fixed;top:0;left:0;right:0;height:44px;background:var(--panneau);border-bottom:1px solid var(--bord);
+  display:flex;align-items:center;gap:12px;padding:0 12px;font-size:14px;z-index:5;white-space:nowrap}
+@media (max-width:1360px){ #barre .titre{display:none} #volMusique{width:60px} }
+#barre .titre{font-weight:800;letter-spacing:.18em;color:var(--accent)}
+#barre .lib{color:var(--doux);font-size:12px;margin-right:4px}
+#barre b{font-variant-numeric:tabular-nums}
+#barre .esp{flex:1}
+#pouvoirs{display:flex;gap:8px}
+button{font:inherit;color:var(--texte);background:var(--bouton);border:1px solid var(--bord);border-radius:6px;cursor:pointer}
+button:hover:not(:disabled){background:var(--boutonSurvol);border-color:#56646f}
+button:disabled,button.grise{opacity:.45;cursor:not-allowed}
+button.petit{padding:5px 10px;font-size:13px}
+button.grand{padding:10px 18px;font-size:15px;font-weight:600}
+button.principal{border-color:#7a5b22;background:#3a3120}
+button.pouvoir{padding:4px 10px;font-size:12px;line-height:1.2;text-align:left}
+button.pouvoir .c{color:var(--accent)}
+button.pouvoir.super{border-color:#7a5b22}
+button.actif{outline:2px solid var(--accent)}
+button.coupee{color:var(--doux)}
+input[type=range]{width:80px;accent-color:var(--accent);vertical-align:middle}
+.musique{display:flex;align-items:center;gap:6px}
+#messages{position:fixed;top:54px;left:50%;transform:translateX(-50%);z-index:6;display:flex;flex-direction:column;
+  align-items:center;gap:4px;pointer-events:none}
+#messages div{background:rgba(10,12,14,.82);padding:5px 14px;border-radius:5px;font-size:14px;border-left:3px solid var(--doux)}
+#messages div.alerte{border-left-color:var(--alerte);color:#ffd3c8}
+#messages div.succes{border-left-color:var(--ok)}
+/* Panneau du bas : même hauteur que la minicarte (184 px), pour que la barre de construction tienne sur
+   deux rangées de quatre boutons (huit au plus par onglet) de 1280 à 1920 px de large, sans défilement. */
+#panneau{position:fixed;left:0;bottom:0;right:256px;height:184px;background:var(--panneau);border-top:1px solid var(--bord);
+  display:flex;z-index:5}
+#infos{width:290px;flex:none;padding:10px 14px;border-right:1px solid var(--bord);font-size:13px;overflow:hidden}
+#infos h3{margin:0 0 4px;font-size:16px}
+#infos img.vign{float:right;width:84px;height:63px;object-fit:cover;border-radius:5px;border:1px solid var(--bord);margin:0 0 4px 8px;background:#0c1013}
+#infos .desc{color:var(--doux);margin:2px 0 6px;line-height:1.35}
+#infos .ligne{margin:2px 0}
+.barrePv{height:7px;background:#3a2222;border-radius:3px;overflow:hidden;margin:4px 0}
+.barrePv i{display:block;height:100%;background:var(--ok)}
+.barreProd{height:5px;background:#2a3036;border-radius:3px;overflow:hidden;margin-top:4px}
+.barreProd i{display:block;height:100%;background:var(--accent)}
+#actions{flex:1;padding:10px;display:flex;flex-wrap:wrap;gap:8px;align-content:flex-start;overflow:hidden}
+#actions button.act{width:118px;height:58px;padding:4px 6px;font-size:13px;line-height:1.25;position:relative}
+#actions button.act .c{display:block;color:var(--accent);font-size:12px}
+#actions button.act .n{position:absolute;top:3px;right:6px;font-weight:700;color:var(--ok)}
+#actions .file{width:100%;font-size:12px;color:var(--doux)}
+/* Écrans moyens (1280 × 720 : #actions ne fait que 266 px, entre #infos et la barre de construction) :
+   boutons compacts, trois par rangée, pour que la ligne de file d'une caserne ou d'une usine tienne
+   sous ses trois boutons ; défilement vertical en dernier recours plutôt que du contenu coupé. */
+@media (max-width:1500px){
+  #infos{width:250px;padding:8px 10px}
+  #infos img.vign{width:64px;height:48px}
+  #actions{gap:6px;overflow-y:auto}
+  #actions button.act{width:72px;height:52px;padding:3px 4px;font-size:11px;line-height:1.2}
+  #actions button.act .c{font-size:11px}
+  #actions .file{font-size:11.5px;line-height:1.3}
+}
+/* Barre de construction : onglets en haut, grille de 4 colonnes × 2 rangées de vignettes (image du modèle 3D,
+   nom en bandeau, prix en haut à gauche, nombre en file en haut à droite, avancement en bas). */
+#fabrique{width:620px;flex:none;border-left:1px solid var(--bord);display:flex;flex-direction:column;padding:6px 8px 8px;gap:5px;
+  background:linear-gradient(#151a1f,var(--panneau))}
+@media (max-width:1500px){ #fabrique{width:480px;padding:5px 6px 7px} }
+#ongletsFab{display:flex;gap:2px;border-bottom:1px solid var(--bord);flex:none}
+#ongletsFab button.onglet{flex:1;padding:4px 0 5px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;border-radius:5px 5px 0 0;
+  border-bottom:none;background:transparent;color:var(--doux)}
+#ongletsFab button.onglet.actif{background:var(--bouton);color:var(--accent);outline:none;box-shadow:inset 0 2px 0 var(--accent)}
+#ongletsFab button.onglet .tch{font-size:10px;opacity:.6;margin-left:4px;letter-spacing:0}
+#boutonsFab{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:5px;flex:1;min-height:0}
+#boutonsFab .vide{grid-column:1 / -1;color:var(--doux);font-size:12px;align-self:center;padding:0 6px}
+#boutonsFab button.fab{position:relative;padding:0;overflow:hidden;min-width:0;min-height:0;background:#0d1114;border-color:#33404a;border-radius:6px}
+#boutonsFab button.fab img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
+#boutonsFab button.fab img.picto{object-fit:contain;padding:10px 0 22px;opacity:.55}
+#boutonsFab button.fab .nom{position:absolute;left:0;right:0;bottom:0;padding:9px 4px 6px;font-size:11.5px;font-weight:600;line-height:1.1;
+  text-align:left;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+  background:linear-gradient(transparent,rgba(6,8,10,.88) 40%)}
+#boutonsFab button.fab .c{position:absolute;top:3px;left:3px;padding:1px 5px;border-radius:4px;background:rgba(6,8,10,.78);color:var(--accent);
+  font-size:11.5px;font-variant-numeric:tabular-nums;line-height:1.3}
+#boutonsFab button.fab .n{position:absolute;top:3px;right:3px;min-width:18px;padding:0 4px;border-radius:9px;background:rgba(6,8,10,.82);
+  font-weight:700;color:var(--ok);font-size:12.5px;line-height:18px;text-align:center}
+#boutonsFab button.fab .n:empty{display:none}
+#boutonsFab button.fab .prog{position:absolute;left:4px;right:4px;bottom:2px;height:3px;background:rgba(42,48,54,.9);border-radius:2px;overflow:hidden}
+#boutonsFab button.fab .prog b{display:block;height:100%;width:0;background:var(--accent)}
+#boutonsFab button.fab:hover:not(:disabled){border-color:#7a8a96;background:#0d1114}
+#boutonsFab button.fab.grise{cursor:help}
+#boutonsFab button.fab.grise img,#boutonsFab button.fab.grise .nom,#boutonsFab button.fab.grise .c{opacity:.42}
+#boutonsFab button.fab.grise img{filter:grayscale(.85)}
+#boutonsFab button.fab.actif{outline:2px solid var(--accent);outline-offset:-2px}
+/* Infobulle de la barre de construction (au survol d'un bouton) */
+#infobulle{position:fixed;z-index:30;width:300px;pointer-events:none;background:rgba(12,15,18,.97);border:1px solid #4a5763;border-radius:8px;
+  box-shadow:0 8px 24px rgba(0,0,0,.55);font-size:12.5px;line-height:1.4;overflow:hidden}
+#infobulle img{display:block;width:100%;height:150px;object-fit:cover;background:#0b0e11;border-bottom:1px solid var(--bord)}
+#infobulle img.picto{object-fit:contain;padding:24px;opacity:.5}
+#infobulle .corps{padding:8px 11px 10px}
+#infobulle h4{margin:0 0 5px;font-size:15px;display:flex;align-items:baseline;gap:8px}
+#infobulle h4 .prix{margin-left:auto;color:var(--accent);font-size:13px;font-variant-numeric:tabular-nums}
+#infobulle .carac{display:grid;grid-template-columns:auto 1fr;gap:1px 10px;color:var(--doux);margin:0 0 6px}
+#infobulle .carac b{color:var(--texte);font-weight:600}
+#infobulle .desc{color:#d9d4c7}
+#infobulle .raison{color:#ffb4a0;margin:0 0 6px}
+#infobulle .aide{color:var(--doux);font-size:11.5px;margin-top:6px}
+#mini{position:fixed;right:0;bottom:0;width:256px;height:184px;background:var(--panneau);border-top:1px solid var(--bord);
+  border-left:1px solid var(--bord);padding:8px;z-index:5}
+#miniCv{display:block;cursor:pointer;border:1px solid #2a3238}
+
+/* ---------- Mission : objectifs et radio ---------- */
+#objectifs{position:fixed;top:54px;left:10px;width:340px;z-index:6;background:rgba(10,13,16,.84);border:1px solid var(--bord);
+  border-radius:8px;font-size:13px}
+#objectifs .tete{padding:6px 10px;font-weight:700;letter-spacing:.08em;color:var(--accent);cursor:pointer;display:flex}
+#objectifs .tete .fleche{margin-left:auto;color:var(--doux);transition:transform .15s}
+#objectifs.replie .fleche{transform:rotate(-90deg)}
+#objectifs.replie #objListe{display:none}
+#objNouveau{color:var(--ok);font-weight:600;letter-spacing:0}
+#objListe{padding:0 10px 8px}
+#objListe .obj{display:flex;gap:7px;padding:3px 0;line-height:1.35}
+#objListe .obj .case{font-size:15px;line-height:1.1}
+#objListe .obj.reussi{color:var(--ok)}
+#objListe .obj.reussi span:last-child{text-decoration:line-through;text-decoration-color:rgba(111,214,124,.5)}
+#objListe .obj.echoue{color:var(--alerte)}
+#objListe .obj.secondaire{color:#c7c2b6}
+#objListe .obj.nouveau{animation:clignote 1s ease-in-out 4}
+#objListe .obj i{color:var(--doux);font-style:normal;font-size:12px}
+#objListe .det{color:var(--accent);font-variant-numeric:tabular-nums}
+@keyframes clignote{50%{background:rgba(224,176,74,.22)}}
+#radio{position:fixed;left:10px;bottom:196px;width:460px;z-index:6;background:rgba(10,13,16,.9);border:1px solid var(--bord);
+  border-left:4px solid var(--accent);border-radius:6px;padding:8px 12px 7px;cursor:pointer}
+#radio .qui{font-size:12px;font-weight:700;letter-spacing:.06em;color:var(--accent);text-transform:uppercase}
+#radio .qui::before{content:"Radio · ";color:var(--doux);font-weight:400}
+#radio .texte{font-size:14px;line-height:1.45;margin-top:2px}
+#radio .suite{font-size:11px;color:var(--doux);text-align:right;margin-top:3px}
+
+/* ---------- Menus ---------- */
+.voile{position:fixed;inset:0;background:rgba(8,10,12,.78);z-index:20;display:flex;align-items:flex-start;justify-content:center;
+  overflow:auto;padding:24px}
+.cache{display:none!important}
+.boite{max-width:980px;width:100%;margin:auto}
+.boite h1{font-size:44px;letter-spacing:.2em;margin:0;color:var(--accent)}
+.boite .sous{color:var(--doux);margin:4px 0 18px;letter-spacing:.08em}
+.recit{line-height:1.6;font-size:15px;max-width:780px}
+.recit p{margin:0 0 10px}
+.cartes{display:flex;gap:16px;margin:18px 0;flex-wrap:wrap}
+.carte{flex:1;min-width:260px;border:1px solid var(--bord);border-radius:10px;padding:14px 16px;background:#1b2126}
+.carte h2{margin:0 0 4px;font-size:20px}
+.carte .devise{font-style:italic;color:var(--doux);margin-bottom:8px}
+.carte p{margin:4px 0;font-size:14px;line-height:1.45}
+.carte button{margin-top:10px;padding:9px 16px;font-size:15px;font-weight:600}
+.carte.inactive{opacity:.55}
+.reglages{display:flex;gap:18px;align-items:center;font-size:14px;margin:6px 0 12px;flex-wrap:wrap}
+select{font:inherit;background:var(--bouton);color:var(--texte);border:1px solid var(--bord);border-radius:5px;padding:4px 8px}
+.commandes{columns:2;font-size:13px;color:var(--doux);line-height:1.7}
+.commandes b{color:var(--texte)}
+.retour{margin-top:6px}
+.campagne h2{font-size:28px;margin:0 0 6px;letter-spacing:.06em}
+.campagne .intro{font-size:16px;line-height:1.6;font-style:italic;max-width:760px;color:#d9d3c4;margin:0 0 18px}
+.mission{display:flex;align-items:center;gap:14px;border:1px solid var(--bord);border-radius:10px;padding:10px 14px;
+  background:#1b2126;margin-bottom:10px}
+.mission .num{font-size:26px;font-weight:800;color:var(--accent);width:34px;text-align:center}
+.mission .corps{flex:1}
+.mission .info{color:var(--doux);font-size:13px;margin-top:2px}
+.mission .etat{font-size:12px;margin-top:3px;color:var(--doux)}
+.mission.gagnee .etat{color:var(--ok)}
+.mission.verrou{opacity:.5}
+.mission button{padding:8px 18px;font-size:14px;font-weight:600}
+.note{color:var(--doux);font-size:13px;margin-top:8px}
+.briefing .lieu{color:var(--doux);letter-spacing:.06em;margin:2px 0 14px}
+.briefing h2{font-size:30px;margin:0;letter-spacing:.04em}
+.briefing .qui{font-weight:700;color:var(--accent);margin-bottom:6px;font-size:14px;letter-spacing:.04em}
+.briefing .texte{border-left:3px solid var(--bord);padding-left:14px}
+.briefing h3{font-size:15px;letter-spacing:.1em;color:var(--doux);margin:18px 0 6px}
+.briefing ul{margin:0;padding-left:20px;line-height:1.6}
+.boutons{display:flex;gap:12px;margin-top:18px;flex-wrap:wrap}
+.fin h1{font-size:52px}
+.fin table{border-collapse:collapse;margin:14px 0;font-size:15px}
+.fin td{padding:4px 18px 4px 0}
+.fin .bilan{list-style:none;padding:0;margin:8px 0;line-height:1.6}
+.fin .finCampagne{border:1px solid #7a5b22;border-radius:6px;padding:10px 14px;margin:12px 0;background:rgba(58,49,32,.45)}
+.fin .finCampagne h2{margin:0 0 4px;font-size:20px;letter-spacing:.06em;color:var(--accent)}
+.fin .finCampagne p{margin:0}
+.fin .bilan .reussi{color:var(--ok)} .fin .bilan .echoue{color:var(--alerte)}
+
+/* ---------- Escarmouche : choix de la carte ---------- */
+.titreCartes{font-size:13px;letter-spacing:.12em;color:var(--doux);margin:0 0 6px;font-weight:600;text-transform:uppercase}
+.choixCarte{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 14px}
+.choixCarte button.carteEsc{display:flex;flex-direction:column;align-items:flex-start;gap:4px;width:186px;padding:8px;text-align:left;
+  background:#1b2126;border:1px solid var(--bord);border-radius:8px;cursor:pointer;color:var(--texte);font:inherit}
+.choixCarte button.carteEsc:hover{border-color:var(--accent)}
+.choixCarte button.carteEsc.choisie{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset;background:#252c22}
+.choixCarte canvas{width:168px;height:118px;border-radius:4px;display:block}
+.choixCarte .nomCarte{font-weight:700;font-size:14px}
+.choixCarte .descCarte{color:var(--doux);font-size:12px;line-height:1.35}
+.choixCarte .etatCarte{font-size:11px;letter-spacing:.06em;color:var(--accent);min-height:13px}
+
+/* ---------- Mode Surprises : réglage, cinématique, alliance ---------- */
+.surprises{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--bord);border-radius:8px;padding:9px 14px;
+  background:#1b2126;max-width:620px;margin:0 0 14px;cursor:pointer;font-size:14px}
+.surprises input{margin-top:3px;accent-color:var(--accent)}
+.surprises .expl{display:block;color:var(--doux);font-size:13px;margin-top:2px}
+#cine{position:fixed;inset:0;z-index:15;cursor:default}
+#cine .bande{position:absolute;left:0;right:0;height:11vh;background:#000}
+#cine .haut{top:0} #cine .bas{bottom:0}
+#cine .fondu{position:absolute;inset:0;background:#000;opacity:0;transition:opacity 1.2s}
+#cine.secours .fondu{opacity:.92}
+#cineTexte{position:absolute;left:50%;bottom:calc(11vh + 22px);transform:translateX(-50%);max-width:820px;width:90%;text-align:center;
+  font-size:20px;line-height:1.45;color:#eafff8;text-shadow:0 2px 6px #000;opacity:0;transition:opacity .6s}
+#cineTexte.vu{opacity:1}
+#cinePasser{position:absolute;right:20px;bottom:calc(11vh - 34px);font-size:12px;color:#9aa3a8;letter-spacing:.06em}
+#alliance .boite{max-width:640px}
+#alliance h1{font-size:30px;letter-spacing:.08em;color:#7df9d0}
+#alliance .choix{margin:6px 0 0;line-height:1.55;font-size:14px}
+#alliance .choix b{color:var(--texte)}
+#bAlliance{border-color:#2f7a66;background:#16302b}
+
+/* ---------- Escarmouche : camps et alliances ---------- */
+.raccourcis{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 8px}
+.emplacements{display:flex;flex-direction:column;gap:6px;max-width:620px;margin:0 0 10px}
+.emplacements .empl{display:flex;align-items:center;gap:10px;border:1px solid var(--bord);border-radius:8px;padding:6px 12px;background:#1b2126;font-size:14px}
+.emplacements .empl.ferme{opacity:.6}
+.emplacements .qui{min-width:110px}
+.emplacements select{font:inherit;background:#11161a;color:var(--texte);border:1px solid var(--bord);border-radius:5px;padding:3px 6px}
+.pastille{display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.5);flex:none}
+.lancerEsc{display:flex;align-items:center;gap:14px;margin:0 0 16px;flex-wrap:wrap}
+.lancerEsc .probleme{color:var(--alerte);font-size:13px}
+/* Bandeau des camps en jeu (haut gauche, discret) */
+#bandeauCamps{position:fixed;left:10px;top:52px;z-index:4;display:flex;flex-direction:column;gap:2px;pointer-events:auto;
+  background:rgba(14,17,20,.62);border:1px solid rgba(255,255,255,.08);border-radius:6px;padding:4px 8px;font-size:11.5px;color:#d9d4c7}
+#bandeauCamps .campB{display:flex;align-items:center;gap:6px;white-space:nowrap}
+#bandeauCamps .campB.elimine{opacity:.45;text-decoration:line-through}
+#bandeauCamps .fac{min-width:44px}
+#bandeauCamps .eq{color:#9aa3a8}
+#bandeauCamps .etat{color:#9aa3a8;font-size:10.5px}
+/* Affichage des performances (F8, ou case de la fenêtre Commandes) : au-dessus de la minicarte */
+#perfAff{position:fixed;right:8px;bottom:192px;z-index:7;pointer-events:none;white-space:pre;font:12px/1.35 Consolas,monospace;
+  color:#e8e3d6;background:rgba(10,13,16,.78);border:1px solid var(--bord);border-radius:4px;padding:5px 8px}
+</style>
+</head>
+<body>
+<canvas id="jeu"></canvas>
+<canvas id="calque"></canvas>
+
+<div id="barre" class="cache">
+  <div class="titre">FRONT DE SEL</div>
+  <div><span class="lib">Réserves</span><b id="hRes">0</b></div>
+  <div><span class="lib">Points</span><b id="hPts">0</b></div>
+  <div><span class="lib">Effectifs</span><b id="hPop">0</b></div>
+  <div id="pouvoirs"></div>
+  <div class="esp"></div>
+  <button id="bAlliance" class="petit cache">Proposer une alliance</button>
+  <div><span class="lib">Durée</span><b id="hTemps">00:00</b></div>
+  <div class="musique"><button id="bMusique" class="petit">Musique</button><input id="volMusique" type="range" min="0" max="100" title="Volume de la musique"></div>
+  <button id="bPause" class="petit">Pause (P)</button>
+  <button id="bAide" class="petit">Commandes</button>
+  <button id="bAbandon" class="petit">Abandonner</button>
+</div>
+<div id="bandeauCamps" class="cache"></div>
+<div id="messages"></div>
+<div id="objectifs" class="cache"><div class="tete" id="objTete">OBJECTIFS<span id="objNouveau"></span><span class="fleche">▾</span></div><div id="objListe"></div></div>
+<div id="radio" class="cache"><div class="qui" id="radioQui"></div><div class="texte" id="radioTexte"></div><div class="suite" id="radioSuite"></div></div>
+<div id="panneau" class="cache" oncontextmenu="return false"><div id="infos"></div><div id="actions"></div>
+ <div id="fabrique"><div id="ongletsFab"></div><div id="boutonsFab"></div></div></div>
+<div id="infobulle" class="cache"></div>
+<div id="mini" class="cache"><canvas id="miniCv" width="240" height="168"></canvas></div>
+<div id="perfAff" class="cache" aria-live="off"></div>
+
+<!-- ===================== MENUS ===================== -->
+<div id="menu" class="voile">
+ <div class="boite">
+  <h1>FRONT DE SEL</h1>
+  <div class="sous" id="sousTitre">STRATÉGIE EN TEMPS RÉEL · CÔTE DE VARENNE, 2034</div>
+  <div class="reglages">
+   <label>Difficulté
+    <select id="difficulte">
+     <option value="facile">Facile</option>
+     <option value="normal" selected>Normale</option>
+     <option value="difficile">Difficile</option>
+     <option value="ultra" title="L’ordinateur ne triche pas : même revenu, mêmes prix, mêmes règles que vous.">Ultra</option>
+    </select>
+   </label>
+   <label title="Basse : pour un ordinateur lent. Élevée : tous les effets visuels.">Graphismes
+    <select id="qualite">
+     <option value="basse">Basse</option>
+     <option value="moyenne" selected>Moyenne</option>
+     <option value="haute">Élevée</option>
+    </select>
+   </label>
+   <div class="musique"><button id="bMusiqueMenu" class="petit">Musique</button><input id="volMusiqueMenu" type="range" min="0" max="100" title="Volume de la musique"></div>
+   <label title="La vue se déplace quand le curseur touche un bord de la fenêtre."><input type="checkbox" id="defilementBord" checked style="accent-color:var(--accent);vertical-align:middle"> Défilement au bord</label>
+   <label title="Qualités Moyenne et Élevée : la finesse de l’image baisse un peu quand l’ordinateur peine, puis remonte dès qu’il le peut."><input type="checkbox" id="resAdaptative" checked style="accent-color:var(--accent);vertical-align:middle"> Résolution adaptative</label>
+  </div>
+  <p id="noteUltra" class="cache" style="font-size:13px;color:var(--doux);margin:-4px 0 12px;max-width:640px">Ultra : l’ordinateur ne triche pas. Il a exactement le même revenu, les mêmes prix, les mêmes durées et la même limite d’effectifs que vous ; il gagne par ses décisions. En mission de campagne, Ultra reprend les réglages de Difficile, sans ces comportements (les missions sont scénarisées).</p>
+
+  <!-- Accueil -->
+  <div id="ecranAccueil">
+   <div class="recit">
+    <p><b>2034.</b> Après dix ans de sécheresse, la côte de Varenne est devenue la terre la plus convoitée de la région.
+    Sur cette mince bande littorale se dressent les trois plus grandes usines de dessalement du continent :
+    qui tient Varenne tient l’eau potable de quarante millions de personnes.</p>
+    <p>Le traité qui partageait la côte expire. Personne ne le renouvelle. La République de Karsk envoie ses divisions
+    blindées « protéger ses intérêts vitaux ». Le gouvernement de Varenne, ruiné, a confié la sécurité des usines au
+    Groupe Halden, une société militaire privée mieux équipée que bien des armées.</p>
+   </div>
+   <div class="cartes">
+    <div class="carte">
+     <h2 style="color:#3fa7ff">Campagne Halden</h2>
+     <div class="devise">Le contrat de Varenne</div>
+     <p>Quatre missions du côté de la société militaire privée chargée de tenir la côte.</p>
+     <button id="bModeHalden">Ouvrir la campagne</button>
+    </div>
+    <div class="carte">
+     <h2 style="color:#e2533f">Campagne Karsk</h2>
+     <div class="devise">La marche du Nord</div>
+     <p>La même guerre, vue du nord : quatre missions aux ordres du colonel Brannik.</p>
+     <button id="bModeKarsk">Ouvrir la campagne</button>
+    </div>
+    <div class="carte">
+     <h2>Escarmouche</h2>
+     <div class="devise">Cinq cartes, de Port-Calmes au Val des Brunelles</div>
+     <p>Une partie libre contre l’ordinateur : bâtir sa base, tenir les champs de minerai, détruire l’adversaire.</p>
+     <button id="bModeEscarmouche">Choisir un camp</button>
+    </div>
+   </div>
+   <div class="commandes" id="texteCommandes"></div>
+  </div>
+
+  <!-- Escarmouche : choix du camp -->
+  <div id="ecranEscarmouche" class="cache">
+   <h3 class="titreCartes">Carte</h3>
+   <div id="choixCarte" class="choixCarte"></div>
+   <label class="surprises"><input type="checkbox" id="modeSurprises">
+    <span><b>Mode Surprises</b><span class="expl" id="explSurprises">Un événement imprévu peut bouleverser la partie.</span></span></label>
+   <h3 class="titreCartes">Camps et alliances</h3>
+   <div class="raccourcis" id="raccourcisCamps"></div>
+   <div class="emplacements" id="emplacementsCamps"></div>
+   <div class="lancerEsc"><button class="grand principal" id="bLancerEscarmouche" type="button">Lancer la partie</button>
+    <span class="probleme" id="problemeCamps"></span></div>
+   <div class="cartes">
+    <div class="carte">
+     <h2 style="color:#3fa7ff">Groupe Halden</h2>
+     <div class="devise">« Nous ne faisons pas la guerre. Nous la gérons. »</div>
+     <p>Société militaire privée. Unités chères, précises et peu nombreuses : chaque perte coûte cher.</p>
+     <p><b>Réseau de relais</b> : +25 % de dégâts à portée d’une antenne relais ou du QG.</p>
+     <p><b>Pouvoirs</b> : Frappe de précision, Essaim (super-arme).</p>
+     <button data-faction="halden">Jouer Halden</button>
+    </div>
+    <div class="carte">
+     <h2 style="color:#e2533f">République de Karsk</h2>
+     <div class="devise">« Chaque mètre de côte est payé en acier. »</div>
+     <p>Armée nationale. Unités robustes, bon marché et nombreuses : Karsk gagne à l’usure.</p>
+     <p><b>Lignes de ravitaillement</b> : tir plus rapide et réparation lente près d’un dépôt ou du QG.</p>
+     <p><b>Pouvoirs</b> : Renforts, Marteau (super-arme).</p>
+     <button data-faction="karsk">Jouer Karsk</button>
+    </div>
+    <div class="carte inactive">
+     <h2>Réseau Mistral</h2>
+     <div class="devise">« Ils ont les chars. Nous avons la côte. »</div>
+     <p>La résistance des villes portuaires. Base mobile, leurres, sabotage.</p>
+     <p><i>Prévu pour une version ultérieure du prototype.</i></p>
+    </div>
+   </div>
+   <button class="petit retour bRetourAccueil">Retour</button>
+  </div>
+
+  <!-- Campagne : liste des missions -->
+  <div id="ecranCampagne" class="cache campagne">
+   <h2 id="campTitre"></h2>
+   <p class="intro" id="campIntro"></p>
+   <div id="campListe"></div>
+   <div class="note" id="campNote"></div>
+   <button class="petit retour bRetourAccueil">Retour</button>
+  </div>
+
+  <!-- Briefing -->
+  <div id="ecranBriefing" class="cache briefing">
+   <h2 id="briefTitre"></h2>
+   <div class="lieu" id="briefLieu"></div>
+   <div class="texte recit"><div class="qui" id="briefQui"></div><div id="briefTexte"></div></div>
+   <h3>OBJECTIFS</h3>
+   <ul id="briefObjectifs"></ul>
+   <div class="boutons">
+    <button class="grand principal" id="bCommencer" disabled>Chargement…</button>
+    <button class="grand" id="bBriefRetour">Retour à la campagne</button>
+   </div>
+  </div>
+ </div>
+</div>
+<script>
+// Pendant le chargement d'une mission (?mission=…), on montre tout de suite l'écran de briefing,
+// avec un bouton « Chargement… » désactivé : aucun clic ne peut se perdre sur l'accueil.
+if(/[?&]mission=/.test(location.search)){
+  document.getElementById('ecranAccueil').classList.add('cache');
+  document.getElementById('ecranBriefing').classList.remove('cache');
+  document.getElementById('briefTitre').textContent = 'Chargement de la mission…';
+  // Filet : si jeu.js (ancienne version en cache) ne sait pas réactiver le bouton, on le fait ici.
+  setTimeout(function(){
+    var b = document.getElementById('bCommencer');
+    if(typeof activerCommencer !== 'function' && b.disabled && b.onclick){ b.disabled = false; b.textContent = 'Commencer'; }
+  }, 4000);
+}
+</script>
+
+<div id="aide" class="voile cache"><div class="boite"><h1 style="font-size:28px">Commandes</h1>
+ <div class="commandes" id="texteCommandes2"></div>
+ <label style="display:block;margin-top:12px" title="La vue se déplace quand le curseur touche un bord de la fenêtre (même réglage que dans le menu)."><input type="checkbox" id="defilementBord2" checked style="accent-color:var(--accent);vertical-align:middle"> Défilement au bord</label>
+ <label style="display:block;margin-top:6px" title="Images par seconde, millisecondes par image, appels de dessin, triangles et résolution, dans un coin de l’écran (touche F8)."><input type="checkbox" id="perfCase" style="accent-color:var(--accent);vertical-align:middle"> Afficher les performances (F8)</label>
+ <button id="bFermerAide" class="petit" style="margin-top:16px">Reprendre</button></div></div>
+
+<div id="erreur3d" class="voile cache"><div class="boite"><h1 style="font-size:28px">Rendu 3D indisponible</h1>
+ <p class="recit">Front de Sel charge sa bibliothèque 3D (three.js) depuis Internet au démarrage.
+ Vérifiez la connexion, puis rechargez la page. Si le problème persiste, le navigateur ne prend peut-être pas en charge WebGL.</p></div></div>
+<div id="fin" class="voile cache"><div class="boite fin" id="finContenu"></div></div>
+<!-- Mode Surprises : cinématique (bandes noires, sous-titres) et proposition d'alliance -->
+<div id="cine" class="cache"><div class="fondu"></div><div class="bande haut"></div><div class="bande bas"></div>
+ <div id="cineTexte"></div><div id="cinePasser">Échap ou Espace : passer</div></div>
+<div id="alliance" class="voile cache"><div class="boite">
+ <h1 id="allianceTitre"></h1>
+ <div class="recit" id="allianceTexte"></div>
+ <div class="boutons"><button class="grand principal" id="bFaireAlliance">Faire alliance</button>
+  <button class="grand" id="bRefuserAlliance">Refuser</button></div></div></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<!-- VERSION DES FICHIERS : le paramètre ?v=… évite que le navigateur garde d'anciens fichiers en cache.
+     À INCRÉMENTER (sur toutes les lignes ci-dessous, ex. v=12 -> v=13) à chaque modification d'un de ces fichiers.
+     L'ORDRE COMPTE : chaque fichier s'appuie sur ceux qui le précèdent (jeu.js en dernier).
+     onerror : un fichier absent est ignoré sans bruit ; le jeu démarre sans lui quand il est facultatif
+     (musique, post-traitement, envahisseurs, vignettes), sinon jeu.js affiche le message « Rendu 3D indisponible ». -->
+<script src="musique.js?v=22" onerror="void 0"></script>
+<script src="cartes.js?v=22" onerror="void 0"></script>
+<script src="campagnes/campagnes.js?v=22" onerror="void 0"></script>
+<script src="campagnes/halden-1.js?v=22" onerror="void 0"></script>
+<script src="campagnes/halden-2.js?v=22" onerror="void 0"></script>
+<script src="campagnes/halden-3.js?v=22" onerror="void 0"></script>
+<script src="campagnes/halden-4.js?v=22" onerror="void 0"></script>
+<script src="campagnes/karsk-1.js?v=22" onerror="void 0"></script>
+<script src="campagnes/karsk-2.js?v=22" onerror="void 0"></script>
+<script src="campagnes/karsk-3.js?v=22" onerror="void 0"></script>
+<script src="campagnes/karsk-4.js?v=22" onerror="void 0"></script>
+<script src="r3d-scene.js?v=22" onerror="void 0"></script>
+<script src="r3d-post.js?v=22" onerror="void 0"></script>
+<script src="r3d-unites.js?v=22" onerror="void 0"></script>
+<script src="r3d-batiments.js?v=22" onerror="void 0"></script>
+<script src="r3d-effets.js?v=22" onerror="void 0"></script>
+<script src="r3d-aliens.js?v=22" onerror="void 0"></script>
+<!-- Vignettes des boutons (images des modèles 3D) : facultatif, des pictogrammes neutres le remplacent. -->
+<script src="r3d-vignettes.js?v=22" onerror="void 0"></script>
+<script src="jeu.js?v=22" onerror="void 0"></script>
+<!-- Outils de test (verif-missions-moteur.js) : chargés seulement avec ?verif ou &verif dans l'adresse. -->
+<script>
+if(/[?&]verif(=|&|$)/.test(location.search)){
+  const s = document.createElement('script'); s.src = 'verif-missions-moteur.js?v=22'; document.body.appendChild(s);
+}
+</script>
+</body>
+</html>

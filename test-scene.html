@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Essai de scène</title>
+<style>
+  html, body { margin:0; height:100%; background:#222; overflow:hidden; font:13px sans-serif; color:#eee; }
+  canvas { position:fixed; inset:0; width:100%; height:100%; display:block; }
+  #info { position:fixed; left:8px; top:8px; background:rgba(0,0,0,.55); padding:6px 9px; border-radius:4px; }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="info"></div>
+<!--
+  Page d'essai de r3d-scene.js, indépendante du moteur (jeu.js).
+  Elle définit des cartes d'exemple au format du contrat et les globales lues par la scène.
+  Paramètres : ?carte=col|vallee|plateau|cote|portCalmes  &amb=midi|aube|crepuscule|brume
+               &x=..&y=..&d=..  (point visé, distance)   &menu (vue panoramique du menu)
+-->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>document.write('<script src="r3d-scene.js?v=' + Date.now() + '"><\/script>');</script>
+<script>
+'use strict';
+const TUILE = 40, COLS = 80, LIGNES = 56, LARG = COLS*TUILE, HAUT = LIGNES*TUILE;
+const HAUTEUR_VOL = 55;
+const P = new URLSearchParams(location.search);
+var enJeu = !P.has('menu');
+
+// ---------- Cartes d'essai ----------
+const CARTES_ESSAI = {
+  col: {
+    id:'colBreche', nom:'Col de Brèche', graine:811, ambiance:'aube', cote:null,
+    rivieres:[], ponts:[],
+    cretes:[[700, 40, 1100, 900, 12], [1150, 1350, 800, 2200, 10], [2100, 40, 2000, 950, 12], [2050, 1350, 2400, 2200, 10], [1450, 300, 1700, 520, 4]],
+    rochers:50,
+    bosquets:[{x:450, y:500, r:150}, {x:2750, y:420, r:170}, {x:1600, y:1750, r:120}, {x:380, y:1700, r:130}, {x:2850, y:1650, r:150}],
+    routes:[[[0, 1150], [500, 1120], [900, 1180], [1300, 1100], [1600, 1150], [1900, 1100], [2300, 1180], [2700, 1120], [LARG, 1150]]],
+    noeuds:[[300, 900, 3000], [2900, 900, 3000], [1600, 700, 4000], [1600, 1500, 4000]],
+    structures:[{type:'ruines', x:1520, y:960, l:160, h:110, nom:'Poste-frontière'}, {type:'ferme', x:2500, y:1350, l:170, h:120}],
+    bases:{J:{c:6, r:26}, I:{c:71, r:26}},
+  },
+  vallee: {
+    id:'vallauris', nom:'Vallée de Vallauris', graine:4401, ambiance:'midi', cote:null,
+    rivieres:[{points:[[1500, 0], [1560, 380], [1420, 760], [1600, 1150], [1520, 1600], [1650, HAUT]], largeur:70}],
+    ponts:[{x:1494, y:953, angle:0.35, longueur:150, largeur:50}, {x:1572, y:1430, angle:-0.12, longueur:140, largeur:46}],
+    cretes:[[500, 200, 800, 500, 6], [2500, 1700, 2800, 1950, 6]],
+    rochers:30,
+    bosquets:[{x:900, y:1700, r:110}, {x:2300, y:400, r:120}],
+    routes:[[[0, 1000], [700, 960], [1200, 900], [1494, 953], [1800, 1040], [2400, 1000], [LARG, 1060]], [[1572, 1430], [1300, 1450], [900, 1500], [0, 1480]], [[1572, 1430], [2000, 1420], [2500, 1300]]],
+    noeuds:[[400, 700, 3000], [2800, 700, 3000], [1100, 1250, 3500], [2100, 1250, 3500]],
+    structures:[{type:'village', x:2280, y:1150, l:300, h:220, nom:'Vallauris'}, {type:'ferme', x:500, y:1250, l:170, h:130},
+                {type:'barrage', x:1380, y:250, l:280, h:110}],
+    bases:{J:{c:6, r:20}, I:{c:71, r:20}},
+  },
+  plateau: {
+    id:'plateau', nom:'Plateau des antennes', graine:9902, ambiance:'crepuscule', cote:null,
+    rivieres:[], ponts:[],
+    cretes:[[1000, 600, 1300, 900, 6], [1900, 1300, 2200, 1600, 6]],
+    rochers:60,
+    bosquets:[{x:600, y:1800, r:100}],
+    routes:[[[0, 1100], [800, 1050], [1600, 1120], [2400, 1050], [LARG, 1100]], [[1600, 1120], [1650, 400]]],
+    noeuds:[[500, 600, 3000], [2700, 600, 3000], [1600, 1600, 4000]],
+    structures:[{type:'raffinerie', x:2350, y:300, l:420, h:260}, {type:'ruines', x:800, y:1300, l:240, h:180}, {type:'village', x:1300, y:1500, l:220, h:170}],
+    bases:{J:{c:6, r:26}, I:{c:71, r:26}},
+  },
+  cote: {
+    id:'capFerrand', nom:'Cap Ferrand', graine:1234, ambiance:'brume', cote:{base:1850, ondes:[[70, 300, 0.4], [30, 110, 1.1]]},
+    rivieres:[{points:[[2300, 0], [2250, 600], [2420, 1200], [2350, 1950]], largeur:60}],
+    ponts:[{x:2290, y:900, angle:0.1, longueur:130, largeur:46}],
+    cretes:[[800, 200, 1000, 700, 6]],
+    rochers:30,
+    bosquets:[{x:500, y:500, r:120}],
+    routes:[[[0, 950], [900, 900], [1500, 960], [2290, 900], [LARG, 940]], [[1500, 960], [1400, 1550]]],
+    noeuds:[[400, 1200, 3000], [2800, 1200, 3000], [1700, 500, 4000]],
+    structures:[{type:'port', x:1150, y:1600, l:400, h:420}, {type:'phare', x:300, y:1720, l:80, h:80, nom:'Phare'}, {type:'village', x:1650, y:1450, l:260, h:200}],
+    bases:{J:{c:6, r:20}, I:{c:71, r:20}},
+  },
+  portCalmes: {
+    id:'portCalmes', nom:'Port-Calmes', graine:20341, ambiance:'midi', cote:{base:1890, ondes:[[60, 250, 0], [35, 90, 1.3]]},
+    rivieres:[], ponts:[],
+    cretes:[[1150, 40, 1080, 720, 10], [1100, 1130, 1160, 1480, 6], [2050, 40, 2120, 720, 10], [2100, 1130, 2040, 1480, 6]],
+    rochers:58, bosquets:[],
+    routes:[[[0, 1020], [420, 1020], [900, 960], [1600, 1000], [2300, 960], [2780, 1020], [LARG, 1020]], [[1600, 1000], [1600, 1650]]],
+    noeuds:[[230, 800, 3000], [250, 1230, 3000], [1600, 560, 5000]],
+    structures:[{type:'usine_dessal', x:1470, y:1655, l:260, h:130}],
+    bases:{J:{c:9, r:24}, I:{c:68, r:24}},
+  },
+};
+
+// ---------- Construction des globales (même logique que le contrat du moteur) ----------
+let gr = 777;
+function alea(){ gr = (gr*1103515245 + 12345) & 0x7fffffff; return gr/0x7fffffff; }
+const CARTE = CARTES_ESSAI[P.get('carte')] || CARTES_ESSAI.vallee;
+if(P.get('amb')) R3D.ambianceForcee = P.get('amb');
+gr = CARTE.graine;
+function cote(x){
+  if(!CARTE.cote) return Infinity;
+  let y = CARTE.cote.base; for(const [a, p, ph] of CARTE.cote.ondes) y += a*Math.sin(x/p + ph); return y;
+}
+const RIVIERES = CARTE.rivieres, PONTS = CARTE.ponts, STRUCTURES = CARTE.structures, ROUTES = CARTE.routes, bosquets = CARTE.bosquets;
+const noeuds = CARTE.noeuds.map(([x, y, q]) => ({x, y, reste:q, max:q, rayon:20}));
+const roches = [];
+for(const [x0, y0, x1, y1, n] of CARTE.cretes) for(let i = 0; i < n; i++){
+  const t = i/(n - 1);
+  roches.push({x:x0 + (x1 - x0)*t + (alea() - .5)*40, y:y0 + (y1 - y0)*t + (alea() - .5)*30, r:40 + alea()*26});
+}
+const distSeg = (x, y, a, b) => { const dx = b[0]-a[0], dy = b[1]-a[1], t = Math.max(0, Math.min(1, ((x-a[0])*dx + (y-a[1])*dy)/(dx*dx + dy*dy))); return Math.hypot(x - a[0] - dx*t, y - a[1] - dy*t); };
+const distPoly = (pts, x, y) => { let d = 1e9; for(let i = 0; i < pts.length - 1; i++) d = Math.min(d, distSeg(x, y, pts[i], pts[i+1])); return d; };
+const dansRect = (s, x, y, m) => x > s.x - m && x < s.x + s.l + m && y > s.y - m && y < s.y + s.h + m;
+const surPontE = (x, y) => PONTS.some(p => { const dx = x - p.x, dy = y - p.y, u = dx*Math.cos(p.angle) + dy*Math.sin(p.angle), v = -dx*Math.sin(p.angle) + dy*Math.cos(p.angle); return Math.abs(u) <= p.longueur/2 && Math.abs(v) <= p.largeur/2; });
+const bases = Object.values(CARTE.bases || {}).map(b => [(b.c + 1.5)*TUILE, (b.r + 1.5)*TUILE]);
+let essais = 0, nb = 0;
+while(nb < CARTE.rochers && essais++ < 2000){
+  const x = 150 + alea()*(LARG - 300), y = 120 + alea()*(HAUT - 240), r = 22 + alea()*22;
+  if(y > cote(x) - 120) continue;
+  if(bases.some(([bx, by]) => Math.hypot(x - bx, y - by) < 420)) continue;
+  if(noeuds.some(n => Math.hypot(n.x - x, n.y - y) < 140)) continue;
+  if(STRUCTURES.some(s => dansRect(s, x, y, 80)) || ROUTES.some(rt => distPoly(rt, x, y) < 70)) continue;
+  if(RIVIERES.some(rv => distPoly(rv.points, x, y) < rv.largeur/2 + 60) || bosquets.some(b => Math.hypot(b.x - x, b.y - y) < b.r + 40)) continue;
+  roches.push({x, y, r}); nb++;
+}
+const grille = new Uint8Array(COLS*LIGNES);
+for(let r = 0; r < LIGNES; r++) for(let c = 0; c < COLS; c++){
+  const x = (c + .5)*TUILE, y = (r + .5)*TUILE;
+  let v = 0;
+  if(y > cote(x) - 10) v = 1;
+  else if(RIVIERES.some(rv => distPoly(rv.points, x, y) < rv.largeur/2) && !surPontE(x, y)) v = 1;
+  else if(STRUCTURES.some(s => dansRect(s, x, y, 0))) v = 2;
+  else if(bosquets.some(b => Math.hypot(b.x - x, b.y - y) < b.r)) v = 2;
+  else if(roches.some(k => Math.hypot(k.x - x, k.y - y) < k.r)) v = 2;
+  grille[r*COLS + c] = v;
+}
+
+// ---------- Rendu ----------
+const cv = document.getElementById('cv');
+const t0 = performance.now();
+R3D.init(cv);
+const dureeInit = performance.now() - t0;
+R3D.vue.x = +(P.get('x') || 1600); R3D.vue.y = +(P.get('y') || 1100); R3D.vue.distance = +(P.get('d') || 820);
+function dessiner(){
+  R3D.majCamera(); R3D.rendre(0, 0);
+  const i = R3D.infoRendu();
+  document.getElementById('info').textContent = `${CARTE.nom} — ${i.ambiance} — ${i.appels} appels de dessin, ${(i.triangles/1000).toFixed(0)} k triangles — init ${dureeInit.toFixed(0)} ms`;
+}
+window.dessiner = dessiner;
+window.vue = (x, y, d) => { R3D.vue.x = x; R3D.vue.y = y; if(d) R3D.vue.distance = d; dessiner(); };
+addEventListener('resize', () => { R3D.redimensionner(innerWidth, innerHeight); dessiner(); });
+const touches = {};
+addEventListener('keydown', e => touches[e.key] = true);
+addEventListener('keyup', e => touches[e.key] = false);
+addEventListener('wheel', e => { R3D.vue.distance = Math.max(380, Math.min(1700, R3D.vue.distance*(e.deltaY > 0 ? 1.12 : 1/1.12))); });
+function boucle(){
+  const v = 14*R3D.vue.distance/820;
+  if(touches.ArrowLeft) R3D.vue.x -= v; if(touches.ArrowRight) R3D.vue.x += v;
+  if(touches.ArrowUp) R3D.vue.y -= v; if(touches.ArrowDown) R3D.vue.y += v;
+  dessiner(); requestAnimationFrame(boucle);
+}
+requestAnimationFrame(boucle);
+</script>
+</body>
+</html>

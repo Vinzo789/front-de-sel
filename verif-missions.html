@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vérificateur de missions</title>
+<style>
+  :root { --fond:#15191d; --texte:#e4e8ea; --doux:#8d9aa3; --err:#ff7b6b; --avert:#f0c45a; --ok:#7ed58a; }
+  body { background:var(--fond); color:var(--texte); font:14px/1.45 system-ui, sans-serif; margin:0; padding:16px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  h2 { font-size:17px; margin:28px 0 6px; border-top:1px solid #2c343a; padding-top:14px; }
+  .doux { color:var(--doux); }
+  .err { color:var(--err); } .avert { color:var(--avert); } .ok { color:var(--ok); }
+  ul { margin:4px 0 8px; padding-left:20px; }
+  canvas { display:block; max-width:100%; height:auto; border:1px solid #2c343a; margin:8px 0; }
+  #resume { font-weight:600; }
+</style>
+</head>
+<body>
+<h1>Vérificateur de missions — Front de Sel</h1>
+<p class="doux">Charge les fichiers <code>campagnes/*.js</code> avec un <code>enregistrerMission</code> factice,
+reconstruit la grille d'après les formules du contrat (mer, rivières, ponts, crêtes, bosquets, structures)
+et contrôle la cohérence. Les crêtes sont modélisées de façon pessimiste (rochers grossis) : un passage
+validé ici reste ouvert quel que soit le tirage aléatoire. Les rochers isolés ne sont pas simulés.
+Paramètre <code>?f=halden-1,halden-2</code> pour choisir les fichiers.</p>
+<p id="resume">Chargement…</p>
+<div id="sortie"></div>
+
+<script>
+'use strict';
+// =====================================================================
+//  CONSTANTES DU CONTRAT
+// =====================================================================
+const TUILE = 40, COLS = 80, LIGNES = 56, LARG = COLS * TUILE, HAUT = LIGNES * TUILE;
+const R_CRETE_BAT = 88;    // rayon pessimiste d'un rocher de crête pour la pose d'un bâtiment
+const R_CRETE_PASSAGE = 72; // rayon pessimiste pour les passages
+const UNITES_FAC = {
+  halden: ['technicien','operateur','lynx','faucheur','bastion'],
+  karsk:  ['sapeur','conscrit','ours','grele','sentinelle'],
+  neutre: ['convoi'],
+};
+const TOUTES_UNITES = [...UNITES_FAC.halden, ...UNITES_FAC.karsk, 'convoi'];
+const AERIENNES = ['faucheur'];
+const TAILLE_BAT = {qg:3, caserne:2, usine:3, relais:2, depot:2, tourelle:1, bunker:1, station:2, entrepot:2};
+const BAT_FAC = {
+  halden: ['qg','caserne','usine','relais','tourelle'],
+  karsk:  ['qg','caserne','usine','depot','bunker'],
+  neutre: ['station','entrepot'],
+};
+const TYPES_STRUCT = ['usine_dessal','village','port','raffinerie','ruines','phare','ferme','barrage'];
+const AMBIANCES = ['midi','aube','crepuscule','brume'];
+const MUSIQUES = ['calme','tension','combat'];
+const POUVOIRS = {halden:['frappe','essaim'], karsk:['renforts','marteau']};
+const TYPES_OBJ = ['detruireTout','detruire','proteger','survivre','atteindre','escorter','construire','tenir','recolter'];
+const CLES_COND = ['temps','zone','detruit','pvSous','objectif','campSansBatiment','campSansUnite','construit','declencheur','tous','un'];
+const CLES_ACTION = ['radio','attendre','renforts','batiment','objectif','reserves','points','deverrouiller','ia','attaque',
+                     'deplacer','camera','pouvoir','zone','zoneRetirer','musique','victoire','defaite'];
+const CAMPS = ['J','I','N'];
+
+// =====================================================================
+//  CHARGEMENT
+// =====================================================================
+const MISSIONS = [];
+function enregistrerMission(m){ MISSIONS.push(m); }
+const param = new URLSearchParams(location.search).get('f');
+const FICHIERS = param ? param.split(',') : ['halden-1','halden-2','halden-3','halden-4'];
+let restants = FICHIERS.length;
+const echecsChargement = [];
+for(const f of FICHIERS){
+  const s = document.createElement('script');
+  s.src = 'campagnes/' + f + '.js?v=' + Date.now();
+  s.onload = () => { if(--restants === 0) verifierTout(); };
+  s.onerror = () => { echecsChargement.push(f); if(--restants === 0) verifierTout(); };
+  document.head.appendChild(s);
+}
+window.addEventListener('error', e => { echecsChargement.push('Erreur JS : ' + e.message + ' (' + (e.filename||'').split('/').pop() + ':' + e.lineno + ')'); });
+
+// =====================================================================
+//  GÉOMÉTRIE
+// =====================================================================
+function fonctionCote(carte){
+  if(!carte.cote) return () => Infinity;
+  const {base, ondes} = carte.cote;
+  return x => { let y = base; for(const [a,p,ph] of (ondes||[])) y += a*Math.sin(x/p + ph); return y; };
+}
+function distSegment(px,py,ax,ay,bx,by){
+  const dx = bx-ax, dy = by-ay, l2 = dx*dx+dy*dy;
+  let t = l2 ? ((px-ax)*dx + (py-ay)*dy)/l2 : 0; t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px-(ax+dx*t), py-(ay+dy*t));
+}
+function distLigne(px,py,pts){
+  let d = Infinity;
+  for(let i=0;i<pts.length-1;i++) d = Math.min(d, distSegment(px,py,pts[i][0],pts[i][1],pts[i+1][0],pts[i+1][1]));
+  return d;
+}
+function dansPont(px,py,p){
+  const ca = Math.cos(p.angle||0), sa = Math.sin(p.angle||0), dx = px-p.x, dy = py-p.y;
+  const le = dx*ca + dy*sa, tr = -dx*sa + dy*ca;
+  return Math.abs(le) <= (p.longueur||140)/2 && Math.abs(tr) <= (p.largeur||50)/2;
+}
+function rochersCrete(carte){
+  const out = [];
+  for(const [x0,y0,x1,y1,n] of (carte.cretes||[]))
+    for(let i=0;i<n;i++){ const t = n > 1 ? i/(n-1) : 0; out.push({x:x0+(x1-x0)*t, y:y0+(y1-y0)*t}); }
+  return out;
+}
+// Grille : 0 libre, 1 mer, 4 rivière, 2 obstacle (crête, bosquet, structure), 5 pont.
+function construireGrille(carte, rCrete){
+  const g = new Uint8Array(COLS*LIGNES), cote = fonctionCote(carte), rc = rochersCrete(carte);
+  for(let r=0;r<LIGNES;r++) for(let c=0;c<COLS;c++){
+    const x = (c+.5)*TUILE, y = (r+.5)*TUILE;
+    let v = 0;
+    if(y > cote(x) - 10) v = 1;
+    for(const rv of (carte.rivieres||[])) if(distLigne(x,y,rv.points) < (rv.largeur||70)/2) v = 4;
+    if(v === 4) for(const p of (carte.ponts||[])) if(dansPont(x,y,p)) v = 5;
+    if(v === 0){
+      for(const s of (carte.structures||[])) if(x > s.x && x < s.x+s.l && y > s.y && y < s.y+s.h) v = 2;
+      for(const b of (carte.bosquets||[])) if(Math.hypot(x-b.x,y-b.y) < b.r) v = 2;
+      for(const k of rc) if(Math.hypot(x-k.x,y-k.y) < rCrete) v = 2;
+    }
+    g[r*COLS+c] = v;
+  }
+  return g;
+}
+const franchissable = v => v === 0 || v === 5;
+
+// =====================================================================
+//  VÉRIFICATION D'UNE MISSION
+// =====================================================================
+function verifierMission(m){
+  const E = [], A = [];   // erreurs, avertissements
+  const err = t => E.push(t), avert = t => A.push(t);
+  const carte = m.carte || {};
+  if(!m.id) err('id manquant');
+  for(const k of ['campagne','numero','titre','lieu','date','joueur','adversaire','briefing','fin','objectifs','declencheurs','depart'])
+    if(m[k] === undefined) err('champ manquant : ' + k);
+  if(!AMBIANCES.includes(carte.ambiance)) err('ambiance inconnue : ' + carte.ambiance);
+  if(m.musique && !MUSIQUES.includes(m.musique)) err('musique inconnue : ' + m.musique);
+  if(typeof carte.graine !== 'number') err('graine manquante');
+  for(const s of (carte.structures||[])) if(!TYPES_STRUCT.includes(s.type)) err('structure inconnue : ' + s.type);
+  const dansCarte = (x,y,quoi) => { if(!(x >= 0 && y >= 0 && x <= LARG && y <= HAUT)) err(quoi + ' hors carte (' + x + ', ' + y + ')'); };
+
+  const gB = construireGrille(carte, R_CRETE_BAT), gP = construireGrille(carte, R_CRETE_PASSAGE);
+  const cote = fonctionCote(carte);
+  const facDe = camp => camp === 'J' ? m.joueur : camp === 'I' ? m.adversaire : 'neutre';
+
+  // ---------- Ponts : chacun doit couvrir au moins une tuile de rivière ----------
+  for(const p of (carte.ponts||[])){
+    let n = 0;
+    for(let r=0;r<LIGNES;r++) for(let c=0;c<COLS;c++) if(gP[r*COLS+c] === 5 && dansPont((c+.5)*TUILE,(r+.5)*TUILE,p)) n++;
+    if(!n) err('pont (' + p.x + ', ' + p.y + ') : ne franchit aucune rivière');
+  }
+
+  // ---------- Bâtiments occupés (départ + actions) ----------
+  const occupe = new Uint8Array(COLS*LIGNES);
+  const noms = new Set(), nomsCamp = {};
+  const ajouterNom = (nom, camp) => { if(!nom) return; noms.add(nom); (nomsCamp[nom] = nomsCamp[nom] || new Set()).add(camp); };
+  const poserBat = (b, camp, origine) => {
+    const t = TAILLE_BAT[b.type];
+    if(!t){ err(origine + ' : type de bâtiment inconnu ' + b.type); return; }
+    if(!BAT_FAC[facDe(camp)].includes(b.type)) avert(origine + ' : ' + b.type + ' n’appartient pas à la faction ' + facDe(camp));
+    for(let rr=b.r; rr<b.r+t; rr++) for(let cc=b.c; cc<b.c+t; cc++){
+      if(cc<0 || rr<0 || cc>=COLS || rr>=LIGNES){ err(origine + ' ' + b.type + ' hors carte'); return; }
+      const v = gB[rr*COLS+cc];
+      if(v !== 0) err(origine + ' ' + b.type + ' (' + b.c + ', ' + b.r + ') sur ' + ({1:'la mer',2:'un obstacle',4:'une rivière',5:'un pont'}[v]) + ' en tuile ' + cc + ',' + rr);
+      if(occupe[rr*COLS+cc]) err(origine + ' ' + b.type + ' (' + b.c + ', ' + b.r + ') chevauche un autre bâtiment');
+      occupe[rr*COLS+cc] = 1;
+    }
+    const cx = (b.c+t/2)*TUILE, cy = (b.r+t/2)*TUILE, demi = t*TUILE/2 + 28;
+    if((carte.noeuds||[]).some(([x,y]) => Math.abs(x-cx) < demi && Math.abs(y-cy) < demi)) err(origine + ' ' + b.type + ' trop près d’une citerne');
+    ajouterNom(b.nom, camp);
+  };
+  const depart = m.depart || {};
+  for(const camp of Object.keys(depart)){
+    if(!CAMPS.includes(camp)) err('camp inconnu dans depart : ' + camp);
+    for(const e of depart[camp]){
+      if(e.c !== undefined) poserBat(e, camp, 'départ ' + camp);
+    }
+  }
+  // Bâtiments ajoutés par action
+  const actionsDe = [];
+  const parcourirActions = (liste, ctx) => { for(const a of (liste||[])) actionsDe.push({a, ctx}); };
+  for(const d of (m.declencheurs||[])) parcourirActions(d.faire, d.id);
+  for(const {a, ctx} of actionsDe) if(a.batiment) poserBat(a.batiment, a.batiment.camp, 'action ' + ctx);
+  if(carte.bases) for(const k of ['J','I']) if(carte.bases[k]){
+    const b = carte.bases[k];
+    for(let rr=b.r; rr<b.r+3; rr++) for(let cc=b.c; cc<b.c+3; cc++) if(gB[rr*COLS+cc] !== 0) err('base ' + k + ' sur une tuile non libre');
+  }
+
+  // ---------- Grille de passage (bâtiments compris) ----------
+  const passe = i => franchissable(gP[i]) && !occupe[i];
+  const tuile = (x,y) => [Math.floor(x/TUILE), Math.floor(y/TUILE)];
+  const libreXY = (x,y) => { const [c,r] = tuile(x,y); return c>=0 && r>=0 && c<COLS && r<LIGNES && passe(r*COLS+c); };
+
+  // ---------- Unités de départ ----------
+  const pointsJ = [];
+  for(const camp of Object.keys(depart)) for(const e of depart[camp]){
+    if(e.c !== undefined) continue;
+    if(!TOUTES_UNITES.includes(e.type)){ err('départ ' + camp + ' : type d’unité inconnu ' + e.type); continue; }
+    if(!UNITES_FAC[facDe(camp)].includes(e.type) && e.type !== 'convoi') avert('départ ' + camp + ' : ' + e.type + ' hors faction');
+    dansCarte(e.x, e.y, 'unité ' + e.type);
+    if(!AERIENNES.includes(e.type) && !libreXY(e.x, e.y)) err('départ ' + camp + ' : ' + e.type + ' sur terrain non libre (' + e.x + ', ' + e.y + ')');
+    if((e.nb||1) > 1) for(const [dx,dy] of [[-30,0],[30,0],[0,-30],[0,30]])
+      if(!libreXY(e.x+dx, e.y+dy)) avert('départ ' + camp + ' : groupe ' + e.type + ' en (' + e.x + ', ' + e.y + ') serré contre un obstacle');
+    if(e.ordre){ dansCarte(e.ordre.x, e.ordre.y, 'ordre'); if(!['aller','attaqueDeplacement'].includes(e.ordre.type)) err('ordre inconnu ' + e.ordre.type); }
+    ajouterNom(e.nom, camp);
+    if(camp === 'J' && !AERIENNES.includes(e.type)) pointsJ.push([e.x, e.y]);
+  }
+  for(const {a} of actionsDe) if(a.renforts) ajouterNom(a.renforts.nom, a.renforts.camp);
+
+  // ---------- Citernes ----------
+  for(const [x,y,q] of (carte.noeuds||[])){ dansCarte(x,y,'citerne'); if(!libreXY(x,y)) err('citerne (' + x + ', ' + y + ') sur terrain non libre'); if(!(q > 0)) err('citerne sans quantité'); }
+
+  // ---------- Accessibilité : parcours en largeur depuis le joueur ----------
+  const atteint = new Uint8Array(COLS*LIGNES);
+  const file = [];
+  for(const [x,y] of pointsJ){ const [c,r] = tuile(x,y); const i = r*COLS+c; if(passe(i) && !atteint[i]){ atteint[i] = 1; file.push(i); } }
+  for(let k=0;k<file.length;k++){
+    const i = file[k], c = i % COLS, r = (i/COLS)|0;
+    for(const [dc,dr] of [[1,0],[-1,0],[0,1],[0,-1]]){
+      const nc = c+dc, nr = r+dr; if(nc<0||nr<0||nc>=COLS||nr>=LIGNES) continue;
+      const j = nr*COLS+nc; if(!atteint[j] && passe(j)){ atteint[j] = 1; file.push(j); }
+    }
+  }
+  const accessible = (x,y,rayon) => {
+    const [c0,r0] = tuile(x,y), rt = Math.max(1, Math.ceil((rayon||0)/TUILE));
+    for(let dr=-rt; dr<=rt; dr++) for(let dc=-rt; dc<=rt; dc++){
+      const c = c0+dc, r = r0+dr; if(c<0||r<0||c>=COLS||r>=LIGNES) continue;
+      if(Math.hypot((c+.5)*TUILE-x, (r+.5)*TUILE-y) > Math.max(rayon||0, 60)) continue;
+      if(atteint[r*COLS+c]) return true;
+    }
+    return false;
+  };
+  const verifAcces = (x,y,rayon,quoi) => { if(pointsJ.length && !accessible(x,y,rayon)) err(quoi + ' (' + x + ', ' + y + ') inaccessible depuis le départ du joueur'); };
+  for(const camp of ['I','N']) for(const e of (depart[camp]||[])){
+    if(e.c !== undefined){ const t = TAILLE_BAT[e.type]||2; verifAcces((e.c+t/2)*TUILE, (e.r+t/2)*TUILE, t*TUILE/2+40, 'bâtiment ' + camp + ' ' + e.type); }
+    else if(!AERIENNES.includes(e.type)) verifAcces(e.x, e.y, 40, 'unité ' + camp + ' ' + e.type);
+  }
+
+  // ---------- Objectifs ----------
+  const idsObj = new Set(), objectifs = [...(m.objectifs||[])];
+  for(const {a} of actionsDe) if(a.objectif && a.objectif.ajouter) objectifs.push(a.objectif.ajouter);
+  const verifZone = (z, quoi) => {
+    if(!z || z.x === undefined || !z.r){ err(quoi + ' : zone invalide'); return; }
+    dansCarte(z.x, z.y, quoi);
+    verifAcces(z.x, z.y, z.r*0.7, quoi);
+  };
+  const verifNom = (nom, quoi) => { if(nom && !noms.has(nom)) err(quoi + ' : étiquette « ' + nom + ' » jamais attribuée'); };
+  for(const o of objectifs){
+    if(!o.id) err('objectif sans id'); else if(idsObj.has(o.id)) err('objectif en double : ' + o.id); else idsObj.add(o.id);
+    if(!o.texte) err('objectif ' + o.id + ' sans texte');
+    if(!TYPES_OBJ.includes(o.type)){ err('objectif ' + o.id + ' : type inconnu ' + o.type); continue; }
+    const q = 'objectif ' + o.id;
+    if(['detruire','proteger','escorter'].includes(o.type)){ if(!o.nom) err(q + ' : nom manquant'); verifNom(o.nom, q); }
+    if(o.type === 'atteindre' && o.nom) verifNom(o.nom, q);
+    if(['atteindre','escorter','tenir'].includes(o.type)) verifZone(o.zone, q);
+    if(o.type === 'detruireTout' && !CAMPS.includes(o.camp)) err(q + ' : camp invalide');
+    if(['survivre','tenir'].includes(o.type) && !(o.duree > 0)) err(q + ' : durée manquante');
+    // Le contrat écrit construire { type, nombre } mais « type » désigne déjà le type d'objectif :
+    // le bâtiment visé est donné dans « batiment » (et un déclencheur « construit » valide l'objectif en secours).
+    if(o.type === 'construire' && !TAILLE_BAT[o.batiment]) err(q + ' : préciser le bâtiment dans « batiment » (type d’objectif = construire)');
+    if(o.type === 'recolter' && !(o.montant > 0)) err(q + ' : montant manquant');
+  }
+
+  // ---------- Déclencheurs ----------
+  const idsDecl = new Set();
+  for(const d of (m.declencheurs||[])){ if(!d.id) err('déclencheur sans id'); else if(idsDecl.has(d.id)) err('déclencheur en double : ' + d.id); else idsDecl.add(d.id); }
+  const idsZones = new Set();
+  for(const {a} of actionsDe) if(a.zone) idsZones.add(a.zone.id);
+  const verifCond = (c, q) => {
+    const cles = Object.keys(c||{});
+    if(cles.length === 0){ err(q + ' : condition vide'); return; }
+    const k = cles.find(k => CLES_COND.includes(k));
+    if(!k){ err(q + ' : condition inconnue ' + cles.join(',')); return; }
+    if(k === 'zone'){ verifZone(c.zone, q + ' (zone)'); if(!CAMPS.includes(c.camp)) err(q + ' : camp de zone invalide'); verifNom(c.nom, q); }
+    if(k === 'detruit') verifNom(c.detruit, q);
+    if(k === 'pvSous'){
+      verifNom(c.pvSous.nom, q); if(!(c.pvSous.ratio > 0 && c.pvSous.ratio < 1)) err(q + ' : ratio invalide');
+      // Option « ensemble » (PV cumulés du groupe) : true ou false, comme dans le moteur.
+      if('ensemble' in c.pvSous && typeof c.pvSous.ensemble !== 'boolean') err(q + ' : pvSous.ensemble attend true ou false');
+      for(const kk of Object.keys(c.pvSous)) if(!['nom','ratio','ensemble'].includes(kk)) err(q + ' : pvSous, option inconnue ' + kk);
+    }
+    // État absent = « reussi » (comme dans le moteur) ; « actif » est accepté.
+    if(k === 'objectif'){ if(!idsObj.has(c.objectif)) err(q + ' : objectif inconnu ' + c.objectif); if(c.etat !== undefined && !['reussi','echoue','actif'].includes(c.etat)) err(q + ' : état invalide'); }
+    if(k === 'declencheur' && !idsDecl.has(c.declencheur)) err(q + ' : déclencheur inconnu ' + c.declencheur);
+    if(k === 'construit' && !TAILLE_BAT[c.construit.type]) err(q + ' : bâtiment inconnu');
+    if(k === 'tous' || k === 'un') for(const s of c[k]) verifCond(s, q);
+  };
+  let nbRadio = 0;
+  for(const d of (m.declencheurs||[])){
+    const q = 'déclencheur ' + d.id;
+    if(!d.quand) err(q + ' : « quand » manquant'); else verifCond(d.quand, q);
+    if(!Array.isArray(d.faire) || !d.faire.length) err(q + ' : « faire » vide');
+    for(const a of (d.faire||[])){
+      const cles = Object.keys(a);
+      if(cles.length !== 1 || !CLES_ACTION.includes(cles[0])){ err(q + ' : action inconnue ' + cles.join(',')); continue; }
+      const k = cles[0], v = a[k];
+      if(k === 'radio'){ nbRadio++; if(!v.qui || !v.texte) err(q + ' : radio incomplète'); if(v.texte && v.texte.length > 220) avert(q + ' : radio longue (' + v.texte.length + ' car.) : ' + v.texte.slice(0,40) + '…'); }
+      if(k === 'renforts'){
+        if(!CAMPS.includes(v.camp)) err(q + ' : camp invalide');
+        for(const u of v.unites){ if(!TOUTES_UNITES.includes(u.type)) err(q + ' : unité inconnue ' + u.type);
+          else if(!UNITES_FAC[facDe(v.camp)].includes(u.type) && u.type !== 'convoi') avert(q + ' : ' + u.type + ' hors faction'); }
+        dansCarte(v.depuis.x, v.depuis.y, q + ' depuis');
+        const sol = v.unites.some(u => !AERIENNES.includes(u.type));
+        if(sol){ verifAcces(v.depuis.x, v.depuis.y, 40, q + ' depuis'); if(!libreXY(v.depuis.x, v.depuis.y)) err(q + ' : point d’arrivée des renforts non libre'); }
+        if(v.vers){ dansCarte(v.vers.x, v.vers.y, q + ' vers'); if(sol) verifAcces(v.vers.x, v.vers.y, 60, q + ' vers'); }
+        if(v.ordre && !['aller','attaqueDeplacement'].includes(v.ordre)) err(q + ' : ordre inconnu');
+      }
+      if(k === 'objectif'){
+        if(v.reussir && !idsObj.has(v.reussir)) err(q + ' : objectif inconnu ' + v.reussir);
+        if(v.echouer && !idsObj.has(v.echouer)) err(q + ' : objectif inconnu ' + v.echouer);
+      }
+      if(k === 'attaque'){ if(!v.tous) verifNom(v.nom, q); dansCarte(v.vers.x, v.vers.y, q); }
+      if(k === 'deplacer'){
+        verifNom(v.nom, q);
+        for(const p of v.chemin){ dansCarte(p.x, p.y, q + ' chemin'); if(!libreXY(p.x, p.y)) err(q + ' : point de chemin non libre (' + p.x + ', ' + p.y + ')'); verifAcces(p.x, p.y, 40, q + ' chemin'); }
+      }
+      if(k === 'camera') dansCarte(v.x, v.y, q + ' caméra');
+      if(k === 'pouvoir'){ if(!POUVOIRS[facDe(v.camp)].includes(v.cle)) err(q + ' : pouvoir ' + v.cle + ' hors faction'); dansCarte(v.x||0, v.y||0, q); }
+      if(k === 'zone'){ if(!v.id || !v.texte) err(q + ' : zone sans id ou texte'); dansCarte(v.x, v.y, q); }
+      if(k === 'zoneRetirer' && !idsZones.has(v)) err(q + ' : zone inconnue ' + v);
+      if(k === 'musique' && !MUSIQUES.includes(v)) err(q + ' : musique inconnue ' + v);
+      if(k === 'deverrouiller'){
+        for(const b of (v.batiments||[])) if(!TAILLE_BAT[b]) err(q + ' : bâtiment inconnu ' + b);
+        for(const u of (v.unites||[])) if(!TOUTES_UNITES.includes(u)) err(q + ' : unité inconnue ' + u);
+      }
+      if(k === 'ia'){ for(const c of Object.keys(v)) if(!['construit','vagues','cible','revenu'].includes(c)) err(q + ' : clé ia inconnue ' + c); }
+    }
+  }
+  if(m.autorises){
+    for(const b of (m.autorises.batiments||[])) if(!TAILLE_BAT[b]) err('autorises : bâtiment inconnu ' + b);
+    for(const u of (m.autorises.unites||[])) if(!TOUTES_UNITES.includes(u)) err('autorises : unité inconnue ' + u);
+  }
+  // Une victoire prématurée : au départ, il faut au moins un objectif principal visible qui n'est pas « de maintien ».
+  const actifs = (m.objectifs||[]).filter(o => o.principal !== false && !o.cache && !['proteger','survivre'].includes(o.type));
+  if(!actifs.length) err('aucun objectif principal actif au départ : risque de victoire immédiate');
+  // Étiquettes attribuées à plusieurs camps
+  for(const [nom, cs] of Object.entries(nomsCamp)) if(cs.size > 1) avert('étiquette « ' + nom + ' » partagée par plusieurs camps');
+  return {E, A, gP, occupe, carte, cote, nbRadio, objectifs, actionsDe};
+}
+
+// =====================================================================
+//  APERÇU DE LA CARTE
+// =====================================================================
+const COULEUR_CAMP = {J:'#3fa7ff', I:'#e2533f', N:'#f4f7f9'};
+function dessiner(m, res, cv, campsCouleurs){
+  const k = cv.width / LARG, g = cv.getContext('2d'), {gP, occupe, carte} = res;
+  const fond = {0:'#c8b68a', 1:'#2a6a8c', 2:'#6f675b', 4:'#3f86a8', 5:'#8a6b45'};
+  for(let r=0;r<LIGNES;r++) for(let c=0;c<COLS;c++){
+    g.fillStyle = fond[gP[r*COLS+c]]; g.fillRect(c*TUILE*k, r*TUILE*k, TUILE*k+0.5, TUILE*k+0.5);
+  }
+  for(const b of (carte.bosquets||[])){ g.fillStyle = 'rgba(60,95,45,.85)'; g.beginPath(); g.arc(b.x*k,b.y*k,b.r*k,0,7); g.fill(); }
+  g.strokeStyle = '#5d554a'; g.lineWidth = 36*k;
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  for(const rt of (carte.routes||[])){ g.beginPath(); rt.forEach(([x,y],i) => i ? g.lineTo(x*k,y*k) : g.moveTo(x*k,y*k)); g.stroke(); }
+  g.font = '11px system-ui'; g.textAlign = 'center';
+  for(const s of (carte.structures||[])){
+    g.fillStyle = '#b9bdc0'; g.fillRect(s.x*k, s.y*k, s.l*k, s.h*k);
+    g.fillStyle = '#222'; g.fillText(s.nom || s.type, (s.x+s.l/2)*k, (s.y+s.h/2)*k+4);
+  }
+  for(const [x,y,q] of (carte.noeuds||[])){ g.fillStyle = '#4fe0e8'; g.beginPath(); g.arc(x*k,y*k,Math.max(3, q/600),0,7); g.fill(); }
+  // Zones
+  const zones = [];
+  for(const o of res.objectifs) if(o.zone) zones.push([o.zone, o.id, o.principal === false ? '#d6c25a' : '#ffffff']);
+  for(const {a} of res.actionsDe) if(a.zone) zones.push([a.zone, a.zone.id, '#9cf']);
+  g.setLineDash([5,4]); g.lineWidth = 1.5;
+  for(const [z, id, col] of zones){ g.strokeStyle = col; g.beginPath(); g.arc(z.x*k, z.y*k, z.r*k, 0, 7); g.stroke(); g.fillStyle = col; g.fillText(id, z.x*k, (z.y - z.r)*k - 3); }
+  g.setLineDash([]);
+  // Bâtiments et unités
+  const batiment = (b, camp, ghost) => {
+    const t = TAILLE_BAT[b.type] || 2;
+    g.fillStyle = COULEUR_CAMP[camp]; g.globalAlpha = ghost ? 0.45 : 1;
+    g.fillRect(b.c*TUILE*k, b.r*TUILE*k, t*TUILE*k, t*TUILE*k);
+    g.globalAlpha = 1; g.strokeStyle = '#000'; g.lineWidth = 1; g.strokeRect(b.c*TUILE*k, b.r*TUILE*k, t*TUILE*k, t*TUILE*k);
+    g.fillStyle = '#000'; g.fillText(b.type.slice(0,3), (b.c+t/2)*TUILE*k, (b.r+t/2)*TUILE*k+4);
+  };
+  for(const camp of Object.keys(m.depart)) for(const e of m.depart[camp]){
+    if(e.c !== undefined) batiment(e, camp, false);
+    else { g.fillStyle = COULEUR_CAMP[camp]; g.strokeStyle = '#000'; g.beginPath(); g.arc(e.x*k, e.y*k, 3 + Math.min(4, (e.nb||1)), 0, 7); g.fill(); g.stroke(); }
+  }
+  for(const {a} of res.actionsDe){
+    if(a.batiment) batiment(a.batiment, a.batiment.camp, true);
+    if(a.renforts){
+      const v = a.renforts; g.strokeStyle = COULEUR_CAMP[v.camp]; g.lineWidth = 1.2; g.setLineDash([2,3]);
+      g.beginPath(); g.moveTo(v.depuis.x*k, v.depuis.y*k); if(v.vers) g.lineTo(v.vers.x*k, v.vers.y*k); g.stroke(); g.setLineDash([]);
+      g.fillStyle = COULEUR_CAMP[v.camp]; g.fillRect(v.depuis.x*k-3, v.depuis.y*k-3, 6, 6);
+    }
+    if(a.deplacer){
+      g.strokeStyle = '#ffffff'; g.lineWidth = 2; g.beginPath();
+      a.deplacer.chemin.forEach((p,i) => i ? g.lineTo(p.x*k,p.y*k) : g.moveTo(p.x*k,p.y*k)); g.stroke();
+    }
+  }
+}
+
+// =====================================================================
+//  AFFICHAGE
+// =====================================================================
+function echap(t){ return String(t).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function verifierTout(){
+  const sortie = document.getElementById('sortie');
+  let total = 0;
+  if(echecsChargement.length){
+    total += echecsChargement.length;
+    sortie.insertAdjacentHTML('beforeend', '<p class="err">Échecs de chargement : ' + echecsChargement.map(echap).join(' ; ') + '</p>');
+  }
+  MISSIONS.sort((a,b) => (a.campagne+a.numero).localeCompare(b.campagne+b.numero));
+  for(const m of MISSIONS){
+    const res = verifierMission(m);
+    total += res.E.length;
+    const div = document.createElement('div');
+    const nbObj = res.objectifs.length, nbDecl = (m.declencheurs||[]).length;
+    const qJ = (m.carte.noeuds||[]).reduce((s,n) => s + n[2], 0);
+    div.innerHTML = '<h2>' + echap(m.id + ' — ' + m.titre) + ' <span class="doux">(' + echap(m.carte.nom) + ', ' + echap(m.carte.ambiance) + ')</span></h2>' +
+      '<div class="doux">' + nbObj + ' objectifs · ' + nbDecl + ' déclencheurs · ' + res.nbRadio + ' messages radio · ' +
+      (m.carte.noeuds||[]).length + ' citernes (' + qJ + ' au total)</div>' +
+      (res.E.length ? '<ul class="err">' + res.E.map(e => '<li>' + echap(e) + '</li>').join('') + '</ul>' : '<p class="ok">Aucune erreur.</p>') +
+      (res.A.length ? '<ul class="avert">' + res.A.map(e => '<li>' + echap(e) + '</li>').join('') + '</ul>' : '');
+    const cv = document.createElement('canvas'); cv.width = 960; cv.height = 672;
+    div.appendChild(cv); sortie.appendChild(div);
+    dessiner(m, res, cv);
+  }
+  const r = document.getElementById('resume');
+  r.textContent = MISSIONS.length + ' mission(s) vérifiée(s) — ' + total + ' erreur(s).';
+  r.className = total ? 'err' : 'ok';
+  window.RESULTAT = {missions: MISSIONS.length, erreurs: total};
+}
+</script>
+</body>
+</html>
