@@ -6571,10 +6571,12 @@ function prechaufferRendu(){
   dureePrechauffage = Math.round(performance.now() - t);
 }
 let dureePrechauffage = null;
-// Résolution adaptative (case du menu, activée par défaut, mémorisée) : règle R3D.adaptatif.
+// Résolution adaptative (case du menu, mémorisée) : règle R3D.adaptatif. Désactivée par défaut depuis le
+// 13 novembre 2026 : le contrôle a montré que chaque changement de palier bloquait l'image 0,6 à 0,7 s et que
+// le plancher rendait l'image floue. À réactiver par défaut seulement une fois ces deux défauts corrigés.
 const CLE_ADAPTATIF = 'frontDeSel.resolutionAdaptative';
-let resolutionAdaptative = true;
-try { resolutionAdaptative = localStorage.getItem(CLE_ADAPTATIF) !== 'non'; } catch(err){ /* sans mémorisation */ }
+let resolutionAdaptative = false;
+try { resolutionAdaptative = localStorage.getItem(CLE_ADAPTATIF) === 'oui'; } catch(err){ /* sans mémorisation */ }
 function reglerAdaptatif(oui, memoriser){
   resolutionAdaptative = !!oui;
   if(memoriser){ try { localStorage.setItem(CLE_ADAPTATIF, oui ? 'oui' : 'non'); } catch(err){} }
