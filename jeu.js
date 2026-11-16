@@ -340,7 +340,9 @@ let ents = [], projectiles = [], effets = [], evenements = [], messages = [];
 let prochainId = 1, temps = 0, enJeu = false, enPause = false, partieFinie = false;
 let camps = {}, selection = [], groupes = {};
 let mode = null;               // {type:'placer', bat} | {type:'pouvoir', cle} | {type:'attaque'}
-let alerte = {t:-99, x:0, y:0};
+// Dernière alerte « notre base est attaquée » de chaque camp (touche Espace du joueur local : alerteDe(campLocal())).
+const alertes = {};
+function alerteDe(camp){ return alertes[camp] || (alertes[camp] = {t:-99, x:0, y:0}); }
 let population = {J:0, I:0, K:0, L:0, N:0, X:0};
 let RELATIONS = {};            // {I_attaque_N: true, ...} : par défaut personne n'attaque le camp neutre
 let issuePartie = null;        // escarmouche terminée : {victoire, alliance, t, camps} (outils de test)
@@ -358,6 +360,20 @@ let pouvoirsActifs = {J:true, I:true, K:true, L:true};
 //   reserves, points, recharges}. Un camp « ia:false » autre que campJoueur sera tenu par un humain distant.
 let campJoueur = 'J';
 function campLocal(){ return campJoueur; }
+// Change le camp du joueur local en cours de partie (outils de test ; demain : le siège pris en ligne) et
+// reconstruit ce que l'interface en tire. Ne touche pas aux camps eux-mêmes (ia, équipes).
+function definirCampLocal(id){
+  if(!camps[id]) return false;
+  campJoueur = id;
+  selectionner([]); groupes = {}; mode = null;
+  signaturePanneau = null; signatureFab = ''; signatureBandeau = '';
+  if(enJeu){
+    construireBarrePouvoirs(); construireBandeauCamps();
+    const q = ents.find(b => b.camp === id && b.type === 'qg' && !b.mort) || ents.find(e => e.camp === id && !e.mort);
+    if(q && window.R3D && R3D.vue) centrerSur(q.x, q.y + 120);
+  }
+  return true;
+}
 const CAMPS_JOUEURS = ['J', 'I', 'K', 'L'];              // ordre fixe : emplacements, bandeau, boucles
 const COULEURS_CAMPS = {J:'#3fa7ff', I:'#e2533f', K:'#58c96b', L:'#e8c33f'};
 const NOMS_COULEURS = {J:'Bleu', I:'Rouge', K:'Vert', L:'Jaune'};
@@ -370,7 +386,13 @@ function equipeDe(id){ const c = camps[id]; return c && c.equipe ? c.equipe : id
 function nomCamp(id){ return NOMS_COULEURS[id] || id; }
 function couleurCamp(id){ const c = camps[id]; return c && typeof c.couleur === 'string' ? c.couleur : null; }
 let difficulte = 'normal';
-const stats = {produites:0, perdues:0, detruites:0};
+// Statistiques de fin de partie, par camp (statsDe(camp)) ; « stats » est la vue du joueur local
+// (mêmes champs qu'avant : produites, perdues, detruites), lue par l'écran de fin et les outils de test.
+let statsCamps = {};
+function statsDe(camp){ return statsCamps[camp] || (statsCamps[camp] = {produites:0, perdues:0, detruites:0}); }
+const stats = {};
+for(const k of ['produites', 'perdues', 'detruites']) Object.defineProperty(stats, k, {enumerable:true,
+  get(){ return statsDe(campLocal())[k]; }, set(v){ statsDe(campLocal())[k] = v; }});
 const souris = {x:0, y:0, mx:0, my:0, bas:false, dx:0, dy:0, dedans:false, miniBas:false};
 const touches = {};
 
@@ -659,7 +681,7 @@ function creerUnite(type, camp, x, y){
   // Réparateur : instant du dernier soin (horloge temps) et entité soignée, lus par le rendu.
   if(D.repare) Object.assign(u, {repareT:-99, cibleSoin:null});
   ents.push(u);
-  if(camp === campJoueur) stats.produites++;
+  if(CAMPS_JOUEURS.includes(camp)) statsDe(camp).produites++;
   return u;
 }
 function positionSortie(b){
@@ -687,20 +709,23 @@ function construireBatiment(camp, type, c, r, ouvriers){
 function commander(b, typeU){
   const C = camps[b.camp], D = UNITES[typeU];
   if(b.enCours) return false;
-  if(b.file.length >= 5){ if(b.camp===campJoueur) message('La file de production est pleine.'); return false; }
-  // Un aéroport n'a que trois places : avions présents + avions commandés.
-  if(D.avion && aeroportPlein(b)){
-    if(b.camp===campJoueur) message('Les trois places de cet aéroport sont prises.');
-    return false;
-  }
-  // Hélicoptères : quatre au plus par aéroport (présents + commandés), hors des places d'avions.
-  if(D.forme === 'helico' && helicosPlein(b)){
-    if(b.camp===campJoueur) message('Cet aéroport a déjà ' + HELICOS_PAR_AEROPORT + ' hélicoptères (présents et commandés).');
-    return false;
-  }
-  if(C.reserves < D.cout){ if(b.camp===campJoueur) message('Réserves insuffisantes.', 'alerte'); return false; }
+  const motif = empechementProduction(b, typeU);
+  if(motif){ notifier(b.camp, motif, motif === MOTIF_RESERVES ? 'alerte' : undefined); return false; }
   C.reserves -= D.cout; b.file.push(typeU);
   return true;
+}
+// Raison pour laquelle ce bâtiment (fini) ne peut pas mettre ce type en file maintenant, ou null
+// (fonction pure ; mêmes contrôles et même ordre que commander depuis toujours).
+const MOTIF_RESERVES = 'Réserves insuffisantes.';
+function empechementProduction(b, typeU){
+  const C = camps[b.camp], D = UNITES[typeU];
+  if(b.file.length >= 5) return 'La file de production est pleine.';
+  // Un aéroport n'a que trois places : avions présents + avions commandés.
+  if(D.avion && aeroportPlein(b)) return 'Les trois places de cet aéroport sont prises.';
+  // Hélicoptères : quatre au plus par aéroport (présents + commandés), hors des places d'avions.
+  if(D.forme === 'helico' && helicosPlein(b)) return 'Cet aéroport a déjà ' + HELICOS_PAR_AEROPORT + ' hélicoptères (présents et commandés).';
+  if(!C || C.reserves < D.cout) return MOTIF_RESERVES;
+  return null;
 }
 // Le camp a attaque-t-il le camp b ? Par défaut, personne n'attaque le camp neutre N
 // et N n'attaque personne ; une mission peut l'autoriser (relations.I_attaque_N...).
@@ -978,7 +1003,7 @@ function majOuvrier(u, dt){
     b.pv = Math.min(b.pvMax, b.pv + b.pvMax*0.9*dt/b.def.temps);
     if(b.progres >= 1){
       b.progres = 1; b.enCours = false;
-      if(b.camp === campJoueur) message(b.def.nom + ' : construction terminée.', 'succes');
+      notifier(b.camp, b.def.nom + ' : construction terminée.', 'succes');
     }
     return;
   }
@@ -1181,7 +1206,7 @@ function majBatiment(b, dt){
     stationnerAvion(u, b, placeLibre(b));
     population[b.camp]++;
     if(b.rally) u.ordre = {type:'aller', x:b.rally.x, y:b.rally.y};
-    if(b.camp === campJoueur) message(D.nom + ' prêt à l’aéroport.', 'succes');
+    notifier(b.camp, D.nom + ' prêt à l’aéroport.', 'succes');
     return;
   }
   const p = D.aerien ? {x:b.x, y:b.y+b.rayon+10} : positionSortie(b);
@@ -1193,7 +1218,7 @@ function majBatiment(b, dt){
     const n = b.rally ? noeuds.find(k => k.reste > 0 && Math.hypot(k.x-b.rally.x, k.y-b.rally.y) < k.rayon + 20) : null;
     const c = n || champPour(u);
     if(c) u.ordre = ordreRecolte(c);
-    if(b.camp === campJoueur) message('Collecteur prêt : il part récolter.', 'succes');
+    notifier(b.camp, 'Collecteur prêt : il part récolter.', 'succes');
   } else if(D.ouvrier){
     if(b.rally) u.ordre = {type:'aller', x:b.rally.x, y:b.rally.y};
   } else if(b.rally){
@@ -1354,10 +1379,10 @@ function tirerAvion(u, c, A, d){
   const deg = A.degats * (1 + 0.2*(u.rang || 0));
   const h1 = Math.max(4, u.alt - 3);
   if(A.arme === 'missileAir'){
-    projectiles.push({genre:'missileAir', arme:A.arme, sx:u.x, sy:u.y, tx:c.x, ty:c.y, h1, h2:hauteurVisee(c), t:0,
+    lancerProjectile({genre:'missileAir', arme:A.arme, sx:u.x, sy:u.y, tx:c.x, ty:c.y, h1, h2:hauteurVisee(c), t:0,
       duree:Math.max(0.25, d/VITESSE_MISSILE), degats:deg, zone:0, camp:u.camp, auteur:u, cible:c});
   } else if(A.arme === 'bombe'){
-    projectiles.push({genre:'bombe', arme:A.arme, sx:u.x, sy:u.y, tx:c.x, ty:c.y, h1, h2:0, t:0,
+    lancerProjectile({genre:'bombe', arme:A.arme, sx:u.x, sy:u.y, tx:c.x, ty:c.y, h1, h2:0, t:0,
       duree:Math.max(0.6, d/Math.max(120, u.vit)), degats:deg, zone:A.zone || 50, camp:u.camp, auteur:u, cible:c});
   } else {
     infliger(c, deg * efficacite(A.arme, c), u);
@@ -1608,7 +1633,7 @@ function tirer(u, c){
     const lg = LONG_CANON[u.type] || 10;
     const ex = u.x + Math.cos(u.angleT)*lg, ey = u.y + Math.sin(u.angleT)*lg;
     const h1 = hauteurVisee(u), h2 = hauteurVisee(c), d = Math.hypot(c.x - ex, c.y - ey, h2 - h1);
-    projectiles.push({genre:'missileAir', arme:A.arme, sx:ex, sy:ey, tx:c.x, ty:c.y, h1:h1 + 2, h2, t:0,
+    lancerProjectile({genre:'missileAir', arme:A.arme, sx:ex, sy:ey, tx:c.x, ty:c.y, h1:h1 + 2, h2, t:0,
       duree:Math.max(0.15, d/480), degats:deg, zone:0, camp:u.camp, auteur:u, cible:c, role:D.role || null});
     effet('eclair', {x:ex, y:ey, h:h1, duree:0.08, arme:'balle'});
     return;
@@ -1616,7 +1641,7 @@ function tirer(u, c){
   if(D.arme === 'roquette'){
     for(let k=0; k<(D.salve||1); k++){
       const tx = c.x + (Math.random()-.5)*50, ty = c.y + (Math.random()-.5)*50;
-      projectiles.push({sx:u.x, sy:u.y, tx, ty, t:-k*0.13, duree:Math.hypot(tx-u.x,ty-u.y)/330 + 0.25,
+      lancerProjectile({sx:u.x, sy:u.y, tx, ty, t:-k*0.13, duree:Math.hypot(tx-u.x,ty-u.y)/330 + 0.25,
         degats:deg, zone:D.zone, arme:'roquette', camp:u.camp, auteur:u});
     }
     return;
@@ -1627,7 +1652,7 @@ function tirer(u, c){
   if(D.arme === 'roquetteAT'){
     // Roquette d'épaule : projectile guidé (rendu comme un petit missile), dégâts à l'impact.
     const d = Math.hypot(c.x - ex, c.y - ey, h2 - h1);
-    projectiles.push({genre:'missileAir', arme:'roquetteAT', sx:ex, sy:ey, tx:c.x, ty:c.y, h1:h1 + 4, h2, t:0,
+    lancerProjectile({genre:'missileAir', arme:'roquetteAT', sx:ex, sy:ey, tx:c.x, ty:c.y, h1:h1 + 4, h2, t:0,
       duree:Math.max(0.12, d/420), degats:deg, zone:0, camp:u.camp, auteur:u, cible:c, role:'bazooka'});
     effet('eclair', {x:ex, y:ey, h:h1 + 4, duree:0.08, arme:'balle'});
     return;
@@ -1651,9 +1676,10 @@ function infliger(c, deg, auteur){
     const s = camps[c.camp].subi || (camps[c.camp].subi = {}), v = s[auteur.camp];
     s[auteur.camp] = {t:temps, deg:(v && temps - v.t < 90 ? v.deg : 0) + deg};
   }
-  if(c.camp === campJoueur && (c.est === 'batiment' || c.def.ouvrier || c.def.collecteur) && temps - alerte.t > 15){
-    alerte = {t:temps, x:c.x, y:c.y};
-    if(!window.MODE_DEMO) message(c.est === 'batiment' ? 'Notre base est attaquée ! (Espace pour y aller)' :
+  // Alerte du camp touché (chaque camp de joueur a la sienne ; seul le camp local l'affiche).
+  if(CAMPS_JOUEURS.includes(c.camp) && (c.est === 'batiment' || c.def.ouvrier || c.def.collecteur) && temps - alerteDe(c.camp).t > 15){
+    alertes[c.camp] = {t:temps, x:c.x, y:c.y};
+    if(!window.MODE_DEMO) notifier(c.camp, c.est === 'batiment' ? 'Notre base est attaquée ! (Espace pour y aller)' :
       c.def.collecteur ? 'Un collecteur est attaqué ! (Espace)' : 'Nos ouvriers sont attaqués ! (Espace)', 'alerte');
   }
   if(c.est === 'unite' && c.def.arme && auteur && (auteur.est === 'unite' || auteur.est === 'batiment') && !auteur.mort
@@ -1662,22 +1688,11 @@ function infliger(c, deg, auteur){
 }
 function tuer(c, auteur){
   c.mort = true; c.pv = 0;
-  const grand = c.est === 'batiment' ? 1 : (c.def.forme === 'infanterie' || c.def.forme === 'ouvrier') ? 0 : 0.5;
-  const h = hauteurVisee(c);
-  if(c.def.rendu === 'aliens'){
-    // Vaisseau-mère : sa destruction est mise en scène par r3d-aliens.js.
-  } else if(grand > 0){
-    effet('explosion', {x:c.x, y:c.y, h, r:c.est === 'batiment' ? c.rayon*1.2 : c.rayon*2, duree:0.8, grande:true,
-      batiment:c.est === 'batiment'});
-    for(let k=0;k<(c.est==='batiment'?6:2);k++) effet('fumee', {x:c.x+(Math.random()-.5)*c.rayon, y:c.y+(Math.random()-.5)*c.rayon, duree:1.6+Math.random()});
-    if(!enVol(c)) brulure(c.x, c.y, c.rayon*(c.est === 'batiment' ? 1.3 : 1.6));
-  } else {
-    effet('explosion', {x:c.x, y:c.y, h, r:7, duree:0.3});
-  }
+  effetsDeMort(c);
   if(c.est === 'batiment'){
     const t = c.def.taille;
     for(let rr=Math.max(0,c.r); rr<Math.min(LIGNES,c.r+t); rr++) for(let cc=Math.max(0,c.c); cc<Math.min(COLS,c.c+t); cc++) grille[rr*COLS+cc] = 0;
-    if(c.camp === campJoueur) message(c.def.nom + ' détruit(e) !', 'alerte');
+    notifier(c.camp, c.def.nom + ' détruit(e) !', 'alerte');
     // Aéroport détruit : les avions encore au sol (stationnés ou sur la piste) sont perdus avec lui ;
     // ceux qui volent n'ont plus de base et en chercheront une autre (voir baseAvion).
     if(c.def.aeroport) for(const u of ents){
@@ -1692,14 +1707,39 @@ function tuer(c, auteur){
       const r = auteur.kills >= 6 ? 2 : auteur.kills >= 2 ? 1 : 0;
       if(r > auteur.rang){
         auteur.rang = r;
-        if(auteur.camp === campJoueur) message(auteur.def.nom + ' promu(e) ' + (r === 1 ? 'vétéran.' : 'élite.'), 'succes');
+        notifier(auteur.camp, auteur.def.nom + ' promu(e) ' + (r === 1 ? 'vétéran.' : 'élite.'), 'succes');
       }
     }
   }
-  // Statistiques du joueur local : ses pertes, et les pertes des camps adverses (équipe différente) et des envahisseurs.
-  if(c.camp === campJoueur) stats.perdues++;
-  else if(c.camp === 'X' || (CAMPS_JOUEURS.includes(c.camp) && equipeDe(c.camp) !== equipeDe(campJoueur))) stats.detruites++;
+  // Statistiques de chaque camp de joueur (et du joueur local même hors de camps) : ses pertes, et les
+  // pertes des camps adverses (équipe différente) et des envahisseurs.
+  for(const v of CAMPS_JOUEURS){
+    if(!camps[v] && v !== campJoueur) continue;
+    if(c.camp === v) statsDe(v).perdues++;
+    else if(c.camp === 'X' || (CAMPS_JOUEURS.includes(c.camp) && equipeDe(c.camp) !== equipeDe(v))) statsDe(v).detruites++;
+  }
   if(c.def.forme === 'vaisseauMere') vaisseauDetruit(c);   // mode Surprises (section 14 bis)
+}
+// Partie visuelle d'une mort (explosion, fumées, brûlure), séparée de la règle (étape 3 du multijoueur) : elle
+// ne lit que l'entité (position, altitude, rayon, forme) et n'écrit que des effets. L'invité l'appelle quand une
+// entité disparaît de l'instantané ; chez l'hôte, elle n'entre pas dans le journal réseau (journalMuet).
+// Même suite d'appels (et de tirages Math.random) qu'avant l'extraction.
+function effetsDeMort(c){
+  journalMuet++;
+  try {
+    const grand = c.est === 'batiment' ? 1 : (c.def.forme === 'infanterie' || c.def.forme === 'ouvrier') ? 0 : 0.5;
+    const h = hauteurVisee(c);
+    if(c.def.rendu === 'aliens'){
+      // Vaisseau-mère : sa destruction est mise en scène par r3d-aliens.js.
+    } else if(grand > 0){
+      effet('explosion', {x:c.x, y:c.y, h, r:c.est === 'batiment' ? c.rayon*1.2 : c.rayon*2, duree:0.8, grande:true,
+        batiment:c.est === 'batiment'});
+      for(let k=0;k<(c.est==='batiment'?6:2);k++) effet('fumee', {x:c.x+(Math.random()-.5)*c.rayon, y:c.y+(Math.random()-.5)*c.rayon, duree:1.6+Math.random()});
+      if(!enVol(c)) brulure(c.x, c.y, c.rayon*(c.est === 'batiment' ? 1.3 : 1.6));
+    } else {
+      effet('explosion', {x:c.x, y:c.y, h, r:7, duree:0.3});
+    }
+  } finally { journalMuet--; }
 }
 // Les explosions de zone touchent tout ce qui n'est pas du camp de l'auteur, neutres compris
 // (dégâts collatéraux : attention au Marteau près d'une station de pompage).
@@ -1717,7 +1757,12 @@ function explosionZone(x, y, r, deg, arme, auteur, bord){
     infliger(e, deg * (1 - perte*d/r) * efficacite(a, e), auteur);
   }
 }
-function brulure(x, y, r){ if(window.R3D && R3D.ajouterBrulure) R3D.ajouterBrulure(x, y, r); }
+// Brûlure au sol. mondeMuet : simulation de l'hôte du mode d'essai ?echo, qui n'est pas dessinée (seul le
+// monde de l'invité l'est) ; la brûlure part alors seulement dans le journal.
+function brulure(x, y, r){
+  if(journalReseau && !journalMuet) journalReseau.effets.push({type:'brulure', x, y, r});
+  if(!mondeMuet && window.R3D && R3D.ajouterBrulure) R3D.ajouterBrulure(x, y, r);
+}
 
 // ---------- Pouvoirs ----------
 function planifier(delai, fn){ evenements.push({t:delai, fn}); }
@@ -1744,7 +1789,7 @@ function activerPouvoir(campId, cle, x, y, gratuit){
   if(!P) return false;
   const empeche = empechementPouvoir(campId, P, x, y);
   if(empeche){
-    if(campId === campJoueur && !gratuit) message(empeche, 'alerte');
+    if(!gratuit) notifier(campId, empeche, 'alerte');
     return false;
   }
   if(!gratuit){
@@ -1752,10 +1797,11 @@ function activerPouvoir(campId, cle, x, y, gratuit){
     C.points -= P.cout; C.recharges[cle] = P.recharge;
   }
   const auteur = {camp:campId, est:'pouvoir', pouvoir:true};
-  if(campId === campJoueur) message(P.nom + ' déclenché(e).', 'succes');
-  else if(allies(campId, campJoueur)) message('Notre allié déclenche : ' + P.nom + '.', 'succes');
-  else if(P.cible) message('Alerte : ' + P.nom + ' ennemi(e) en approche !', 'alerte');
-  else message('L’ennemi reçoit des renforts.', 'alerte');
+  // Annonce à chaque camp, selon son point de vue (lui-même, un allié, un adversaire).
+  notifier('tous', v => v === campId ? {texte:P.nom + ' déclenché(e).', genre:'succes'}
+    : allies(campId, v) ? {texte:'Notre allié déclenche : ' + P.nom + '.', genre:'succes'}
+    : P.cible ? {texte:'Alerte : ' + P.nom + ' ennemi(e) en approche !', genre:'alerte'}
+    : {texte:'L’ennemi reçoit des renforts.', genre:'alerte'});
   const coul = FACTIONS[C.faction].couleur;
   switch(cle){
     case 'frappe':
@@ -2197,7 +2243,10 @@ function choisirCampCible(id, centre){
     // ordinateurs ne restent pas figés sur le joueur.
     const subi = camps[id].subi && camps[id].subi[c];
     const riposte = subi && temps - subi.t < 90 ? (350 + Math.min(subi.deg, 2000)*0.2) * (1 - (temps - subi.t)/90) : 0;
-    const deja = campsEnJeu().filter(o => o !== id && o !== c && o !== campJoueur && etatsIA[o] && etatsIA[o].campCible === c && !allies(id, o)).length;
+    // Seuls les camps tenus par l'ordinateur comptent (camps[o].ia) : aucun camp humain, local ou distant
+    // (un humain revenu à son siège peut garder un etatsIA périmé). campJoueur reste exclu en plus : un
+    // camp J confié à l'ordinateur par les outils de test garde ainsi les mêmes résultats qu'avant.
+    const deja = campsEnJeu().filter(o => o !== id && o !== c && o !== campJoueur && camps[o].ia && etatsIA[o] && etatsIA[o].campCible === c && !allies(id, o)).length;
     const s = d + force*0.08 - Math.min(pression, 6)*120 - riposte + deja*150 + Math.random()*600;
     if(s < bs){ bs = s; best = c; }
   }
@@ -3577,7 +3626,44 @@ function meilleureZoneUltra(id, A, rayon, ctx, lourd, seuil){
 //  8. EFFETS ET MESSAGES
 // =====================================================================
 // Un effet est une simple donnée ; le module r3d-effets.js le met en scène.
-function effet(type, p){ effets.push(Object.assign({type, vie:p.duree, max:p.duree}, p)); }
+// Multijoueur (étape 3) : chez l'hôte, journalReseau (null en solo) garde les effets nés depuis le dernier
+// instantané, que l'invité recrée tels quels. Les effets d'impact et de mort n'y entrent pas (journalMuet) :
+// l'invité les pose lui-même (effetsImpact, effetsDeMort), ni les marques d'ordre, propres à chaque poste.
+let journalReseau = null, journalMuet = 0;
+// mondeMuet : vrai pendant que tourne la simulation de l'hôte du mode ?echo (rien n'en est montré ni joué).
+let mondeMuet = false;
+// roleMonde : null en solo ; 'hote' ou 'invite' en ligne, selon le monde chargé (le mode ?echo alterne les deux).
+let roleMonde = null;
+function effet(type, p){
+  const f = Object.assign({type, vie:p.duree, max:p.duree}, p);
+  effets.push(f);
+  if(journalReseau && !journalMuet && type !== 'ordre') journalReseau.effets.push(f);
+}
+// Projectile créé par la simulation (une seule entrée : tirs, avions, plasma). Le journal en garde une copie
+// des valeurs de départ (cible en identifiant), le projectile lui-même étant ensuite guidé.
+function lancerProjectile(p){
+  projectiles.push(p);
+  if(journalReseau && !journalMuet) journalReseau.projectiles.push({genre:p.genre || 'roquette', arme:p.arme == null ? null : p.arme,
+    sx:p.sx, sy:p.sy, tx:p.tx, ty:p.ty, h1:typeof p.h1 === 'number' ? p.h1 : 0, h2:typeof p.h2 === 'number' ? p.h2 : 0,
+    duree:p.duree, t0:p.t, cible:p.cible && p.cible.id ? p.cible.id : 0, zone:p.zone || 0});
+  return p;
+}
+// Retour au joueur, par camp : la simulation annonce à un camp (identifiant), à une liste de camps, ou à
+// 'tous' (les camps de joueurs en jeu) ; seul le camp local (campLocal()) l'affiche. texte : chaîne, ou
+// fonction (campVue) -> chaîne | {texte, genre} | null quand le texte dépend du point de vue (« notre
+// base », « base alliée »). ecouteurNotifications (null en solo) reçoit tout, pour chaque camp :
+// fonction (camp, texte, genre), que l'étape réseau branchera pour transmettre aux invités.
+let ecouteurNotifications = null;
+function notifier(camp, texte, genre){
+  const vues = camp === 'tous' ? campsEnJeu() : Array.isArray(camp) ? camp : [camp];
+  for(const v of vues){
+    let t = typeof texte === 'function' ? texte(v) : texte, g = genre;
+    if(t && typeof t === 'object'){ g = t.genre; t = t.texte; }
+    if(t == null || t === '') continue;
+    if(v === campLocal() && !mondeMuet) message(t, g);
+    if(ecouteurNotifications) ecouteurNotifications(v, t, g || 'info');
+  }
+}
 function message(texte, genre){
   messages.push({texte, genre:genre||'info', t:performance.now()});
   if(messages.length > 5) messages.shift();
@@ -3882,15 +3968,18 @@ function construireBandeauCamps(){
 function majBandeauCamps(){
   const b = el('bandeauCamps'); if(!b || MISSION || b.classList.contains('cache')) return;
   const ids = campsEnJeu();
-  const sig = ids.map(id => id + (camps[id].elimine ? 'x' : '')).join('') + (alliance ? 'T' : '');
+  // En ligne : un camp de joueur confié à l'ordinateur (invité parti) change aussi le bandeau (défaut R4). En solo,
+  // pseudosEnLigne est vide : signature inchangée.
+  const sig = ids.map(id => id + (camps[id].elimine ? 'x' : '') + (pseudosEnLigne[id] && camps[id].ia ? 'o' : '')).join('') + (alliance ? 'T' : '');
   if(sig === signatureBandeau) return;
   signatureBandeau = sig;
   b.innerHTML = ids.map(id => {
     const C = camps[id], moi = id === campJoueur, ami = allies(id, campJoueur);
     const rel = moi ? 'vous' : ami ? (equipeDe(id) === equipeDe(campJoueur) ? 'allié' : 'trêve') : 'ennemi';
     return `<div class="campB${C.elimine ? ' elimine' : ''}" title="${echapper(nomCamp(id) + ' — ' + faction(id).nom + ', équipe ' + equipeDe(id) + (C.ia ? ', ordinateur' : ''))}">` +
-      `<span class="pastille" style="background:${couleurCamp(id) || faction(id).couleur}"></span>` +
+      `<span class="pastille" style="background:${echapper(couleurCamp(id) || faction(id).couleur)}"></span>` +
       `<span class="fac">${echapper(faction(id).nom)}</span><span class="eq">${echapper(equipeDe(id))}</span>` +
+      (pseudosEnLigne[id] ? `<span class="eq">${echapper(C.ia ? 'ordinateur (' + pseudosEnLigne[id] + ' parti)' : pseudosEnLigne[id])}</span>` : '') +   // en ligne seulement
       `<span class="etat">${C.elimine ? 'éliminé' : rel}</span></div>`;
   }).join('');
 }
@@ -3902,7 +3991,7 @@ function construireBarrePouvoirs(){
     b.className = 'pouvoir' + (P.super ? ' super' : ''); b.id = 'pv_'+P.cle; b.title = P.desc;
     b.innerHTML = `<b>${P.nom}</b><br><span class="c"></span>`;
     b.onclick = () => {
-      if(!P.cible){ activerPouvoir(campJoueur, P.cle); return; }
+      if(!P.cible){ ordonner({type:'pouvoir', cle:P.cle}); return; }
       mode = {type:'pouvoir', cle:P.cle}; message('Choisissez la cible (clic gauche). Clic droit pour annuler.');
     };
     zone.appendChild(b);
@@ -4005,9 +4094,9 @@ function construirePanneau(){
     for(const t of prod){
       const D = UNITES[t];
       ajouter(`${D.nom}<span class="c">${D.cout} réserves</span><span class="n" data-type="${t}"></span>`,
-        D.desc + ' Clic droit : retirer de la file.', () => commander(e, t),
-        b => { b.dataset.cout = D.cout; if(D.avion) b.dataset.avion = '1'; if(D.forme === 'helico') b.dataset.helico = '1'; b.oncontextmenu = ev => { ev.preventDefault(); const i = e.file.lastIndexOf(t);
-          if(i >= 0){ e.file.splice(i,1); camps[campJoueur].reserves += D.cout; if(i === 0) e.prodT = 0; } }; });
+        D.desc + ' Clic droit : retirer de la file.', () => ordonner({type:'produire', batId:e.id, unite:t}),
+        b => { b.dataset.cout = D.cout; if(D.avion) b.dataset.avion = '1'; if(D.forme === 'helico') b.dataset.helico = '1';
+          b.oncontextmenu = ev => { ev.preventDefault(); ordonner({type:'retirer', batId:e.id, unite:t}); }; });
     }
     if(prod.length){
       const f = document.createElement('div'); f.className = 'file'; f.id = 'ifile'; actions.appendChild(f);
@@ -4114,11 +4203,7 @@ function elementsOnglet(cle){
   else prendre('aeroport', () => true);
   return liste;
 }
-// Bâtiments finis du joueur capables de produire ce type d'unité.
-function producteursDe(type){
-  const F = faction(campJoueur);
-  return ents.filter(b => b.est === 'batiment' && b.camp === campJoueur && !b.mort && !b.enCours && (F.production[b.type] || []).includes(type));
-}
+// (producteursDe(type, camp) : section 11 bis.)
 // État d'un bouton : raison du grisé (null s'il est utilisable), nombre en file ou en chantier, avancement.
 function etatFab(it){
   const C = camps[campJoueur];
@@ -4147,8 +4232,9 @@ function etatFab(it){
 }
 // Ouvrier qui prendra le chantier : le plus proche des libres (sans ordre, ou qui répare / se déplace),
 // sinon le plus proche de tous. null s'il n'y en a aucun.
-function ouvrierPour(x, y){
-  const ouvriers = ents.filter(u => u.est === 'unite' && u.camp === campJoueur && !u.mort && u.def.ouvrier);
+function ouvrierPour(x, y, camp){
+  camp = camp || campJoueur;
+  const ouvriers = ents.filter(u => u.est === 'unite' && u.camp === camp && !u.mort && u.def.ouvrier);
   const libres = ouvriers.filter(u => !u.ordre || u.ordre.type === 'reparer' || u.ordre.type === 'aller');
   const proche = l => { let best = null, bd = Infinity; for(const u of l){ const d = Math.hypot(u.x - x, u.y - y); if(d < bd){ bd = d; best = u; } } return best; };
   return proche(libres) || proche(ouvriers);
@@ -4164,22 +4250,13 @@ function clicFab(it){
     message('Placez le bâtiment (clic gauche). Clic droit ou Échap : annuler. Maj : en placer plusieurs.');
     return;
   }
-  // Le producteur le moins chargé (pour un avion : parmi les aéroports qui ont encore une place).
-  let prods = producteursDe(it.type).filter(b => b.file.length < 5);
-  if(UNITES[it.type].avion) prods = prods.filter(b => !aeroportPlein(b));
-  if(UNITES[it.type].forme === 'helico') prods = prods.filter(b => !helicosPlein(b));
-  prods.sort((a, b) => a.file.length - b.file.length);
-  if(prods.length) commander(prods[0], it.type);
+  // Sans bâtiment désigné : l'exécution choisit le producteur le moins chargé (voir validerOrdre).
+  ordonner({type:'produire', unite:it.type});
 }
 function retirerFab(it){
   if(it.genre !== 'unite') return;
-  // Le producteur qui en a le plus en file ; on retire la dernière commande (réserves rendues).
-  let best = null, bk = 0;
-  for(const b of producteursDe(it.type)){ const k = b.file.filter(t => t === it.type).length; if(k > bk){ bk = k; best = b; } }
-  if(!best) return;
-  const i = best.file.lastIndexOf(it.type);
-  best.file.splice(i, 1); camps[campJoueur].reserves += UNITES[it.type].cout;
-  if(i === 0) best.prodT = 0;
+  // Sans bâtiment désigné : le producteur qui en a le plus en file perd sa dernière commande (réserves rendues).
+  ordonner({type:'retirer', unite:it.type});
 }
 function choisirOngletFab(cle){ if(ONGLETS_FAB.some(o => o.cle === cle)){ ongletFab = cle; signatureFab = ''; autoriserVignettesOnglet(cle); } }
 // Fluidité (v24) : en pleine partie, les vignettes ne sont plus produites, sauf celles qui manquent dans
@@ -4286,13 +4363,10 @@ function majFabrique(){
   }
   if(infobulleBouton) majInfobulle();
 }
+// Interface : touche S, boutons « Arrêt » / « Retour à l'aéroport » (l'effet est dans appliquerOrdre, 'arret').
 function arreter(){
-  for(const u of selection) if(u.est === 'unite' && u.camp === campJoueur){
-    u.ordre = null; u.cible = null; u.chemin = null;
-    if(u.def.collecteur) u.gare = true;   // garé : il ne reprend la récolte que sur un nouvel ordre
-    // Un avion ne s'arrête pas en l'air : il oublie son point d'attente et rentre se poser.
-    if(u.def.avion){ u.attente = null; u.passe = null; if(u.phase !== 'sol') u.ordre = {type:'rentrer'}; }
-  }
+  const ids = idsDe(selection.filter(u => u.est === 'unite' && u.camp === campLocal()));
+  if(ids.length) ordonner({type:'arret', ids});
 }
 
 // =====================================================================
@@ -4348,14 +4422,290 @@ function ordonnerFormation(unites, x, y, type){
     u.ordre = {type, x:x+ox, y:y+oy}; u.cible = null; u.chemin = null;
   });
 }
+// ---------- Interface : elle ne fait que fabriquer des ordres (voir 11 bis, executerOrdre) ----------
+const idsDe = liste => liste.map(e => e.id);
+// Point du sol sous le curseur ramené dans la carte ; null si le curseur ne vise pas le sol (versMonde
+// renvoie alors -9999).
+function pointOrdre(x, y){
+  if(!isFinite(x) || !isFinite(y) || x < -9000 || y < -9000) return null;
+  return {x:Math.max(0, Math.min(LARG, x)), y:Math.max(0, Math.min(HAUT, y))};
+}
+// Clic droit (vue 3D : cible désignée par le lancer de rayon, éventuellement null ; minicarte : cible non
+// désignée, l'entité sous (x, y) est cherchée à l'exécution, comme avant).
 function ordreDroit(x, y, cibleForcee){
-  const mes = selection.filter(e => e.camp === campJoueur);
-  if(!mes.length) return;
+  const mes = selection.filter(e => e.camp === campLocal());
+  const p = pointOrdre(x, y);
+  if(!mes.length || !p) return;
+  const o = {type:'droit', ids:idsDe(mes), x:p.x, y:p.y};
+  if(cibleForcee !== undefined) o.cibleId = cibleForcee ? cibleForcee.id : null;
+  ordonner(o);
+}
+function ordreAttaqueDeplacement(x, y, cible){
+  const unites = selection.filter(e => e.camp === campLocal() && e.est === 'unite' && !e.def.ouvrier && (e.def.arme || e.def.repare));
+  const p = pointOrdre(x, y);
+  if(!p) return;
+  if(!unites.length){ effet('ordre', {x:p.x, y:p.y, duree:0.5, couleur:'#ff6b4a'}); return; }
+  ordonner({type:'attaqueDeplacement', ids:idsDe(unites), x:p.x, y:p.y, cibleId:cible ? cible.id : null});
+}
+function tenterPlacement(){
+  const {c, r} = cellulePlacement();
+  // Sans ouvrier sélectionné (barre de construction) : liste vide, l'exécution prend l'ouvrier libre le plus proche.
+  const ouvrierIds = idsDe(selection.filter(e => e.camp === campLocal() && e.est === 'unite' && e.def.ouvrier && !e.mort));
+  const res = ordonner({type:'construire', bat:mode.bat, c, r, ouvrierIds});
+  if(!res.ok){ if(res.code === 'requis' || res.code === 'ouvrier') mode = null; return; }
+  if(!touches.Shift) mode = null;
+}
+// Ordre du joueur local : exécuté pour campLocal() ; un refus « à dire » (genre) devient un message, et le
+// retour visuel de l'ordre (marques au sol) est posé ici, localement, jamais par l'exécution.
+function ordonner(ordre){
+  const res = executerOrdre(campLocal(), ordre);
+  if(!res.ok && res.genre) message(res.motif, res.genre);
+  if(res.retour) for(const r of res.retour) effet('ordre', {x:r.x, y:r.y, duree:0.5, couleur:r.couleur});
+  return res;
+}
+
+// =====================================================================
+//  11 bis. ORDRES DES JOUEURS : une seule entrée, executerOrdre(camp, ordre)
+//  Toute action d'un joueur qui modifie la partie passe ici (souris, clavier, panneau, barre de
+//  construction, minicarte, robots de test ; demain les ordres reçus du réseau). Un ordre est une
+//  donnée simple (type, identifiants d'entités, coordonnées, clés), jamais une référence d'objet.
+//  validerOrdre (pure : lit l'état, n'écrit rien) renvoie la raison d'un refus ; un ordre refusé ne
+//  change rien. Résultat : {ok:true, retour?, id?} ou {ok:false, motif, code, genre?} (genre : le refus
+//  est à dire au joueur local, comme avant ; sans genre, refus muet).
+//  Formats : voir travaux/multijoueur (compte rendu des étapes 1 et 2) et la liste ci-dessous.
+// =====================================================================
+const TYPES_ORDRES = ['droit', 'attaqueDeplacement', 'arret', 'ralliement', 'construire', 'produire', 'retirer',
+  'pouvoir', 'pause', 'abandon', 'alliance', 'proposerTreve'];
+// Réservés au joueur local (en ligne : l'hôte) : pause, abandon de sa propre partie, décisions du mode
+// Surprises (désactivé en ligne).
+const ORDRES_LOCAUX = ['pause', 'abandon', 'alliance', 'proposerTreve'];
+const MAX_IDS_ORDRE = 200;
+const estEntier = v => typeof v === 'number' && Number.isInteger(v);
+const estNombre = v => typeof v === 'number' && isFinite(v);
+function dansCarte(x, y){ return estNombre(x) && estNombre(y) && x >= 0 && y >= 0 && x <= LARG && y <= HAUT; }
+function entiteParId(id){
+  if(!estEntier(id)) return null;
+  for(const e of ents) if(e.id === id) return e;
+  return null;
+}
+// Entités désignées par un ordre : toutes doivent exister, vivre et appartenir au camp (genre : 'unite' ou
+// 'batiment' exigé). Renvoie la liste (dans l'ordre des ids) ou le motif du refus (chaîne).
+function entitesDeLOrdre(camp, ids, genre){
+  if(!Array.isArray(ids) || !ids.length) return 'Aucune entité désignée.';
+  if(ids.length > MAX_IDS_ORDRE) return 'Trop d’entités dans un seul ordre.';
+  const vus = new Set();
+  for(const id of ids){
+    if(!estEntier(id)) return 'Identifiant d’entité invalide.';
+    if(vus.has(id)) return 'Identifiant en double.';
+    vus.add(id);
+  }
+  const parId = new Map();
+  for(const e of ents) if(vus.has(e.id)) parId.set(e.id, e);
+  const liste = [];
+  for(const id of ids){
+    const e = parId.get(id);
+    if(!e) return 'Entité inconnue (' + id + ').';
+    if(e.mort) return 'Entité détruite (' + id + ').';
+    if(e.camp !== camp) return 'Entité d’un autre camp (' + id + ').';
+    if(genre && e.est !== genre) return genre === 'unite' ? 'Cet ordre ne s’adresse qu’à des unités.' : 'Cet ordre ne s’adresse qu’à des bâtiments.';
+    liste.push(e);
+  }
+  return liste;
+}
+// Bâtiments finis d'un camp capables de produire ce type d'unité (camp local par défaut : barre de construction).
+function producteursDe(type, camp){
+  camp = camp || campJoueur;
+  const F = faction(camp);
+  return ents.filter(b => b.est === 'batiment' && b.camp === camp && !b.mort && !b.enCours && (F.production[b.type] || []).includes(type));
+}
+// Validation (pure). Renvoie {motif, code, genre?} en cas de refus, sinon les données résolues pour
+// appliquerOrdre (entités, cible, bâtiment, ouvriers).
+function validerOrdre(camp, o){
+  const non = (motif, code, genre) => ({motif, code:code || 'invalide', genre});
+  if(!o || typeof o !== 'object' || Array.isArray(o)) return non('Ordre illisible.');
+  const t = o.type;
+  if(typeof t !== 'string' || !TYPES_ORDRES.includes(t)) return non('Type d’ordre inconnu.');
+  if(typeof camp !== 'string' || !CAMPS_JOUEURS.includes(camp) || !camps[camp]) return non('Camp inconnu.');
+  const C = camps[camp];
+  if(ORDRES_LOCAUX.includes(t) && camp !== campLocal()) return non('Ordre réservé au joueur local.', 'reserve');
+  // (Pas d'exigence sur enJeu : les simulations de test, missions comprises, tournent avant l'écran de jeu.)
+  if(t === 'pause') return o.oui === undefined || typeof o.oui === 'boolean' ? {} : non('Champ « oui » invalide.');
+  if(partieFinie) return non('La partie est terminée.', 'finie');
+  if(t === 'abandon') return {};
+  if(t === 'alliance'){
+    if(typeof o.oui !== 'boolean') return non('Champ « oui » invalide.');
+    return surprise.etat === 'dialogue' ? {} : non('Aucune alliance à décider.', 'etat');
+  }
+  if(surprise.gel) return non('Partie figée (cinématique ou dialogue).', 'gel');
+  if(C.elimine) return non('Ce camp est éliminé : il ne donne plus d’ordre.', 'elimine');
+  if(t === 'proposerTreve') return surprise.etat === 'combat' && !alliance ? {} : non('Aucune trêve à proposer.', 'etat');
+  // Cible désignée : absente (undefined) = à chercher sous (x, y) pour le clic droit, aucune pour les autres.
+  const cibleDe = () => {
+    if(o.cibleId === undefined) return {cible:t === 'droit' ? undefined : null};
+    if(o.cibleId === null) return {cible:null};
+    const c = entiteParId(o.cibleId);
+    return c && !c.mort ? {cible:c} : {motif:'Cible inconnue ou détruite.'};
+  };
+  switch(t){
+    case 'droit': case 'attaqueDeplacement': {
+      const l = entitesDeLOrdre(camp, o.ids, t === 'attaqueDeplacement' ? 'unite' : null);
+      if(typeof l === 'string') return non(l, 'entites');
+      if(!dansCarte(o.x, o.y)) return non('Coordonnées hors de la carte.', 'coordonnees');
+      const c = cibleDe(); if(c.motif) return non(c.motif, 'cible');
+      return {entites:l, cible:c.cible};
+    }
+    case 'arret': {
+      const l = entitesDeLOrdre(camp, o.ids, 'unite');
+      return typeof l === 'string' ? non(l, 'entites') : {entites:l};
+    }
+    case 'ralliement': {
+      const l = entitesDeLOrdre(camp, o.ids, 'batiment');
+      if(typeof l === 'string') return non(l, 'entites');
+      return dansCarte(o.x, o.y) ? {entites:l} : non('Coordonnées hors de la carte.', 'coordonnees');
+    }
+    case 'construire': {
+      const D = typeof o.bat === 'string' && Object.prototype.hasOwnProperty.call(BATIMENTS, o.bat) ? BATIMENTS[o.bat] : null;
+      if(!D || !batimentsConstructibles(faction(camp)).includes(o.bat) || !autorise('batiments', o.bat)) return non('Bâtiment impossible pour ce camp.', 'type');
+      if(!estEntier(o.c) || !estEntier(o.r)) return non('Case invalide.', 'coordonnees');
+      // Mêmes contrôles et même ordre que l'ancien tenterPlacement (messages identiques).
+      if(!emplacementValide(o.bat, o.c, o.r, false)) return non('Emplacement impossible.', 'emplacement', 'alerte');
+      if(C.reserves < D.cout) return non('Réserves insuffisantes.', 'reserves', 'alerte');
+      if(D.requiert && !ents.some(b => b.camp === camp && b.type === D.requiert && !b.enCours && !b.mort))
+        return non('Nécessite : ' + BATIMENTS[D.requiert].nom + '.', 'requis', 'alerte');
+      let ouvriers;
+      if(o.ouvrierIds === undefined || (Array.isArray(o.ouvrierIds) && !o.ouvrierIds.length)){
+        const u = ouvrierPour((o.c + D.taille/2)*TUILE, (o.r + D.taille/2)*TUILE, camp);
+        if(!u) return non('Aucun ouvrier pour construire : formez-en un au QG (onglet Infanterie).', 'ouvrier', 'alerte');
+        ouvriers = [u];
+      } else {
+        ouvriers = entitesDeLOrdre(camp, o.ouvrierIds, 'unite');
+        if(typeof ouvriers === 'string') return non(ouvriers, 'entites');
+        if(!ouvriers.every(u => u.def.ouvrier)) return non('Seuls les ouvriers construisent.', 'entites');
+      }
+      return {ouvriers, D};
+    }
+    case 'produire': case 'retirer': {
+      const u = o.unite;
+      if(typeof u !== 'string' || !Object.prototype.hasOwnProperty.call(UNITES, u)) return non('Type d’unité inconnu.', 'type');
+      let b = null;
+      if(o.batId !== undefined){
+        const l = entitesDeLOrdre(camp, [o.batId], 'batiment');
+        if(typeof l === 'string') return non(l, 'entites');
+        b = l[0];
+      }
+      if(t === 'retirer'){
+        if(b) return b.file.includes(u) ? {bat:b} : non('Ce type n’est pas dans la file de ce bâtiment.', 'file');
+        // Sans bâtiment désigné : le producteur qui en a le plus en file (ancienne barre de construction).
+        let best = null, bk = 0;
+        for(const p of producteursDe(u, camp)){ const k = p.file.filter(x => x === u).length; if(k > bk){ bk = k; best = p; } }
+        return best ? {bat:best} : non('Aucune commande de ce type à retirer.', 'file');
+      }
+      if(!autorise('unites', u)) return non('Unité non autorisée.', 'type');
+      if(b){
+        if(b.enCours) return non('Bâtiment en construction.', 'enCours');
+        if(!(faction(camp).production[b.type] || []).includes(u)) return non('Ce bâtiment ne produit pas ce type d’unité.', 'type');
+      } else {
+        // Sans bâtiment désigné : le producteur le moins chargé (pour un avion : parmi les aéroports qui ont
+        // encore une place), comme l'ancienne barre de construction.
+        let prods = producteursDe(u, camp).filter(p => p.file.length < 5);
+        if(UNITES[u].avion) prods = prods.filter(p => !aeroportPlein(p));
+        if(UNITES[u].forme === 'helico') prods = prods.filter(p => !helicosPlein(p));
+        prods.sort((a, c) => a.file.length - c.file.length);
+        if(!prods.length) return non('Aucun bâtiment ne peut produire ce type maintenant.', 'producteur');
+        b = prods[0];
+      }
+      const m = empechementProduction(b, u);
+      if(m) return non(m, 'production', m === MOTIF_RESERVES ? 'alerte' : 'info');
+      return {bat:b};
+    }
+    case 'pouvoir': {
+      if(typeof o.cle !== 'string') return non('Pouvoir inconnu.', 'pouvoir');
+      const P = (POUVOIRS[C.faction] || []).find(p => p.cle === o.cle);
+      if(!P) return non('Pouvoir inconnu pour ce camp.', 'pouvoir');
+      if(P.cible && (typeof o.x !== 'number' || typeof o.y !== 'number')) return non('Cible du pouvoir manquante.', 'coordonnees');
+      // Même ordre que activerPouvoir : d'abord l'effet possible (message), puis points et recharge (muets).
+      const e = empechementPouvoir(camp, P, o.x, o.y);
+      if(e) return non(e, 'pouvoir', 'alerte');
+      if(!pouvoirsActifs[camp]) return non('Pouvoirs désactivés pour ce camp.', 'pouvoir');
+      if(C.points < P.cout) return non('Points de commandement insuffisants.', 'points');
+      if((C.recharges[o.cle] || 0) > 0) return non('Pouvoir en recharge.', 'recharge');
+      return {P};
+    }
+  }
+  return non('Type d’ordre inconnu.');
+}
+function executerOrdre(camp, ordre){
+  // Invité (étape 5) : rien n'est appliqué ici, l'ordre part chez l'hôte, qui le valide pour le camp du siège.
+  if(roleMonde === 'invite') return envoyerOrdreInvite(camp, ordre);
+  let v;
+  try { v = validerOrdre(camp, ordre); }
+  catch(err){ v = {motif:'Ordre illisible.', code:'invalide'}; }
+  if(v.motif) return {ok:false, motif:v.motif, code:v.code, genre:v.genre};
+  return appliquerOrdre(camp, ordre, v);
+}
+// Application d'un ordre déjà validé (v : données de validerOrdre).
+function appliquerOrdre(camp, o, v){
+  const fait = (retour, plus) => Object.assign({ok:true}, retour ? {retour} : null, plus || null);
+  switch(o.type){
+    case 'droit': return fait(appliquerOrdreDroit(camp, v.entites, o.x, o.y, v.cible));
+    case 'attaqueDeplacement': {
+      const unites = v.entites.filter(e => !e.def.ouvrier && (e.def.arme || e.def.repare)), cible = v.cible;
+      if(cible && hostile(camp, cible.camp)){ for(const u of unites) if(u.def.arme && peutCibler(u, cible)){ u.ordre = {type:'attaquer', cible}; u.cible = cible; } }
+      else ordonnerFormation(unites, o.x, o.y, 'attaqueDeplacement');
+      return fait([{x:o.x, y:o.y, couleur:'#ff6b4a'}]);
+    }
+    case 'arret':
+      for(const u of v.entites){
+        u.ordre = null; u.cible = null; u.chemin = null;
+        if(u.def.collecteur) u.gare = true;   // garé : il ne reprend la récolte que sur un nouvel ordre
+        // Un avion ne s'arrête pas en l'air : il oublie son point d'attente et rentre se poser.
+        if(u.def.avion){ u.attente = null; u.passe = null; if(u.phase !== 'sol') u.ordre = {type:'rentrer'}; }
+      }
+      return fait();
+    case 'ralliement':
+      for(const b of v.entites) if(!b.def.arme) b.rally = {x:o.x, y:o.y};
+      return fait([{x:o.x, y:o.y, couleur:'#7dff8a'}]);
+    case 'construire': {
+      const b = construireBatiment(camp, o.bat, o.c, o.r, v.ouvriers);
+      return b ? fait(null, {id:b.id}) : {ok:false, motif:'Réserves insuffisantes.', code:'reserves', genre:'alerte'};
+    }
+    case 'produire': return commander(v.bat, o.unite) ? fait(null, {id:v.bat.id}) : {ok:false, motif:'Commande refusée.', code:'production'};
+    case 'retirer': retirerDeFile(v.bat, o.unite); return fait(null, {id:v.bat.id});
+    case 'pouvoir': {
+      const ok = v.P.cible ? activerPouvoir(camp, o.cle, o.x, o.y) : activerPouvoir(camp, o.cle);
+      return ok ? fait() : {ok:false, motif:'Pouvoir indisponible.', code:'pouvoir'};
+    }
+    case 'pause': if(o.oui === undefined || o.oui !== enPause) basculerPause(); return fait();
+    case 'abandon':
+      if(MISSION){ finMission(false, 'Mission abandonnée.'); MS.fin.immediat = true; verifierDebriefing(); }
+      else if(modeReseau === 'hote') quitterPartieReseau();   // l'hôte ferme le salon avant de partir (fin pour tous)
+      else location.href = location.pathname;
+      return fait();
+    case 'alliance': repondreAlliance(o.oui); return fait();
+    case 'proposerTreve': proposerAlliance(); return fait();
+  }
+  return {ok:false, motif:'Type d’ordre inconnu.', code:'invalide'};
+}
+// Retrait d'une commande (la dernière de ce type) : réserves rendues au camp du bâtiment ; si c'était
+// celle en cours, son avancement repart de zéro. Seule version (avant : deux copies, dont celle du
+// panneau qui remboursait camps[campJoueur]).
+function retirerDeFile(b, type){
+  const i = b.file.lastIndexOf(type);
+  if(i < 0) return false;
+  b.file.splice(i, 1);
+  if(camps[b.camp]) camps[b.camp].reserves += UNITES[type].cout;
+  if(i === 0) b.prodT = 0;
+  return true;
+}
+// Clic droit intelligent (ancien ordreDroit, pour un camp et des entités déjà validées). Renvoie les marques
+// au sol à montrer au joueur qui a donné l'ordre.
+function appliquerOrdreDroit(camp, mes, x, y, cibleForcee){
+  const retour = [];
   const unites = mes.filter(e => e.est === 'unite');
   if(!unites.length){
     for(const b of mes) if(b.est === 'batiment' && !b.def.arme) b.rally = {x, y};
-    effet('ordre', {x, y, duree:0.5, couleur:'#7dff8a'});
-    return;
+    retour.push({x, y, couleur:'#7dff8a'});
+    return retour;
   }
   const cible = cibleForcee !== undefined ? cibleForcee : entiteSous(x, y);
   const n = noeuds.find(k => k.reste > 0 && Math.hypot(k.x-x, k.y-y) < k.rayon+10);
@@ -4365,62 +4715,41 @@ function ordreDroit(x, y, cibleForcee){
   // Réparateur sur un allié qu'il ne sait pas soigner (13 novembre 2026 : l'ordre était ignoré sans
   // un mot) : on le dit, puis l'ordre suit son cours normal (déplacement).
   const motif = cible ? refusSoin(unites, cible) : null;
-  if(motif) message(motif);
-  if(cible && hostile(campJoueur,cible.camp)){
+  if(motif) notifier(camp, motif);
+  if(cible && hostile(camp, cible.camp)){
     const att = unites.filter(u => u.def.arme && peutCibler(u, cible));
     for(const u of att){ u.ordre = {type:'attaquer', cible}; u.cible = cible; u.chemin = null; }
     reste = unites.filter(u => !att.includes(u));
-    effet('ordre', {x:cible.x, y:cible.y, duree:0.5, couleur:'#ff6b4a'});
+    retour.push({x:cible.x, y:cible.y, couleur:'#ff6b4a'});
   } else if(n && collecteurs.length){
     // Collecteurs sur un champ de minerai : ils y récoltent (les autres unités s'y rendent).
     for(const u of collecteurs){ u.ordre = ordreRecolte(n); if(u.charge >= u.def.capacite) u.ordre.retour = true; u.chemin = null; }
     reste = unites.filter(u => !u.def.collecteur);
-    effet('ordre', {x:n.x, y:n.y, duree:0.5, couleur:'#5fc3e4'});
+    retour.push({x:n.x, y:n.y, couleur:'#5fc3e4'});
   } else if(cible && unites.some(u => u.def.repare && peutSoigner(u, cible))){
     // Réparateurs sur un allié blessé (unité ou bâtiment) : ils vont le soigner ; les autres s'y rendent.
     const soignants = unites.filter(u => u.def.repare && peutSoigner(u, cible));
     for(const u of soignants){ u.ordre = {type:'soigner', cible}; u.cibleSoin = cible; u.chemin = null; }
     reste = unites.filter(u => !soignants.includes(u));
-    effet('ordre', {x:cible.x, y:cible.y, duree:0.5, couleur:'#7dff8a'});
-  } else if(cible && cible.camp === campJoueur && cible.est === 'batiment' && cible.enCours && ouvriers.length){
+    retour.push({x:cible.x, y:cible.y, couleur:'#7dff8a'});
+  } else if(cible && cible.camp === camp && cible.est === 'batiment' && cible.enCours && ouvriers.length){
     for(const u of ouvriers){ u.ordre = {type:'construire', bat:cible}; u.chemin = null; }
     reste = unites.filter(u => !u.def.ouvrier);
-  } else if(cible && cible.camp === campJoueur && cible.est === 'batiment' && !cible.enCours && cible.pv < cible.pvMax && ouvriers.length){
+  } else if(cible && cible.camp === camp && cible.est === 'batiment' && !cible.enCours && cible.pv < cible.pvMax && ouvriers.length){
     for(const u of ouvriers){ u.ordre = {type:'reparer', bat:cible}; u.chemin = null; }
     reste = unites.filter(u => !u.def.ouvrier);
-    effet('ordre', {x:cible.x, y:cible.y, duree:0.5, couleur:'#7dff8a'});
-  } else if(cible && cible.camp === campJoueur && cible.est === 'batiment' && cible.def.depot && !cible.enCours && collecteurs.some(u => u.charge > 0)){
+    retour.push({x:cible.x, y:cible.y, couleur:'#7dff8a'});
+  } else if(cible && cible.camp === camp && cible.est === 'batiment' && cible.def.depot && !cible.enCours && collecteurs.some(u => u.charge > 0)){
     // Collecteurs sur un dépôt : ils rentrent décharger, puis reprennent la récolte.
     for(const u of collecteurs){ const o = u.ordre && u.ordre.type === 'recolter' ? u.ordre : (u.ordre = ordreRecolte(champPour(u))); o.retour = u.charge > 0; u.chemin = null; }
     reste = unites.filter(u => !u.def.collecteur);
   }
-  if(n && ouvriers.length && !collecteurs.length) message('Les ouvriers ne récoltent pas : produisez des collecteurs au QG.');
+  if(n && ouvriers.length && !collecteurs.length) notifier(camp, 'Les ouvriers ne récoltent pas : produisez des collecteurs au QG.');
   if(reste.length){
     ordonnerFormation(reste, x, y, 'aller');
-    effet('ordre', {x, y, duree:0.5, couleur:'#7dff8a'});
+    retour.push({x, y, couleur:'#7dff8a'});
   }
-}
-function ordreAttaqueDeplacement(x, y, cible){
-  const unites = selection.filter(e => e.camp === campJoueur && e.est === 'unite' && !e.def.ouvrier && (e.def.arme || e.def.repare));
-  if(cible && hostile(campJoueur,cible.camp)){ for(const u of unites) if(u.def.arme && peutCibler(u, cible)){ u.ordre = {type:'attaquer', cible}; u.cible = cible; } }
-  else ordonnerFormation(unites, x, y, 'attaqueDeplacement');
-  effet('ordre', {x, y, duree:0.5, couleur:'#ff6b4a'});
-}
-function tenterPlacement(){
-  const {c, r} = cellulePlacement(), D = BATIMENTS[mode.bat];
-  if(!emplacementValide(mode.bat, c, r, false)){ message('Emplacement impossible.', 'alerte'); return; }
-  if(camps[campJoueur].reserves < D.cout){ message('Réserves insuffisantes.', 'alerte'); return; }
-  const D2 = D.requiert && !ents.some(b => b.camp === campJoueur && b.type === D.requiert && !b.enCours && !b.mort);
-  if(D2){ message('Nécessite : ' + BATIMENTS[D.requiert].nom + '.', 'alerte'); mode = null; return; }
-  let ouvriers = selection.filter(e => e.camp === campJoueur && e.est === 'unite' && e.def.ouvrier);
-  // Sans ouvrier sélectionné (barre de construction) : l'ouvrier libre le plus proche du chantier.
-  if(!ouvriers.length){
-    const o = ouvrierPour((c + D.taille/2)*TUILE, (r + D.taille/2)*TUILE);
-    if(!o){ message('Aucun ouvrier pour construire : formez-en un au QG (onglet Infanterie).', 'alerte'); mode = null; return; }
-    ouvriers = [o];
-  }
-  construireBatiment(campJoueur, mode.bat, c, r, ouvriers);
-  if(!touches.Shift) mode = null;
+  return retour;
 }
 
 cv.addEventListener('contextmenu', e => e.preventDefault());
@@ -4430,7 +4759,7 @@ cv.addEventListener('mousedown', e => {
   souris.mx = m.x; souris.my = m.y;
   if(e.button === 0){
     if(mode && mode.type === 'placer'){ tenterPlacement(); return; }
-    if(mode && mode.type === 'pouvoir'){ if(activerPouvoir(campJoueur, mode.cle, m.x, m.y)) mode = null; return; }
+    if(mode && mode.type === 'pouvoir'){ if(ordonner({type:'pouvoir', cle:mode.cle, x:m.x, y:m.y}).ok) mode = null; return; }
     if(mode && mode.type === 'attaque'){ ordreAttaqueDeplacement(m.x, m.y, entiteSousEcran(e.clientX, e.clientY)); mode = null; return; }
     souris.bas = true; souris.dx = e.clientX; souris.dy = e.clientY;
   } else if(e.button === 2){
@@ -4555,11 +4884,11 @@ addEventListener('keydown', e => {
   const fn = /^F([1-4])$/.exec(e.key);
   if(fn && !e.ctrlKey && !e.altKey && !e.metaKey){ e.preventDefault(); choisirOngletFab(ONGLETS_FAB[+fn[1] - 1].cle); return; }
   if(k === 'escape'){ mode = null; }
-  else if(k === 'p'){ basculerPause(); }
+  else if(k === 'p'){ ordonner({type:'pause'}); }
   else if(k === 's'){ arreter(); }
   else if(k === 'a'){ if(selection.some(u => u.camp === campJoueur && u.est === 'unite' && (u.def.arme || u.def.repare) && !u.def.ouvrier)) mode = {type:'attaque'}; }
   else if(k === 'h'){ const q = ents.find(b => b.camp === campJoueur && b.type === 'qg'); if(q) centrerSur(q.x, q.y); }
-  else if(k === ' '){ e.preventDefault(); if(temps - alerte.t < 60) centrerSur(alerte.x, alerte.y); }
+  else if(k === ' '){ e.preventDefault(); const al = alerteDe(campLocal()); if(temps - al.t < 60) centrerSur(al.x, al.y); }
   else if(k === 'o' && MISSION){ basculerObjectifs(); }
   else if(/^[1-9]$/.test(e.key)){
     if(e.ctrlKey){ e.preventDefault(); groupes[e.key] = selection.filter(s => s.camp === campJoueur && s.est === 'unite'); message('Groupe ' + e.key + ' enregistré.'); }
@@ -4878,7 +5207,7 @@ function executerAction(a, seq){
           const dx = (k % 3 - 1)*60, dy = Math.floor(k/3)*60; k++;
           total += placerUnites(v.camp, g.type, g.nb, depuis.x + dx, depuis.y + dy, ordre && {type:ordre.type, x:ordre.x + dx, y:ordre.y + dy}, v.nom, ctx).length;
         }
-        if(v.camp === campJoueur && total) message('Renforts : ' + total + ' unité' + (total > 1 ? 's' : '') + ' en approche.', 'succes');
+        if(total) notifier(v.camp, 'Renforts : ' + total + ' unité' + (total > 1 ? 's' : '') + ' en approche.', 'succes');
         break;
       }
       case 'batiment':
@@ -4902,7 +5231,7 @@ function executerAction(a, seq){
       case 'reserves':
         if(!v || !campValide(v.camp, ctx)) break;
         camps[v.camp].reserves = Math.max(0, camps[v.camp].reserves + nombre(v.montant, 0));
-        if(v.camp === campJoueur && nombre(v.montant, 0) > 0) message('Réserves reçues : +' + nombre(v.montant, 0) + '.', 'succes');
+        if(nombre(v.montant, 0) > 0) notifier(v.camp,'Réserves reçues : +' + nombre(v.montant, 0) + '.', 'succes');
         break;
       case 'points':
         if(!v || !campValide(v.camp, ctx)) break;
@@ -5196,7 +5525,7 @@ function demarrerMission(){
     const qg = ents.find(b => !b.mort && b.camp === camp && b.type === 'qg');
     if(qg) doterCollecteurs(camp, qg);
   }
-  stats.produites = 0;
+  for(const k in statsCamps) statsCamps[k].produites = 0;   // les unités de départ ne comptent pas
   // Objectifs et déclencheurs
   MS.objectifs = [];
   for(const d of listeOuVide(M.objectifs)){
@@ -5675,8 +6004,7 @@ function abandonner(){
     setTimeout(() => { if(performance.now() - abandonArme >= 3900) b.textContent = MISSION ? 'Abandonner' : 'Quitter'; }, 4000);
     return;
   }
-  if(MISSION){ finMission(false, 'Mission abandonnée.'); MS.fin.immediat = true; verifierDebriefing(); }
-  else location.href = location.pathname;
+  ordonner({type:'abandon'});   // effet : appliquerOrdre ('abandon')
 }
 
 // =====================================================================
@@ -5731,17 +6059,26 @@ function majBoutonsMusique(){
   for(const id of ['volMusique', 'volMusiqueMenu']){ const r = el(id); if(r){ r.value = Math.round(prefMusique.volume*100); r.disabled = !dispo; } }
 }
 // Combats récents visibles ou impliquant le joueur -> intensité de la musique.
+// Intensité par camp : chaleurCamps[camp] monte quand le camp est touché ou frappe ; chaleurVue, pour le seul
+// joueur local, quand un combat sans lui se voit à sa caméra. Musique du joueur local : chaleurCombat =
+// chaleurCamps[campLocal()] + chaleurVue (même somme qu'avant, quand tout passait par chaleurCombat).
+let chaleurCamps = {}, chaleurVue = 0;
 function noterCombat(c, auteur, deg){
-  const v = window.R3D && R3D.vue;
-  const implique = c.camp === campJoueur || (auteur && auteur.camp === campJoueur);
-  const visible = v && Math.hypot(c.x - v.x, c.y - v.y) < v.distance*0.9;
-  if(implique || visible) chaleurCombat += Math.min(3, 0.3 + deg/30);
+  if(mondeMuet) return;   // hôte du mode ?echo : la musique suit le monde de l'invité
+  const v = window.R3D && R3D.vue, k = Math.min(3, 0.3 + deg/30);
+  const ca = auteur && auteur.camp;
+  if(CAMPS_JOUEURS.includes(c.camp)) chaleurCamps[c.camp] = (chaleurCamps[c.camp] || 0) + k;
+  if(ca && ca !== c.camp && CAMPS_JOUEURS.includes(ca)) chaleurCamps[ca] = (chaleurCamps[ca] || 0) + k;
+  const implique = c.camp === campJoueur || ca === campJoueur;
+  if(!implique && v && Math.hypot(c.x - v.x, c.y - v.y) < v.distance*0.9) chaleurVue += k;
 }
 function majMusique(dtReel){
   musiqueT -= dtReel;
   if(musiqueT > 0) return;
   musiqueT = 1;
-  chaleurCombat *= 0.8;
+  for(const id in chaleurCamps) chaleurCamps[id] *= 0.8;
+  chaleurVue *= 0.8;
+  chaleurCombat = (chaleurCamps[campJoueur] || 0) + chaleurVue;
   if(musiquePrete && enJeu && !partieFinie) appelMusique('intensite', Math.min(1, chaleurCombat/18));
 }
 
@@ -5826,15 +6163,15 @@ function initInterfaceSurprises(params){
   else if(params.get('surprises') === '1') surprise.demandee = true;   // case cochée avant un changement de carte
   const c = el('modeSurprises');
   if(c){ c.checked = surprise.demandee; c.onchange = () => { surprise.demandee = c.checked; }; }
-  const b = el('bAlliance'); if(b) b.onclick = () => proposerAlliance();
-  const o = el('bFaireAlliance'); if(o) o.onclick = () => repondreAlliance(true);
-  const n = el('bRefuserAlliance'); if(n) n.onclick = () => repondreAlliance(false);
+  const b = el('bAlliance'); if(b) b.onclick = () => ordonner({type:'proposerTreve'});
+  const o = el('bFaireAlliance'); if(o) o.onclick = () => ordonner({type:'alliance', oui:true});
+  const n = el('bRefuserAlliance'); if(n) n.onclick = () => ordonner({type:'alliance', oui:false});
 }
 // Début d'une escarmouche (appelé par demarrer) : tirage de la surprise et de son instant.
 function preparerSurprises(){
   alliance = false;
   Object.assign(surprise, {actif:false, def:null, instant:Infinity, etat:'aucune', gel:false, arrivee:false,
-    vaisseauDetruit:false, refusee:false, signeI:0, secours:false, cineT:0, jalonSecours:0, plan:null, majT:0, alerteT:-99});
+    vaisseauDetruit:false, refusee:false, signeI:0, secours:false, cineT:0, jalonSecours:0, plan:null, majT:0, alerteT:-99, alertesT:{}});
   const b = el('bAlliance'); if(b) b.classList.add('cache');
   if(!surprise.demandee || MISSION) return;
   surprise.actif = true;
@@ -5875,7 +6212,7 @@ function signesInvasion(reste){
   const avance = surprise.def.avance || 20, k = Math.max(0, Math.min(1, 1 - reste/avance));
   assombrir(0.45*k);
   const i = Math.floor((avance - reste)/(avance/SIGNES_INVASION.length));
-  while(surprise.signeI <= i && surprise.signeI < SIGNES_INVASION.length) message(SIGNES_INVASION[surprise.signeI++], 'alerte');
+  while(surprise.signeI <= i && surprise.signeI < SIGNES_INVASION.length) notifier('tous', SIGNES_INVASION[surprise.signeI++], 'alerte');
 }
 // Trajectoire d'arrivée : par le milieu du bord de carte le plus éloigné des deux bases à la fois (le plus
 // grand des deux minimums), en écartant un bord en mer ; le vaisseau s'arrête à l'entrée de la carte.
@@ -5978,8 +6315,8 @@ function finCinematique(){
   ouvrirDialogueAlliance();
 }
 // Autres camps encore en jeu ; à deux camps, l'adversaire unique (textes du duel inchangés).
-function autresCampsVivants(){ return campsEnJeu().filter(c => c !== campJoueur && enVie(c)); }
-function treveGenerale(){ return autresCampsVivants().length > 1; }
+function autresCampsVivants(vue){ vue = vue || campJoueur; return campsEnJeu().filter(c => c !== vue && enVie(c)); }
+function treveGenerale(vue){ return autresCampsVivants(vue).length > 1; }
 function ouvrirDialogueAlliance(){
   if(treveGenerale()){
     const liste = autresCampsVivants().map(c => echapper(nomCamp(c).toLowerCase() + ' (' + faction(c).nom + ')')).join(', ');
@@ -6017,8 +6354,8 @@ function repondreAlliance(oui){
     S.refusee = true;
     el('bAlliance').classList.remove('cache');
     el('bAlliance').textContent = treveGenerale() ? 'Proposer une trêve' : 'Proposer une alliance';
-    if(treveGenerale()) message('Trêve refusée : les envahisseurs attaquent tout le monde, et chaque équipe poursuit sa guerre.', 'alerte');
-    else message('Guerre à trois : les envahisseurs attaquent tout le monde, et ' + nomFaction(autresCampsVivants()[0] || 'I', 'le') + ' aussi.', 'alerte');
+    notifier('tous', v => treveGenerale(v) ? 'Trêve refusée : les envahisseurs attaquent tout le monde, et chaque équipe poursuit sa guerre.'
+      : 'Guerre à trois : les envahisseurs attaquent tout le monde, et ' + nomFaction(autresCampsVivants(v)[0] || 'I', 'le') + ' aussi.', 'alerte');
   }
 }
 function proposerAlliance(){
@@ -6040,8 +6377,8 @@ function conclureAlliance(){
     if(camps[u.camp] && camps[u.camp].ia && u.est === 'unite' && o && o.type === 'attaqueDeplacement'){ u.ordre = null; u.chemin = null; }
   }
   projectiles = projectiles.filter(p => !(p.cible && allies(p.camp, p.cible.camp)));
-  if(treve) message('Tous les camps acceptent la trêve. Cessez-le-feu général : toutes les forces contre le vaisseau-mère !', 'succes');
-  else message(nomFaction(adv, 'le', true) + ' accepte l’alliance. Cessez-le-feu : toutes les forces contre le vaisseau-mère !', 'succes');
+  notifier('tous', v => treveGenerale(v) || treve ? 'Tous les camps acceptent la trêve. Cessez-le-feu général : toutes les forces contre le vaisseau-mère !'
+    : nomFaction(v === campJoueur ? adv : campJoueur, 'le', true) + ' accepte l’alliance. Cessez-le-feu : toutes les forces contre le vaisseau-mère !', 'succes');
 }
 
 // ---------- Envahisseurs : vaisseau-mère, dards, rôdeurs ----------
@@ -6053,7 +6390,7 @@ function tirPlasma(u, c, deg){
     sx = u.x + Math.cos(a)*u.rayon*0.55; sy = u.y + Math.sin(a)*u.rayon*0.55; h1 = Math.max(20, u.alt - 40);
   }
   const h2 = hauteurVisee(c), d = Math.hypot(c.x - sx, c.y - sy, h2 - h1);
-  projectiles.push({genre:'plasma', arme:'plasma', sx, sy, tx:c.x, ty:c.y, h1, h2, t:0, duree:Math.max(0.15, d/VITESSE_PLASMA),
+  lancerProjectile({genre:'plasma', arme:'plasma', sx, sy, tx:c.x, ty:c.y, h1, h2, t:0, duree:Math.max(0.15, d/VITESSE_PLASMA),
     degats:deg, zone:0, camp:u.camp, auteur:u, cible:c});
 }
 // Bouclier : il absorbe les dégâts tant qu'il tient (éclat visible à l'impact, une fois par 0,2 s au plus).
@@ -6099,9 +6436,9 @@ function baseVisee(u){
     if(!best) best = exclu;
     u.alterneT = temps + ALTERNANCE_DUREE; u.santeVisee = sante;
     if(best !== u.campVise && best){
-      message(best === campJoueur ? 'Le vaisseau-mère se dirige vers notre base !' :
-        'Le vaisseau-mère se dirige vers la base ' + (allies(best, campJoueur) ? 'alliée' : 'adverse') +
-        (campsEnJeu().length > 2 ? ' (' + nomCamp(best).toLowerCase() + ').' : '.'), best === campJoueur ? 'alerte' : 'info');
+      notifier('tous', v => best === v ? {texte:'Le vaisseau-mère se dirige vers notre base !', genre:'alerte'} :
+        {texte:'Le vaisseau-mère se dirige vers la base ' + (allies(best, v) ? 'alliée' : 'adverse') +
+        (campsEnJeu().length > 2 ? ' (' + nomCamp(best).toLowerCase() + ').' : '.'), genre:'info'});
     }
     u.campVise = best; u.batVise = null;
   }
@@ -6175,7 +6512,7 @@ function majVaisseauMere(u, dt){
   // (le temps, pour les joueurs, de préparer leur défense antiaérienne).
   if(u.observeT > 0){
     u.observeT -= dt;
-    if(u.observeT <= 0) message('Le vaisseau-mère se met en mouvement.', 'alerte');
+    if(u.observeT <= 0) notifier('tous', 'Le vaisseau-mère se met en mouvement.', 'alerte');
   }
   // Déplacement : très lent, vers le bâtiment visé ; il s'immobilise au-dessus de lui.
   const b = u.observeT > 0 ? null : baseVisee(u);
@@ -6197,10 +6534,14 @@ function majVaisseauMere(u, dt){
       if(c){
         u.cibleRayon = {x:c.x, y:c.y}; u.rayonEtat = 'charge'; u.chargeT = 0; u.charge = 0;
         effet('chargeSol', {x:c.x, y:c.y, rayon:P.rayonZone, t:temps, duree:P.charge});
-        const visesJ = ents.some(e => e.camp === campJoueur && !e.mort && Math.hypot(e.x - c.x, e.y - c.y) < P.rayonZone + 60);
-        if(visesJ && temps - surprise.alerteT > 10){
-          surprise.alerteT = temps; alerte = {t:temps, x:c.x, y:c.y};
-          message('Le vaisseau-mère charge son rayon : sortez du cercle ! (Espace pour y aller)', 'alerte');
+        // Alerte à chaque camp de joueur qui a des entités dans le cercle (au plus une toutes les 10 s par camp).
+        const alertesT = surprise.alertesT || (surprise.alertesT = {});
+        for(const v of campsEnJeu()){
+          if(!(temps - (alertesT[v] != null ? alertesT[v] : -99) > 10)) continue;
+          if(!ents.some(e => e.camp === v && !e.mort && Math.hypot(e.x - c.x, e.y - c.y) < P.rayonZone + 60)) continue;
+          alertesT[v] = temps; alertes[v] = {t:temps, x:c.x, y:c.y};
+          if(v === campJoueur) surprise.alerteT = temps;
+          notifier(v, 'Le vaisseau-mère charge son rayon : sortez du cercle ! (Espace pour y aller)', 'alerte');
         }
       }
     }
@@ -6258,7 +6599,7 @@ function majEnvahisseurs(dt){
 function vaisseauDetruit(c){
   if(c.demo) return;
   surprise.vaisseauDetruit = true;
-  message('Le vaisseau-mère est abattu ! Ses dards et ses rôdeurs perdent leur guidage.', 'succes');
+  notifier('tous', 'Le vaisseau-mère est abattu ! Ses dards et ses rôdeurs perdent leur guidage.', 'succes');
   for(const e of ents) if(e.camp === 'X' && !e.mort && e !== c){
     const x = e;
     planifier(0.6 + Math.random()*3, () => { if(!x.mort) tuer(x, null); });
@@ -6268,8 +6609,9 @@ function vaisseauDetruit(c){
 }
 // Fin de partie en mode Surprises, une fois le vaisseau-mère arrivé : false si le mode n'a pas d'effet
 // (règle habituelle), null si la partie continue, sinon {victoire, texte}.
-function finInvasion(batsJ, batsI){
-  const S = surprise;
+// vue : le camp dont on calcule l'issue (campJoueur par défaut) ; fonction pure.
+function finInvasion(batsJ, batsI, vue){
+  const S = surprise, campJoueur = vue || campLocal();   // (masque la globale : tout le texte suit « vue »)
   if(!S.actif || !S.arrivee) return false;
   if(S.gel) return null;
   const FJ = faction(campJoueur), carte = echapper(CARTE.nom);
@@ -6325,9 +6667,9 @@ function revenuSecours(dt){
       }
       if(aProd && !aColl){
         secoursCamps.add(id);
-        if(id === campJoueur && !C.secoursAverti){
-          C.secoursAverti = true;
-          message('Plus aucun collecteur : un revenu de secours vous permet d’en racheter un au QG ou au dépôt.', 'alerte');
+        if(!C.secoursAverti){
+          C.secoursAverti = true;   // une fois par partie et par camp
+          notifier(id, 'Plus aucun collecteur : un revenu de secours vous permet d’en racheter un au QG ou au dépôt.', 'alerte');
         }
       }
     }
@@ -6415,14 +6757,24 @@ function impactProjectile(p){
   if(!(p.zone > 0)){
     const c = p.cible;
     if(c && !c.mort) infliger(c, p.degats * efficacite(p.arme, c), auteur);
-    effet('explosion', {x:p.tx, y:p.ty, h:p.h2 || 0, r:13, duree:0.35});
+    effetsImpact(p);
     return;
   }
   explosionZone(p.tx, p.ty, p.zone, p.degats, p.arme, auteur, p.genre === 'bombe' ? 0.1 : undefined);
-  if(p.genre === 'bombe'){
-    effet('explosion', {x:p.tx, y:p.ty, h:0, r:p.zone*0.75, duree:0.8, grande:true});
-    brulure(p.tx, p.ty, p.zone*0.45);
-  } else effet('explosion', {x:p.tx, y:p.ty, h:0, r:20, duree:0.45});
+  effetsImpact(p);
+}
+// Partie visuelle de l'arrivée d'un projectile (étape 3 du multijoueur) : ne lit que ses données (point
+// d'arrivée, hauteur, zone, genre). L'invité l'appelle quand son propre projectile arrive au bout ; chez
+// l'hôte, elle n'entre pas dans le journal réseau.
+function effetsImpact(p){
+  journalMuet++;
+  try {
+    if(!(p.zone > 0)) effet('explosion', {x:p.tx, y:p.ty, h:p.h2 || 0, r:13, duree:0.35});
+    else if(p.genre === 'bombe'){
+      effet('explosion', {x:p.tx, y:p.ty, h:0, r:p.zone*0.75, duree:0.8, grande:true});
+      brulure(p.tx, p.ty, p.zone*0.45);
+    } else effet('explosion', {x:p.tx, y:p.ty, h:0, r:20, duree:0.45});
+  } finally { journalMuet--; }
 }
 const NAPPE_SOL = [], NAPPE_AIR = [], NAPPE_AVIONS = [];
 function separer(dt){
@@ -6474,8 +6826,8 @@ function verifierEliminations(){
     const C = camps[id];
     if(C.elimine || ents.some(e => e.camp === id && e.est === 'batiment' && !e.mort)) continue;
     C.elimine = true; C.elimineT = temps;
-    const qui = id === campJoueur ? 'Votre camp' : 'Le camp ' + nomCamp(id).toLowerCase() + ' (' + faction(id).nom + (camps[id].equipe ? ', équipe ' + camps[id].equipe : '') + ')';
-    message(qui + ' est éliminé.', id === campJoueur || allies(id, campJoueur) ? 'alerte' : 'succes');
+    notifier('tous', v => ({texte:(id === v ? 'Votre camp' : 'Le camp ' + nomCamp(id).toLowerCase() + ' (' + faction(id).nom + (camps[id].equipe ? ', équipe ' + camps[id].equipe : '') + ')') + ' est éliminé.',
+      genre:id === v || allies(id, v) ? 'alerte' : 'succes'}));
   }
 }
 // Sort de chaque camp, pour l'écran de fin et les outils de test.
@@ -6484,38 +6836,54 @@ function sortDesCamps(){
   for(const id of campsEnJeu()){ const C = camps[id]; r[id] = {faction:C.faction, equipe:equipeDe(id), ia:!!C.ia, elimine:!!C.elimine, t:C.elimine ? Math.round(C.elimineT) : null}; }
   return r;
 }
-function tableauCamps(victoire){
+function tableauCamps(victoire, vue){
+  vue = vue || campJoueur;
   const lignes = campsEnJeu().map(id => {
     const C = camps[id], coul = couleurCamp(id) || faction(id).couleur;
-    const etat = C.elimine ? 'éliminé à ' + enMinSec(C.elimineT) : (equipeDe(id) === equipeDe(campJoueur) ? (victoire ? 'vainqueur' : 'vaincu') : (victoire ? 'vaincu' : 'vainqueur'));
-    return `<tr><td><span style="display:inline-block;width:11px;height:11px;border-radius:2px;background:${coul};margin-right:6px"></span>${echapper(nomCamp(id))}${id === campJoueur ? ' (vous)' : ''}</td>
+    const etat = C.elimine ? 'éliminé à ' + enMinSec(C.elimineT) : (equipeDe(id) === equipeDe(vue) ? (victoire ? 'vainqueur' : 'vaincu') : (victoire ? 'vaincu' : 'vainqueur'));
+    return `<tr><td><span style="display:inline-block;width:11px;height:11px;border-radius:2px;background:${echapper(coul)};margin-right:6px"></span>${echapper(nomCamp(id))}${id === vue ? ' (vous)' : ''}${pseudosEnLigne[id] ? ' · ' + echapper(camps[id].ia ? 'ordinateur (' + pseudosEnLigne[id] + ' parti)' : pseudosEnLigne[id]) : ''}</td>
       <td>${echapper(faction(id).nom)}</td><td>équipe ${echapper(equipeDe(id))}</td><td><b>${etat}</b></td></tr>`;
   }).join('');
   return `<table>${lignes}</table>`;
 }
 // Fin d'une escarmouche. L'équipe du joueur gagne quand toutes les équipes adverses sont éliminées.
 // Le joueur éliminé perd la partie, même si un allié tient encore (choix par défaut, à confirmer).
+// Issue de l'escarmouche pour un camp (fonction pure : lit l'état, n'écrit rien ; règles de verifierFin et
+// de finInvasion). null : la partie continue pour ce camp ; sinon {victoire, texte, invasion} (invasion :
+// issue décidée par la règle du mode Surprises). Un camp gagne quand toutes les équipes adverses sont
+// éliminées ; il perd quand il est éliminé lui-même (même si un allié tient : règle du solo).
+function issuePourCamp(camp){
+  const batsJ = enVie(camp);
+  const batsI = campsEnJeu().some(id => enVie(id) && equipeDe(id) !== equipeDe(camp));
+  // Mode Surprises, envahisseurs arrivés : voir finInvasion (null tant que la partie continue).
+  const finX = finInvasion(batsJ, batsI, camp);
+  if(finX === null) return null;
+  if(!finX && batsJ && batsI) return null;
+  const victoire = finX ? finX.victoire : !batsI, F = faction(camp);
+  return {victoire, texte:finX ? finX.texte : (victoire ? F.victoire : F.defaite), invasion:!!finX};
+}
+// Fin d'une escarmouche, pour le joueur local (issuePourCamp(campLocal())).
 function verifierFin(){
   if(window.MODE_DEMO) return;
-  verifierEliminations();
-  const batsJ = enVie(campJoueur);
-  const batsI = campsEnJeu().some(id => enVie(id) && equipeDe(id) !== equipeDe(campJoueur));
-  // Mode Surprises, envahisseurs arrivés : voir finInvasion (null tant que la partie continue).
-  const finX = finInvasion(batsJ, batsI);
-  if(finX === null) return;
-  if(!finX && batsJ && batsI) return;
+  // Invité : les éliminations viennent de l'hôte (instantanés) ; hôte du mode ?echo : pas d'écran de fin.
+  if(roleMonde !== 'invite') verifierEliminations();
+  if(mondeMuet) return;
+  if(modeReseau === 'hote' || modeReseau === 'invite'){ verifierFinEnLigne(); return; }   // en ligne : fin par équipe (section 11 quater)
+  if(roleMonde === 'invite' && !eliminationsStables()) return;   // invité du mode ?echo : éliminations stables (jamais en solo)
+  const issue = issuePourCamp(campLocal());
+  if(!issue) return;
   partieFinie = true;
-  const victoire = finX ? finX.victoire : !batsI, F = faction(campJoueur);
-  const recit = finX ? finX.texte : (victoire ? F.victoire : F.defaite);
+  const victoire = issue.victoire, recit = issue.texte;
+  const S = statsDe(campLocal());
   issuePartie = {victoire, alliance, t:temps, camps:sortDesCamps()};   // lu par les outils de test (testerEscarmouche)
-  if(window.R3D && typeof R3D.assombrir === 'function' && (!finX || finX.victoire)){ try { R3D.assombrir(0); } catch(err){} }
+  if(window.R3D && typeof R3D.assombrir === 'function' && (!issue.invasion || issue.victoire)){ try { R3D.assombrir(0); } catch(err){} }
   el('finContenu').innerHTML = `<h1 style="color:${victoire ? '#6fd67c' : '#ff7a5c'}">${victoire ? 'VICTOIRE' : 'DÉFAITE'}</h1>
     <p class="recit">${recit}</p>
-    ${campsEnJeu().length > 2 || couleurCamp(campJoueur) ? tableauCamps(victoire) : ''}
+    ${campsEnJeu().length > 2 || couleurCamp(campLocal()) ? tableauCamps(victoire, campLocal()) : ''}
     <table><tr><td>Durée</td><td><b>${enMinSec(temps)}</b></td></tr>
-    <tr><td>Unités produites</td><td><b>${stats.produites}</b></td></tr>
-    <tr><td>Pertes (unités et bâtiments)</td><td><b>${stats.perdues}</b></td></tr>
-    <tr><td>Ennemis détruits (unités et bâtiments)</td><td><b>${stats.detruites}</b></td></tr></table>
+    <tr><td>Unités produites</td><td><b>${S.produites}</b></td></tr>
+    <tr><td>Pertes (unités et bâtiments)</td><td><b>${S.perdues}</b></td></tr>
+    <tr><td>Ennemis détruits (unités et bâtiments)</td><td><b>${S.detruites}</b></td></tr></table>
     <button class="grand" onclick="location.href=location.pathname">Retour au menu</button>`;
   el('fin').classList.remove('cache');
   jouerMusique(victoire ? 'victoire' : 'defaite');
@@ -6524,7 +6892,9 @@ function boucle(ts){
   const brut = dernierTs ? (ts - dernierTs)/1000 : 0;
   dernierTs = ts;
   const dt = Math.min(0.05, brut);
-  if(enJeu && surprise.etat === 'cinematique'){
+  if(enJeu && modeReseau){
+    boucleReseau(dt, brut, ts);   // en ligne ou mode d'essai ?echo (section 11 ter) ; le solo ne passe jamais ici
+  } else if(enJeu && surprise.etat === 'cinematique'){
     avancerCinematique(Math.min(0.1, brut));   // mode Surprises : la cinématique pilote caméra et rendu
   } else if(enJeu){
     if(!enPause && !partieFinie) miseAJour(dt);
@@ -6696,6 +7066,7 @@ function majAffichagePerf(ts, brut){
   const lignes = [Math.round(ips) + ' images/s · ' + ms.toFixed(1) + ' ms',
     'appels : ' + (appels == null ? '?' : appels) + ' · triangles : ' + (tri == null ? '?' : (tri >= 1e6 ? (tri/1e6).toFixed(2) + ' M' : Math.round(tri/1000) + ' k')),
     'résolution : ' + (ech == null ? '?' : '×' + ech.toFixed(2)) + (cv3 ? ' (' + cv3.width + '×' + cv3.height + ')' : '') + ' · ' + qualiteGraphique];
+  if(modeReseau === 'hote' || modeReseau === 'invite') lignes.push(...lignesPerfReseau());
   ecrireTexte(el('perfAff'), lignes.join('\n'));
 }
 
@@ -6794,7 +7165,8 @@ function repartirEmplacements(liste, empl){
   essayer();
   return best;
 }
-function demarrer(facJ, config){
+// options.campLocal (en ligne) : camp du joueur de ce poste ; sans options (solo), le joueur est J.
+function demarrer(facJ, config, options){
   const diff = DIFFICULTES[difficulte];
   const empl = emplacementsCarte(CARTE);
   let liste = Array.isArray(config) ? config : configurationDuel(facJ);
@@ -6803,7 +7175,7 @@ function demarrer(facJ, config){
   camps = {};
   reinitialiserIA();
   secoursCamps = new Set(); secoursT = 0;   // revenu de secours (voir revenuSecours)
-  campJoueur = 'J';
+  campJoueur = options && options.campLocal && liste.some(k => k.id === options.campLocal) ? options.campLocal : 'J';
   liste.forEach((k, i) => {
     camps[k.id] = {id:k.id, faction:k.faction, equipe:k.equipe, couleur:k.couleur || COULEURS_CAMPS[k.id], ia:!!k.ia,
       elimine:false, elimineT:null, emplacement:null, reserves:1000, points:0, recharges:{}};
@@ -6839,7 +7211,7 @@ function demarrer(facJ, config){
     const fant = F.production.caserne[0];
     for(let k=0;k<3;k++){ const p = positionSortie(qg); creerUnite(fant, camp, p.x + (k-1)*20, p.y + 40); }
   }
-  stats.produites = 0; stats.perdues = 0; stats.detruites = 0;
+  statsCamps = {};   // statistiques de fin, par camp (les unités de départ ne comptent pas)
   el('menu').classList.add('cache');
   for(const id of ['barre','panneau','mini']) el(id).classList.remove('cache');
   el('bAbandon').textContent = 'Quitter';
@@ -6949,9 +7321,9 @@ function erreurMission(texte){
 function lancement(){
   el('texteCommandes').innerHTML = TEXTE_COMMANDES;
   el('texteCommandes2').innerHTML = TEXTE_COMMANDES;
-  el('bPause').onclick = basculerPause;
-  el('bAide').onclick = () => { if(!enPause) basculerPause(); el('aide').classList.remove('cache'); };
-  el('bFermerAide').onclick = () => { el('aide').classList.add('cache'); if(enPause) basculerPause(); };
+  el('bPause').onclick = () => ordonner({type:'pause'});
+  el('bAide').onclick = () => { if(!enPause) ordonner({type:'pause', oui:true}); el('aide').classList.remove('cache'); };
+  el('bFermerAide').onclick = () => { el('aide').classList.add('cache'); if(enPause) ordonner({type:'pause', oui:false}); };
   el('bAbandon').onclick = abandonner;
   el('objTete').onclick = basculerObjectifs;
   el('radio').onclick = () => { MS.radio.finT = temps; };
@@ -7003,7 +7375,9 @@ function suiteLancement(params){
     else if(!M.carte || typeof M.carte !== 'object') probleme = erreurMission('la mission « ' + idMission + ' » n’a pas de carte.');
     else MISSION = M;
   }
-  const carte = MISSION ? MISSION.carte : (typeof CARTES !== 'undefined' && (CARTES[params.get('carte')] || CARTES.portCalmes));
+  // ?carte= (lien, ou rechargement sur la carte de l'hôte) : seule une clé propre du catalogue est admise.
+  const idCarte = params.get('carte');
+  const carte = MISSION ? MISSION.carte : (typeof CARTES !== 'undefined' && ((idCarte && Object.prototype.hasOwnProperty.call(CARTES, idCarte) && CARTES[idCarte]) || CARTES.portCalmes));
   if(!carte){ el('menu').classList.add('cache'); el('erreur3d').classList.remove('cache'); console.warn('[Carte] cartes.js absent.'); return; }
   // Rochers : on évite le départ de la mission (bâtiments et unités).
   const evit = [];
@@ -7052,12 +7426,1528 @@ function suiteLancement(params){
     // L'accueil garde Port-Calmes en fond : depuis une mission ou une autre carte, on recharge la page.
     if(MISSION || CARTE.id !== 'portCalmes') location.href = location.pathname + '?diff=' + difficulte; else afficherAccueil();
   };
-  if(/demo/.test(location.search)){ el('menu').classList.add('cache'); lancerDemo(); }
+  if(/[?&]echo(=|&|$)/.test(location.search) && !MISSION){ el('menu').classList.add('cache'); lancerEcho(params); }
+  else if(/demo/.test(location.search)){ el('menu').classList.add('cache'); lancerDemo(); }
   else if(MISSION) afficherBriefing();
+  else if(params.get('salon')) afficherRejoindre(params);   // lien d'invitation (?salon=CODE)
   else if(params.get('carte') && CARTE.id === params.get('carte')) afficherEscarmouche();
   else if(params.get('campagne')) afficherCampagne(params.get('campagne'));
   else afficherAccueil();
   if(probleme){ message('Impossible de charger la mission : ' + probleme, 'alerte'); }
   requestAnimationFrame(boucle);
 }
+// =====================================================================
+//  11 ter. MULTIJOUEUR : instantanés (hôte), application et lissage (invité), mode d'essai ?echo
+// =====================================================================
+// Étapes 3 à 5 du plan (travaux/multijoueur/INVENTAIRE-MOTEUR.md, § 5), encore sans serveur. L'hôte fait
+// autorité : il simule (miseAJour), décrit l'état 10 fois par seconde (fabriquerInstantane) pour le codec de
+// reseau.js et applique les ordres reçus avec le camp du siège de l'expéditeur. L'invité ne simule pas : il
+// range les instantanés reçus dans un tampon, les affiche avec RESEAU.retard de retard en interpolant
+// positions, angles et altitudes, met ses entités à jour EN PLACE (sélection, groupes et rendu tiennent des
+// références), recrée une fois projectiles et effets, et pose lui-même les effets d'impact et de mort.
+// Le solo ne passe jamais par ce code (modeReseau reste null) ; seules les entrées communes ont été touchées :
+// effet, lancerProjectile, brulure, effetsDeMort, effetsImpact, notifier, executerOrdre, boucle, verifierFin.
+// Aucune sécurité ici : jeton par siège et limite d'ordres sont dans reseau.js, la validation stricte dans
+// validerOrdre (chez l'hôte).
+const RESEAU = {
+  periode:0.1,            // s de jeu entre deux instantanés (10 par seconde ; complet toutes les 2 s, choisi par reseau.js)
+  // s : retard d'affichage de l'invité derrière le dernier instantané reçu. 0,15 depuis le 14 novembre 2026 (défaut R3) :
+  // hôte mené par le minuteur du Worker (pas de 50 ms), les écarts entre instantanés valent 100 ou 150 ms (9e décile
+  // 142 ms mesuré à travers HiveMQ) ; à 0,12 s, l'invité prolongeait les positions 58 à 99 fois en 20 s, 38 fois à 0,15 s.
+  retard:0.15,
+  extrapolationMax:0.25,  // s : au-delà du dernier instantané, les positions sont prolongées au plus de cette durée
+  ecartEnorme:150,        // px : un déplacement plus grand entre deux instantanés est un saut réel (pas de glissade)
+  lissage:0.1,            // s : constante de résorption d'un écart après une extrapolation
+  mineraiT:2,             // s : envoi des champs de minerai (s'ils ont changé)
+  entitesMax:3000,        // invité : un instantané de plus d'unités et de bâtiments est refusé (une vraie partie en a quelques centaines)
+  reculsMax:3,            // invité : instantanés de suite au temps antérieur au dernier reçu avant de repartir d'eux (défaut S2)
+  tamponMax:50,           // invité : instantanés en attente d'affichage au plus (5 s) ; au-delà, les plus anciens sont jetés
+  // Invité (14 novembre 2026, ?v=28) : une élimination lue dans le flux n'est tenue pour sûre (écran de fin, message
+  // « spectateur ») qu'après être restée vraie sur des instantanés consécutifs couvrant au moins eliminationS secondes
+  // de jeu, et au moins eliminationN instantanés ; sinon seule la fin confirmée par reseau.js (événement 'fin') compte.
+  eliminationS:1,
+  eliminationN:5,
+};
+// ---------- Contrôle de ce qui vient du réseau (défauts S1 et S2, 14 novembre 2026) ----------
+// reseau.js contrôle la forme des messages ; jeu.js contrôle leur sens avec ses propres tables, sans compter sur
+// reseau.js : listes blanches pour tout ce qui est énuméré, couleur d'un camp toujours locale, nombres finis et
+// bornés, entiers bornés pour les indices, texte échappé (echapper) ou posé par textContent.
+const aCle = (o, k) => typeof k === 'string' && o != null && Object.prototype.hasOwnProperty.call(o, k);
+const couleurDuCamp = id => aCle(COULEURS_CAMPS, id) ? COULEURS_CAMPS[id] : '#888888';
+const entierEntre = (v, a, b) => Number.isInteger(v) && v >= a && v <= b;
+const bornerNb = (v, a, b, def) => typeof v === 'number' && isFinite(v) ? Math.max(a, Math.min(b, v)) : def;
+const nombreOuNul = v => typeof v === 'number' && isFinite(v) ? v : null;
+let modeReseau = null;      // null (solo) | 'hote' | 'invite' | 'echo'
+let salonHote = null, salonInvite = null;
+// Mode ?echo : deux mondes dans la même page (celui de l'hôte, simulé et muet ; celui de l'invité, dessiné).
+let mondes = null, mondeCourant = null;
+const echo = {pret:false, piloteExterne:false, apresPasHote:null, apresPasInvite:null, bus:null, erreur:null};
+
+// ---------- Tables du codec (identiques chez tous : même version du jeu) ----------
+const EFFETS_RESEAU = ['trait', 'eclair', 'explosion', 'fumee', 'marqueur', 'missile', 'rayon', 'chargeSol', 'bouclier', 'brulure'];
+const PROJECTILES_RESEAU = ['roquette', 'missileAir', 'bombe', 'plasma'];
+const COULEURS_TRAIT = ['#fff1a8', '#bfe9ff', '#a8d8ff'];
+function tablesReseau(){
+  if(tablesReseau.t) return tablesReseau.t;
+  const armes = new Set(['balle', 'drone', 'roquette', 'roquetteAT', 'plasma', 'frappe', 'missileAir', 'bombe']), roles = new Set(['bazooka']);
+  for(const D of Object.values(UNITES).concat(Object.values(BATIMENTS))){
+    for(const A of [D, D.armeAir, D.armeSol]) if(A && typeof A.arme === 'string') armes.add(A.arme);
+    if(typeof D.role === 'string') roles.add(D.role);
+  }
+  const pouvoirs = new Set();
+  for(const f of Object.keys(POUVOIRS)) for(const P of POUVOIRS[f] || []) if(P && P.cle) pouvoirs.add(P.cle);
+  const t = {unites:Object.keys(UNITES), batiments:Object.keys(BATIMENTS), camps:['J', 'I', 'K', 'L', 'N', 'X'],
+    pouvoirs:[...pouvoirs].sort(), projectiles:PROJECTILES_RESEAU, armes:[...armes].sort(), effets:EFFETS_RESEAU};
+  t.armesEffet = [null].concat(t.armes); t.roles = [null].concat([...roles].sort());
+  t.ensembleArmes = new Set(t.armes);
+  return (tablesReseau.t = t);
+}
+function declarerTypesReseau(){
+  const t = tablesReseau();
+  Reseau.definirTypes({unites:t.unites, batiments:t.batiments, camps:t.camps, pouvoirs:t.pouvoirs, projectiles:t.projectiles, armes:t.armes, effets:t.effets});
+}
+const indiceOu0 = (liste, v) => { const i = liste.indexOf(v == null ? null : v); return i < 0 ? 0 : i; };
+const octet = v => Math.max(0, Math.min(255, Math.round(+v || 0)));
+
+// ---------- Effets : données du moteur <-> enregistrement du codec {type, x, y, duree, p1, p2, x2, y2, h1, h2} ----------
+// p1, p2 (0-255) : trait p1 = arme (bits 0-6) + largeur 3 (bit 7), p2 = rôle (bits 0-4) + couleur (bits 5-7) ;
+// éclair p1 = arme ; explosion p1 = grande (bit 0) + bâtiment (bit 1), p2 = rayon ; marqueur p1 = camp, p2 = rayon,
+// h1 = pouvoir + 1 ; rayon p2 = largeur ; chargeSol p2 = rayon ; brûlure p2 = rayon.
+function effetVersReseau(f){
+  const T = tablesReseau();
+  switch(f.type){
+    case 'trait': return {type:'trait', x:f.x1, y:f.y1, x2:f.x2, y2:f.y2, h1:f.h1 || 0, h2:f.h2 || 0, duree:f.duree,
+      p1:(indiceOu0(T.armesEffet, f.arme) & 127) | (f.largeur >= 2.5 ? 128 : 0),
+      p2:(indiceOu0(T.roles, f.role) & 31) | ((indiceOu0(COULEURS_TRAIT, f.couleur) & 7) << 5)};
+    case 'eclair': return {type:'eclair', x:f.x, y:f.y, h1:f.h || 0, h2:0, duree:f.duree, p1:indiceOu0(T.armesEffet, f.arme) & 127};
+    case 'explosion': return {type:'explosion', x:f.x, y:f.y, h1:f.h || 0, h2:0, duree:f.duree, p1:(f.grande ? 1 : 0) | (f.batiment ? 2 : 0), p2:octet(f.r)};
+    case 'fumee': case 'missile': return {type:f.type, x:f.x, y:f.y, duree:f.duree};
+    case 'marqueur': return {type:'marqueur', x:f.x, y:f.y, duree:f.duree, p1:indiceOu0(T.camps, f.camp), p2:octet(f.r), h1:T.pouvoirs.indexOf(f.pouvoir) + 1, h2:0};
+    case 'rayon': return {type:'rayon', x:f.x1, y:f.y1, x2:f.x2, y2:f.y2, h1:f.h1 || 0, h2:f.h2 || 0, duree:f.duree, p2:octet(f.largeur)};
+    case 'chargeSol': return {type:'chargeSol', x:f.x, y:f.y, duree:f.duree, p2:octet(f.rayon)};
+    case 'bouclier': return {type:'bouclier', x:f.x, y:f.y, h1:f.h || 0, h2:0, duree:f.duree};
+    case 'brulure': return {type:'brulure', x:f.x, y:f.y, duree:0, p2:octet(f.r)};
+  }
+  return null;
+}
+// Chez l'invité : recrée l'effet une seule fois (les champs t des effets d'aliens prennent l'horloge locale).
+function effetDepuisReseau(e){
+  const T = tablesReseau();
+  switch(e.type){
+    case 'trait': {
+      const p = {x1:e.x, y1:e.y, h1:e.h1 || 0, x2:e.x2, y2:e.y2, h2:e.h2 || 0, duree:e.duree,
+        couleur:COULEURS_TRAIT[(e.p2 >> 5) & 7] || COULEURS_TRAIT[0], largeur:e.p1 & 128 ? 3 : 1.5};
+      const a = T.armesEffet[e.p1 & 127], r = T.roles[e.p2 & 31];
+      if(a) p.arme = a; if(r) p.role = r;
+      effet('trait', p); return;
+    }
+    case 'eclair': { const p = {x:e.x, y:e.y, h:e.h1 || 0, duree:e.duree}; const a = T.armesEffet[e.p1 & 127]; if(a) p.arme = a; effet('eclair', p); return; }
+    case 'explosion': { const p = {x:e.x, y:e.y, h:e.h1 || 0, r:e.p2, duree:e.duree}; if(e.p1 & 1) p.grande = true; if(e.p1 & 2) p.batiment = true; effet('explosion', p); return; }
+    case 'fumee': case 'missile': effet(e.type, {x:e.x, y:e.y, duree:e.duree}); return;
+    case 'marqueur': {
+      const camp = T.camps[e.p1], C = camps[camp], F = C && FACTIONS[C.faction];
+      effet('marqueur', {x:e.x, y:e.y, camp, r:e.p2, duree:e.duree, couleur:F ? F.couleur : '#ffd27a', pouvoir:T.pouvoirs[(e.h1 || 0) - 1]});
+      return;
+    }
+    case 'rayon': effet('rayon', {x1:e.x, y1:e.y, h1:e.h1 || 0, x2:e.x2, y2:e.y2, h2:e.h2 || 0, t:temps, duree:e.duree, largeur:e.p2}); return;
+    case 'chargeSol': effet('chargeSol', {x:e.x, y:e.y, rayon:e.p2, t:temps, duree:e.duree}); return;
+    case 'bouclier': effet('bouclier', {x:e.x, y:e.y, h:e.h1 || 0, t:temps, duree:e.duree}); return;
+    case 'brulure': brulure(e.x, e.y, e.p2); return;
+  }
+}
+// Projectile chez l'invité : mêmes champs que ceux du moteur (sans dégâts), avancé localement.
+function projectileDepuisReseau(p){
+  const q = {sx:p.sx, sy:p.sy, tx:p.tx, ty:p.ty, t:p.t0 || 0, duree:p.duree, zone:p.zone || 0, degats:0};
+  if(p.arme) q.arme = p.arme;
+  if(p.genre !== 'roquette'){ q.genre = p.genre; q.h1 = p.h1; q.h2 = p.h2; }   // roquette d'artillerie : pas de hauteurs (comme le moteur)
+  if(p.cible){ const c = invite.index.get(p.cible); if(c && !c.mort) q.cible = c; }
+  projectiles.push(q);
+}
+
+// ---------- Hôte : description de l'état ----------
+// État pour le codec (INTERFACE-RESEAU.md § 5.2) : un objet neuf à chaque appel. Les projectiles et effets nés
+// depuis l'envoi précédent sont pris dans journalReseau, qui repart à vide. etat.nouveautes : événements fiables
+// à envoyer avec cet instantané ([type, données]) : messages par camp, alertes, pause, minerai. Les morts, les
+// éliminations et la fin de partie se lisent dans l'état lui-même (entités disparues, camps.elimine).
+function fabriquerInstantane(){
+  const T = tablesReseau(), J = journalReseau || {effets:[], projectiles:[]};
+  // pause : portée par chaque instantané (bit de l'en-tête) ; l'invité en tire son état de pause, l'événement « pause »
+  // ne sert plus qu'au message à l'écran (un faux événement ne fige plus son affichage, défauts 2 et 4).
+  const etat = {temps, pause:!!enPause, camps:[], unites:[], batiments:[], projectiles:[], effets:[], nouveautes:hoteReseau.nouveautes};
+  hoteReseau.nouveautes = [];
+  for(const id of T.camps){
+    const C = camps[id]; if(!C) continue;
+    etat.camps.push({camp:id, elimine:!!C.elimine, ia:!!C.ia, reserves:Math.max(0, C.reserves || 0), points:Math.max(0, C.points || 0),
+      population:Math.min(255, population[id] || 0), recharges:C.recharges || {}});
+  }
+  for(const e of ents){
+    if(e.mort) continue;
+    if(e.est === 'unite'){
+      const r = {id:e.id, type:e.type, camp:e.camp, x:e.x, y:e.y, angle:e.angle, angleT:e.angleT, pv:e.pv, pvMax:e.pvMax,
+        auSol:!!e.auSol, travaille:!!e.travaille, rang:e.rang || 0, tirT:e.tirT, recolteT:e.recolteT, repareT:e.repareT};
+      if(typeof e.alt === 'number'){ r.alt = e.alt; r.vit = e.vit || 0; }
+      if(e.def.collecteur || e.charge > 0) r.charge = e.charge || 0;
+      if(e.cibleSoin && e.cibleSoin.id) r.cibleSoin = e.cibleSoin.id;
+      etat.unites.push(r);
+    } else {
+      const D0 = e.file.length ? UNITES[e.file[0]] : null;
+      etat.batiments.push({id:e.id, type:e.type, camp:e.camp, c:e.c, r:e.r, pv:e.pv, pvMax:e.pvMax, progres:e.progres, enCours:!!e.enCours,
+        angleT:e.angleT, bloque:!!e.bloque, file:e.file, avancement:D0 && D0.temps > 0 ? Math.min(1, e.prodT/D0.temps) : 0, rally:e.rally, tirT:e.tirT});
+    }
+  }
+  for(const p of J.projectiles){
+    if(p.arme != null && !T.ensembleArmes.has(p.arme)) p.arme = null;
+    if(PROJECTILES_RESEAU.includes(p.genre)) etat.projectiles.push(p);
+  }
+  for(const f of J.effets){ const e = effetVersReseau(f); if(e) etat.effets.push(e); }
+  journalReseau = {effets:[], projectiles:[]};
+  // Alertes des camps distants (touche Espace de l'invité), pause, champs de minerai.
+  for(const id of campsDistants()){
+    const a = alertes[id];
+    if(a && a.t !== hoteReseau.alertes[id]){ hoteReseau.alertes[id] = a.t; etat.nouveautes.push(['alerte', {camp:id, x:Math.round(a.x), y:Math.round(a.y)}]); }
+  }
+  if(enPause !== hoteReseau.pause){ hoteReseau.pause = enPause; etat.nouveautes.push(['pause', {oui:enPause}]); }
+  if(temps - hoteReseau.mineraiT >= RESEAU.mineraiT){
+    hoteReseau.mineraiT = temps;
+    const r = noeuds.map(n => Math.round(n.reste)), cle = r.join(',');
+    if(cle !== hoteReseau.minerai){ hoteReseau.minerai = cle; etat.nouveautes.push(['minerai', {r}]); }
+  }
+  return etat;
+}
+// Camps tenus par un humain distant (ni l'ordinateur, ni le joueur local de l'hôte).
+function campsDistants(){ return campsEnJeu().filter(id => !camps[id].ia && id !== campLocal()); }
+const hoteReseau = {dernierEnvoi:-1, alertes:{}, pause:false, mineraiT:-99, minerai:'', nouveautes:[], octets:0, envois:0,
+  ordres:{recus:0, acceptes:0, refuses:0, motifs:{}}};
+// Après chaque pas de simulation de l'hôte : un instantané toutes les RESEAU.periode s de jeu (force : tout de suite).
+// Instantané complet demandé par reseau.js (arrivée, retour ou rechargement d'un invité) : envoyé tout de suite,
+// même si le temps n'avance pas (pause, après la fin), sinon cet invité garderait un monde vide (défaut R2).
+// Cadence (défaut R3) : l'échéance avance d'une période fixe au lieu de repartir de l'instant de l'envoi, sinon des
+// pas de 50 à 70 ms (minuteur du Worker) ne laissent partir qu'un instantané tous les deux pas (7,5 par seconde).
+function ticHote(force){
+  if(!salonHote) return;
+  const complet = !!salonHote.completDemande, du = temps - hoteReseau.dernierEnvoi >= RESEAU.periode - 1e-6;
+  if(!force && !complet && !du && !(enPause && hoteReseau.pause !== enPause)) return;
+  hoteReseau.dernierEnvoi = du && !force ? Math.max(hoteReseau.dernierEnvoi + RESEAU.periode, temps - RESEAU.periode) : temps;
+  // Invité arrivé ou rechargé pendant une pause : l'état de pause lui est rappelé (sans annonce à l'écran).
+  if(complet && enPause && hoteReseau.pause === enPause) hoteReseau.nouveautes.push(['pause', {oui:true, rappel:true}]);
+  const etat = fabriquerInstantane(), nouveautes = etat.nouveautes;
+  delete etat.nouveautes;
+  try { const r = salonHote.envoyerEtat(etat); if(r && r.octets) hoteReseau.octets += r.octets; hoteReseau.envois++; }
+  catch(err){ console.warn('[Réseau] envoi de l’instantané impossible :', err); }
+  for(const [t, d] of nouveautes){ try { salonHote.envoyerEvenement(t, d); } catch(err){ console.warn('[Réseau] événement', t, err); } }
+}
+// Ordre reçu d'un invité : camp = celui du siège (fixé par reseau.js d'après le sujet et le jeton), jamais celui
+// annoncé dans le message. Un refus « à dire » est renvoyé au seul camp de l'expéditeur.
+const CODES_ORDRES = {droit:'droit', attaqueDeplacement:'attaqueDep', arret:'arreter', ralliement:'rally', construire:'batir',
+  produire:'produire', retirer:'retirer', pouvoir:'pouvoir'};
+const TYPES_ORDRES_RESEAU = Object.assign(Object.create(null), Object.fromEntries(Object.entries(CODES_ORDRES).map(([t, c]) => [c, t])));
+function ordreVersReseau(o){
+  const code = Object.prototype.hasOwnProperty.call(CODES_ORDRES, o.type) ? CODES_ORDRES[o.type] : null;
+  if(!code) return null;
+  const m = {o:code};
+  for(const k of Object.keys(o)) if(k !== 'type' && k !== 'camp' && o[k] !== undefined) m[k] = o[k];
+  return m;
+}
+function ordreDepuisReseau(m){
+  if(!m || typeof m !== 'object' || Array.isArray(m)) return null;
+  const type = TYPES_ORDRES_RESEAU[m.o];
+  if(!type) return null;
+  const o = {type};
+  // Noms de champs simples seulement (jamais constructor, prototype ni __proto__) ; le sens est contrôlé par validerOrdre.
+  for(const k of Object.keys(m)) if(k !== 'o' && k !== 'type' && k !== 'camp' && k !== 's' && k !== 'j' && /^[A-Za-z][A-Za-z0-9]{0,15}$/.test(k) && k !== 'constructor' && k !== 'prototype') o[k] = m[k];
+  return o;
+}
+const REFUS_DITS_EN_LIGNE = ['points', 'recharge', 'elimine'];
+function recevoirOrdreHote(camp, m){
+  const H = hoteReseau.ordres; H.recus++;
+  const o = ordreDepuisReseau(m);
+  const r = o && camps[camp] ? executerOrdre(camp, o) : {ok:false, motif:'Ordre illisible.', code:'invalide'};
+  if(r.ok) H.acceptes++; else { H.refuses++; H.motifs[r.code || r.motif] = (H.motifs[r.code || r.motif] || 0) + 1; }
+  if(!r.ok && r.genre) notifier(camp, r.motif, r.genre);
+  // Refus muets en solo mais utiles à un joueur distant, dont l'état affiché a un temps de retard (points dépensés,
+  // recharge, camp éliminé entre-temps) : renvoyés par la voie des messages par camp.
+  else if(!r.ok && REFUS_DITS_EN_LIGNE.includes(r.code)) notifier(camp, r.motif, 'info');
+  return r;
+}
+function brancherHote(salon){
+  salonHote = salon;
+  Object.assign(hoteReseau, {dernierEnvoi:-1, alertes:{}, pause:enPause, mineraiT:-99, minerai:'', nouveautes:[], octets:0, envois:0, ordres:{recus:0, acceptes:0, refuses:0, motifs:{}}});
+  const H = mondes ? mondes.hote : null;
+  dansMonde(H, () => { journalReseau = {effets:[], projectiles:[]}; });
+  // Messages de la simulation pour les camps distants (le joueur local de l'hôte les voit déjà par notifier).
+  ecouteurNotifications = (camp, texte, genre) => {
+    if(roleMonde !== 'hote' || !camps[camp] || camps[camp].ia || camp === campLocal()) return;
+    hoteReseau.nouveautes.push(['message', {camp, texte:String(texte).slice(0, 200), genre}]);
+  };
+  salon.on('ordre', ({camp, ordre}) => dansMonde(H, () => recevoirOrdreHote(camp, ordre)));
+  // Invité absent depuis 60 s (décision de la première version) : son camp passe à l'ordinateur.
+  salon.on('campConfie', ({camp}) => dansMonde(H, () => { if(camps[camp]) confierCampAOrdinateur(camp, difficulte); }));
+}
+// Camp confié à l'ordinateur en cours de partie (invité parti ; outils de test).
+function confierCampAOrdinateur(camp, niveau){
+  const C = camps[camp]; if(!C) return;
+  C.ia = true;
+  const E = etatIA(camp), dk = DIFFICULTES[niveau] || DIFFICULTES.normal;
+  E.niveau = DIFFICULTES[niveau] ? niveau : 'normal'; E.revenu = dk.revenu; E.premiereVague = dk.premiereVague; E.vague = dk.vague; E.frappeT = 0; E.t = 0.3; E.active = true;
+}
+
+// ---------- Invité : tampon, application, lissage ----------
+// elim : camp -> {T0, T, n} tant que les instantanés appliqués de suite le disent éliminé (voir eliminationStable).
+const invite = {tampon:[], courant:null, precedent:null, Ta:0, init:false, pause:false, index:new Map(), morts:false,
+  verifT:1, recus:0, appliques:0, recalages:0, extrapolations:0, reculs:0, resynchros:0, rejetes:0, jetes:0, ecarts:[], dernierRecu:0, elim:new Map()};
+function reinitialiserInvite(){
+  Object.assign(invite, {tampon:[], courant:null, precedent:null, Ta:0, init:false, pause:false, index:new Map(), morts:false,
+    verifT:1, recus:0, appliques:0, recalages:0, extrapolations:0, reculs:0, resynchros:0, rejetes:0, jetes:0, ecarts:[], dernierRecu:0, elim:new Map()});
+}
+// Élimination sûre chez l'invité (défaut du 14 novembre 2026, troisième tour) : un seul instantané faux (forgé par un
+// joueur qui a le code, limite L3) ne suffit plus à afficher une défaite ou une victoire définitive.
+function eliminationStable(id){
+  const k = invite.elim.get(id);
+  return !!k && k.n >= RESEAU.eliminationN && k.T - k.T0 >= RESEAU.eliminationS - 1e-6;
+}
+// L'écran de fin (définitif) peut-il s'afficher ? Toujours chez l'hôte. Chez l'invité, seulement sur la fin
+// confirmée par reseau.js (message privé de l'hôte scellé avec la clé du siège, que personne d'autre ne peut forger).
+// Sixième tour (15 novembre 2026) : une seconde de faux instantanés, forgés par un joueur qui a le code, suffisait à
+// afficher une DÉFAITE définitive ; « Retour au menu » libérait alors le siège chez l'hôte. Une élimination lue dans
+// le seul flux ne donne plus que l'état « spectateur », qui se défait de lui-même si le flux la dément.
+function eliminationsSures(){
+  return roleMonde !== 'invite' || enLigne.finConfirmee === true;
+}
+// Mode ?echo seulement (outil d'essai : hôte et invité dans la même page, sans réseau ni fin confirmée) : toutes les
+// éliminations lues dans le flux sont restées vraies au moins une seconde.
+function eliminationsStables(){
+  return campsEnJeu().every(id => !camps[id].elimine || eliminationStable(id));
+}
+// Enregistrements d'un instantané, recopiés et contrôlés avec les tables du jeu (un enregistrement invalide est
+// écarté, sans erreur) : types connus, camp existant, identifiant 1-65535, nombres finis et bornés à la carte.
+const MARGE_CARTE = 400;
+function uniteRecue(u){
+  if(!u || !entierEntre(u.id, 1, 65535) || !aCle(UNITES, u.type) || !aCle(camps, u.camp)) return null;
+  if(!(estNombre(u.pvMax) && u.pvMax > 0) || !estNombre(u.x) || !estNombre(u.y)) return null;
+  const r = Object.assign({}, u);
+  r.x = bornerNb(u.x, -MARGE_CARTE, LARG + MARGE_CARTE, 0); r.y = bornerNb(u.y, -MARGE_CARTE, HAUT + MARGE_CARTE, 0);
+  r.angle = bornerNb(u.angle, -100, 100, 0); r.angleT = bornerNb(u.angleT, -100, 100, r.angle);
+  r.pv = bornerNb(u.pv, 0, u.pvMax, 0); r.rang = entierEntre(u.rang, 0, 3) ? u.rang : 0;
+  for(const k of ['alt', 'vit', 'charge', 'tirT', 'recolteT', 'repareT']) r[k] = nombreOuNul(u[k]);
+  if(r.alt != null) r.alt = bornerNb(r.alt, 0, 1000, 0);
+  r.cibleSoin = entierEntre(u.cibleSoin, 1, 65535) ? u.cibleSoin : null;
+  return r;
+}
+function batimentRecu(b){
+  if(!b || !entierEntre(b.id, 1, 65535) || !aCle(BATIMENTS, b.type) || !aCle(camps, b.camp)) return null;
+  if(!entierEntre(b.c, 0, COLS - 1) || !entierEntre(b.r, 0, LIGNES - 1) || !(estNombre(b.pvMax) && b.pvMax > 0)) return null;
+  const r = Object.assign({}, b);
+  r.pv = bornerNb(b.pv, 0, b.pvMax, 0); r.progres = bornerNb(b.progres, 0, 1, 1); r.avancement = bornerNb(b.avancement, 0, 1, 0);
+  r.angleT = bornerNb(b.angleT, -100, 100, 0); r.tirT = nombreOuNul(b.tirT);
+  r.file = (Array.isArray(b.file) ? b.file : []).filter(t => aCle(UNITES, t)).slice(0, 32);
+  r.rally = b.rally && estNombre(b.rally.x) && estNombre(b.rally.y) ? {x:bornerNb(b.rally.x, 0, LARG, 0), y:bornerNb(b.rally.y, 0, HAUT, 0)} : null;
+  return r;
+}
+function projectileRecu(p){
+  if(!p || !PROJECTILES_RESEAU.includes(p.genre) || !(p.arme == null || tablesReseau().ensembleArmes.has(p.arme))) return null;
+  if(![p.sx, p.sy, p.tx, p.ty].every(v => typeof v === 'number' && isFinite(v))) return null;
+  return {genre:p.genre, arme:p.arme || null, sx:p.sx, sy:p.sy, tx:p.tx, ty:p.ty, h1:bornerNb(p.h1, 0, 1000, 0), h2:bornerNb(p.h2, 0, 1000, 0),
+    duree:bornerNb(p.duree, 0.01, 10, 0.5), t0:bornerNb(p.t0, -2, 2, 0), cible:entierEntre(p.cible, 1, 65535) ? p.cible : null, zone:bornerNb(p.zone, 0, 255, 0)};
+}
+function effetRecu(e){
+  if(!e || !EFFETS_RESEAU.includes(e.type) || !estNombre(e.x) || !estNombre(e.y)) return null;
+  const r = {type:e.type, x:e.x, y:e.y, duree:bornerNb(e.duree, 0, 60, 0), p1:entierEntre(e.p1, 0, 255) ? e.p1 : 0, p2:entierEntre(e.p2, 0, 255) ? e.p2 : 0};
+  for(const k of ['x2', 'y2', 'h1', 'h2']){ const v = nombreOuNul(e[k]); if(v != null) r[k] = v; }
+  if((e.type === 'trait' || e.type === 'rayon') && (r.x2 == null || r.y2 == null)) return null;
+  return r;
+}
+function campRecu(c){
+  if(!c || !aCle(camps, c.camp)) return null;
+  const rech = {}, P = tablesReseau().pouvoirs;
+  if(c.recharges && typeof c.recharges === 'object') for(const k of P) if(aCle(c.recharges, k)) rech[k] = bornerNb(c.recharges[k], 0, 1e5, 0);
+  return {camp:c.camp, elimine:c.elimine === true, ia:c.ia === true, reserves:bornerNb(c.reserves, 0, 1e9, 0), points:bornerNb(c.points, 0, 1e5, 0),
+    population:entierEntre(c.population, 0, 255) ? c.population : 0, recharges:rech};
+}
+// Événement 'etat' de reseau.js : les enregistrements reçus sont en lecture seule, on les copie (en les contrôlant).
+function recevoirInstantane(s){
+  if(!s || typeof s.temps !== 'number' || !isFinite(s.temps) || s.temps < 0) return;
+  const I = invite;
+  const U = Array.isArray(s.unites) ? s.unites : [], B = Array.isArray(s.batiments) ? s.batiments : [];
+  if(U.length + B.length > RESEAU.entitesMax){ I.rejetes++; return; }   // démesuré : refusé sans erreur
+  // Resynchronisation annoncée par reseau.js (après 3 s de rejets) : on repart de cet instantané, même plus ancien.
+  if(s.resynchro === true){ I.tampon.length = 0; I.courant = null; I.precedent = null; I.init = false; I.reculs = 0; I.resynchros++; }
+  let d = I.tampon.length ? I.tampon[I.tampon.length - 1] : I.courant;
+  if(d && s.temps < d.T - 1e-6){
+    // Temps en arrière alors que le numéro avance (reseau.js n'émet jamais un instantané plus ancien) : celui qu'on a
+    // gardé était aberrant (forgé). Ignoré une ou deux fois, puis on repart des vrais : l'invité ne reste jamais figé.
+    if(++I.reculs < RESEAU.reculsMax){ I.rejetes++; return; }
+    I.tampon.length = 0; I.courant = null; I.precedent = null; I.init = false; I.reculs = 0; I.resynchros++; d = null;
+  } else I.reculs = 0;
+  const snap = {T:s.temps, recu:performance.now()/1000, n:s.n, unites:new Map(), batiments:new Map(), camps:[], projectiles:[], effets:[]};
+  for(const c of Array.isArray(s.camps) ? s.camps.slice(0, 8) : []){ const r = campRecu(c); if(r) snap.camps.push(r); }
+  for(const u of U){ const r = uniteRecue(u); if(r && !snap.unites.has(r.id)) snap.unites.set(r.id, r); }
+  for(const b of B){ const r = batimentRecu(b); if(r && !snap.unites.has(r.id) && !snap.batiments.has(r.id)) snap.batiments.set(r.id, r); }
+  for(const p of Array.isArray(s.projectiles) ? s.projectiles.slice(0, 255) : []){ const r = projectileRecu(p); if(r) snap.projectiles.push(r); }
+  for(const e of Array.isArray(s.effets) ? s.effets.slice(0, 255) : []){ const r = effetRecu(e); if(r) snap.effets.push(r); }
+  if(I.dernierRecu){ I.ecarts.push(snap.recu - I.dernierRecu); if(I.ecarts.length > 600) I.ecarts.shift(); }   // mesure de cadence (F8, essais)
+  I.dernierRecu = snap.recu;
+  // Pause tirée du flux (bit posé par l'hôte dans chaque instantané) : le plus récent reçu fait foi, un événement
+  // « pause » forgé est démenti par l'instantané suivant (défauts 2 et 4).
+  if(typeof s.pause === 'boolean') majPauseInvite(s.pause);
+  if(d && s.temps === d.T && I.tampon.length){ I.tampon[I.tampon.length - 1] = snap; return; }   // même instant (pause) : le plus récent remplace
+  // Tampon borné : un affichage arrêté (quelle qu'en soit la cause) ne fait plus grossir la mémoire sans fin.
+  while(I.tampon.length >= RESEAU.tamponMax){ I.tampon.shift(); I.jetes++; }
+  I.tampon.push(snap);
+  I.recus++;
+}
+// État de pause de l'invité (horloge d'affichage arrêtée) et libellé du bouton.
+function majPauseInvite(oui){
+  if(invite.pause === oui && enPause === oui) return;
+  invite.pause = enPause = oui;
+  const b = el('bPause'); if(b) b.textContent = enPause ? 'Pause (hôte)' : 'Pause (P)';
+}
+function empreinteBatiment(b, mettre){
+  const t = b.def.taille, v = mettre ? 3 : 0;
+  for(let rr = Math.max(0, b.r); rr < Math.min(LIGNES, b.r + t); rr++) for(let cc = Math.max(0, b.c); cc < Math.min(COLS, b.c + t); cc++) grille[rr*COLS + cc] = v;
+}
+// Entités de l'invité : mêmes champs que celles du moteur (creerUnite, creerBatiment), identifiant de l'hôte.
+function creerUniteInvite(r){
+  const D = UNITES[r.type];
+  const u = {id:r.id, est:'unite', type:r.type, def:D, camp:r.camp, x:r.x, y:r.y, rayon:D.rayon, pv:r.pv, pvMax:r.pvMax,
+    angle:r.angle, angleT:r.angleT, ordre:null, cible:null, chemin:null, dest:null, repath:0, recharge:0, scan:0, kills:0, rang:r.rang || 0,
+    charge:0, minage:0, dansAura:false, auraT:0, enVague:false, mort:false, toucheT:-99, tirT:-99, nom:null, _ox:0, _oy:0, _ext:false};
+  if(D.avion) Object.assign(u, {alt:r.alt != null ? r.alt : ALT_CROISIERE, vit:r.vit || 0, auSol:!!r.auSol, phase:r.auSol ? 'sol' : 'vol', base:null, place:-1,
+    munitions:D.munitions, attente:null, rearmeT:0, pretT:0, passe:null});
+  else if(D.forme === 'helico') Object.assign(u, {alt:r.alt != null ? r.alt : (D.alt || ALT_HELICO), heliport:null});
+  else if(r.alt != null) u.alt = r.alt;
+  if(D.repare) Object.assign(u, {repareT:-99, cibleSoin:null});
+  ents.push(u); invite.index.set(u.id, u);
+  return u;
+}
+function creerBatimentInvite(r){
+  const D = BATIMENTS[r.type], t = D.taille;
+  const b = {id:r.id, est:'batiment', type:r.type, def:D, camp:r.camp, c:r.c, r:r.r, x:(r.c + t/2)*TUILE, y:(r.r + t/2)*TUILE, rayon:t*TUILE/2,
+    pvMax:r.pvMax, pv:r.pv, enCours:!!r.enCours, progres:r.progres, file:[], prodT:0, rally:null, mort:false,
+    angleT:r.angleT, tirT:-99, recharge:0, scan:0, cible:null, rang:0, kills:0, dansAura:false, auraT:0, toucheT:-99, nom:null};
+  empreinteBatiment(b, true);
+  ents.push(b); invite.index.set(b.id, b);
+  return b;
+}
+const horlogeOu = (v, def) => typeof v === 'number' && isFinite(v) ? v : def;
+function majUniteInvite(u, r){
+  if(r.pv < u.pv) noterCombat(u, null, u.pv - r.pv);   // musique de l'invité : mêmes coups que chez l'hôte
+  u.pv = r.pv; u.pvMax = r.pvMax; u.camp = r.camp; u.rang = r.rang || 0; u.auSol = !!r.auSol; u.travaille = !!r.travaille;
+  u.tirT = horlogeOu(r.tirT, -99);
+  if(r.recolteT != null || u.recolteT != null) u.recolteT = horlogeOu(r.recolteT, -99);
+  if(u.def.repare) u.repareT = horlogeOu(r.repareT, -99);
+  if(r.charge != null) u.charge = r.charge;
+  if(u.def.repare) u.cibleSoin = r.cibleSoin ? invite.index.get(r.cibleSoin) || null : null;
+  if(u.def.avion) u.phase = r.auSol ? 'sol' : 'vol';
+}
+function majBatimentInvite(b, r){
+  if(r.pv < b.pv && !b.enCours) noterCombat(b, null, b.pv - r.pv);
+  b.pv = r.pv; b.pvMax = r.pvMax; b.camp = r.camp; b.progres = r.progres; b.enCours = !!r.enCours; b.bloque = !!r.bloque;
+  b.tirT = horlogeOu(r.tirT, -99);
+  const f = b.file; f.length = 0; for(const t of r.file) f.push(t);
+  const D0 = f.length ? UNITES[f[0]] : null;
+  b.prodT = D0 ? (r.avancement || 0)*D0.temps : 0;
+  b.blocage = b.bloque ? (population[b.camp] >= popMax ? 'effectif' : 'places') : null;
+  if(!r.rally) b.rally = null;
+  else if(!b.rally || b.rally.x !== r.rally.x || b.rally.y !== r.rally.y) b.rally = {x:r.rally.x, y:r.rally.y};
+}
+// Mort vue par l'invité (entité absente de l'instantané) : marquée morte pour que le rendu joue l'épave ou les
+// décombres à l'image suivante, effets de mort posés localement, retrait au pas d'après.
+function mourirInvite(e){
+  e.mort = true; e.pv = 0;
+  effetsDeMort(e);
+  if(e.est === 'batiment') empreinteBatiment(e, false);
+  invite.index.delete(e.id);
+  invite.morts = true;
+}
+// Applique un instantané atteint par l'horloge d'affichage (les positions sont ensuite interpolées).
+function appliquerInstantane(s){
+  const E = invite.elim;
+  for(const c of s.camps){
+    const C = camps[c.camp]; if(!C) continue;
+    C.reserves = c.reserves; C.points = c.points; C.ia = !!c.ia;
+    // Élimination : suit le flux dans les deux sens (un instantané faux qui marquait un camp éliminé est démenti par
+    // le suivant) ; sa durée de stabilité est comptée pour eliminationStable. Un camp absent de l'instantané garde
+    // son état (l'hôte les met tous dans chaque instantané).
+    if(c.elimine){
+      if(!C.elimine){ C.elimine = true; C.elimineT = s.T; E.set(c.camp, {T0:s.T, T:s.T, n:0}); }
+      const k = E.get(c.camp) || {T0:s.T, T:s.T, n:0};
+      k.n++; k.T = Math.max(k.T, s.T); E.set(c.camp, k);
+    } else if(C.elimine){ C.elimine = false; C.elimineT = null; E.delete(c.camp); }
+    population[c.camp] = c.population;
+    if(!C.recharges) C.recharges = {};
+    for(const k in c.recharges) C.recharges[k] = c.recharges[k];
+  }
+  for(let i = 0; i < ents.length; i++){
+    const e = ents[i];
+    if(e.mort) continue;
+    if(!(e.est === 'unite' ? s.unites.has(e.id) : s.batiments.has(e.id))) mourirInvite(e);
+  }
+  // Un identifiant qui change de genre ou de type (impossible chez l'hôte, possible dans un message forgé) : l'ancienne
+  // entité disparaît, la nouvelle est créée.
+  for(const [id, r] of s.batiments){
+    let b = invite.index.get(id);
+    if(b && (b.est !== 'batiment' || b.type !== r.type)){ mourirInvite(b); b = null; }
+    if(!b){ if(!aCle(BATIMENTS, r.type)) continue; b = creerBatimentInvite(r); }
+    majBatimentInvite(b, r);
+  }
+  for(const [id, r] of s.unites){
+    let u = invite.index.get(id);
+    if(u && (u.est !== 'unite' || u.type !== r.type)){ mourirInvite(u); u = null; }
+    if(!u){ if(!aCle(UNITES, r.type)) continue; u = creerUniteInvite(r); }
+    majUniteInvite(u, r);
+  }
+  for(const p of s.projectiles) projectileDepuisReseau(p);
+  for(const f of s.effets){ try { effetDepuisReseau(f); } catch(err){ console.warn('[Réseau] effet illisible :', err); } }
+  if(selection.some(e => e.mort)) selectionner(selection.filter(e => !e.mort));
+  invite.appliques++;
+}
+const lerpR = (a, b, f) => a + (b - a)*f;
+const lerpAngleR = (a, b, f) => a + diffAngle(a, b)*f;
+// Positions, angles et altitudes à l'instant d'affichage invite.Ta : interpolation entre l'instantané courant et
+// le suivant ; sans suivant, prolongation bornée (RESEAU.extrapolationMax) à la vitesse des deux derniers.
+function interpolerInvite(dt){
+  const I = invite, s0 = I.courant, s1 = I.tampon.length ? I.tampon[0] : null, sp = I.precedent;
+  if(!s0) return;
+  const f = s1 ? Math.max(0, Math.min(1, (I.Ta - s0.T)/Math.max(1e-6, s1.T - s0.T))) : 0;
+  const ext = !s1 && sp && s0.T > sp.T ? Math.min(I.Ta - s0.T, RESEAU.extrapolationMax) : 0;
+  if(ext > 0) I.extrapolations++;
+  const amort = Math.exp(-Math.max(0, dt)/RESEAU.lissage);
+  for(const e of ents){
+    if(e.mort) continue;
+    if(e.est === 'batiment'){
+      const a = s0.batiments.get(e.id); if(!a) continue;
+      const b = s1 && s1.batiments.get(e.id);
+      e.angleT = b ? lerpAngleR(a.angleT, b.angleT, f) : a.angleT;
+      continue;
+    }
+    const a = s0.unites.get(e.id); if(!a) continue;
+    const b = s1 && s1.unites.get(e.id);
+    let x = a.x, y = a.y, an = a.angle, at = a.angleT, alt = a.alt, vit = a.vit, extra = false;
+    if(b){
+      if(Math.hypot(b.x - a.x, b.y - a.y) > RESEAU.ecartEnorme){ x = b.x; y = b.y; an = b.angle; at = b.angleT; alt = b.alt; vit = b.vit; }   // saut réel
+      else {
+        x = lerpR(a.x, b.x, f); y = lerpR(a.y, b.y, f); an = lerpAngleR(a.angle, b.angle, f); at = lerpAngleR(a.angleT, b.angleT, f);
+        if(a.alt != null && b.alt != null) alt = lerpR(a.alt, b.alt, f);
+        if(a.vit != null && b.vit != null) vit = lerpR(a.vit, b.vit, f);
+      }
+    } else if(ext > 0){
+      const p = sp.unites.get(e.id);
+      if(p && Math.hypot(a.x - p.x, a.y - p.y) <= RESEAU.ecartEnorme){
+        const k = ext/(s0.T - sp.T);
+        x = a.x + (a.x - p.x)*k; y = a.y + (a.y - p.y)*k;
+        an = a.angle + diffAngle(p.angle, a.angle)*k; at = a.angleT + diffAngle(p.angleT, a.angleT)*k;
+        if(a.alt != null && p.alt != null) alt = Math.max(0, a.alt + (a.alt - p.alt)*k);
+        extra = true;
+      }
+    }
+    // Fin d'une prolongation : l'écart avec la vraie position est résorbé en douceur (sauf s'il est énorme).
+    if(e._ext && !extra){
+      const ox = e.x - x, oy = e.y - y;
+      if(Math.hypot(ox, oy) < RESEAU.ecartEnorme){ e._ox = ox; e._oy = oy; } else { e._ox = 0; e._oy = 0; }
+    } else { e._ox *= amort; e._oy *= amort; if(Math.abs(e._ox) < 0.01) e._ox = 0; if(Math.abs(e._oy) < 0.01) e._oy = 0; }
+    e._ext = extra;
+    e.x = x + e._ox; e.y = y + e._oy; e.angle = an; e.angleT = at;
+    if(alt != null) e.alt = alt;
+    if(vit != null) e.vit = vit;
+  }
+}
+// Un pas de l'invité (à la place de miseAJour) : horloge d'affichage recalée sans saut, instantanés atteints
+// appliqués dans l'ordre, interpolation, projectiles et effets avancés localement, fin de partie évaluée.
+function avancerInvite(dt){
+  const I = invite, t = I.tampon;
+  if(I.morts){   // morts montrées à l'image précédente : retirées maintenant (même règle que miseAJour)
+    I.morts = false;
+    compacter(ents, entiteVivante);
+    if(selection.some(e => e.mort)) selectionner(selection.filter(e => !e.mort));
+  }
+  const der = t.length ? t[t.length - 1] : I.courant;
+  if(!der) return;
+  const maintenant = performance.now()/1000;
+  const cible = Math.min(der.T + (maintenant - der.recu), der.T + RESEAU.extrapolationMax + RESEAU.retard) - RESEAU.retard;
+  let pas = 0;
+  if(!I.init){ I.Ta = Math.max(t.length ? t[0].T : der.T, cible); I.init = true; }
+  else if(!I.pause){
+    const ecart = cible - I.Ta;
+    if(ecart > 1.5){ pas = ecart; I.Ta = cible; I.recalages++; }        // très en retard (onglet caché…) : recalage franc
+    else { pas = Math.max(0, dt*(1 + Math.max(-0.3, Math.min(0.3, ecart*2)))); I.Ta += pas; }   // monotone : jamais de retour en arrière
+  }
+  // En pause : l'horloge d'affichage rejoint le dernier instantané reçu (l'état arrêté de l'hôte), au lieu de rester
+  // figée un retard d'affichage avant lui (défaut 3 du troisième tour). Toujours en avant : jamais de retour.
+  else I.Ta = Math.max(I.Ta, der.T);
+  I.Ta = Math.min(I.Ta, der.T + RESEAU.extrapolationMax);
+  temps = I.Ta;
+  while(t.length && t[0].T <= I.Ta){
+    const s = t.shift();
+    appliquerInstantane(s);
+    I.precedent = I.courant; I.courant = s;
+  }
+  interpolerInvite(dt);
+  // Projectiles et effets : vie locale (comme miseAJour), impact posé par l'invité lui-même.
+  const P = projectiles;
+  for(let i = 0; i < P.length; i++){
+    const p = P[i];
+    p.t += pas;
+    if(p.cible) guiderProjectile(p, pas);
+    if(p.t >= p.duree){ p.fini = true; effetsImpact(p); }
+  }
+  compacter(projectiles, projectileEnVol);
+  for(let i = 0; i < effets.length; i++) effets[i].vie -= pas;
+  compacter(effets, effetVivant);
+  I.verifT -= pas;
+  if(I.verifT <= 0){ I.verifT = 1; if(!partieFinie && !MISSION) verifierFin(); }
+}
+// Événements fiables reçus de l'hôte.
+// Valeurs contrôlées ici aussi (défaut S1) : texte posé par textContent (message), genre en liste blanche,
+// coordonnées bornées à la carte, quantités de minerai bornées à la capacité du champ.
+function recevoirEvenementInvite(ev){
+  if(!ev || typeof ev !== 'object') return;
+  switch(ev.t){
+    case 'message': if(ev.camp === campLocal() && typeof ev.texte === 'string') message(ev.texte.slice(0, 200), ev.genre === 'alerte' || ev.genre === 'succes' ? ev.genre : 'info'); break;
+    case 'alerte': if(ev.camp === campLocal()) alertes[ev.camp] = {t:temps, x:bornerNb(ev.x, 0, LARG, LARG/2), y:bornerNb(ev.y, 0, HAUT, HAUT/2)}; break;
+    // Pause : appliquée tout de suite (l'instantané de l'hôte en pause peut se perdre), mais l'instantané suivant fait
+    // foi (recevoirInstantane) : un faux événement ne tient pas plus d'un dixième de seconde si l'hôte joue.
+    case 'pause': majPauseInvite(ev.oui === true); break;
+    case 'minerai': if(Array.isArray(ev.r) && ev.r.length <= noeuds.length) ev.r.forEach((v, i) => { const n = noeuds[i]; if(n && estNombre(v)) n.reste = Math.max(0, Math.min(n.max || v, v)); }); break;
+    case 'bilan': recevoirBilan(ev); break;
+  }
+}
+// Bilan de fin envoyé par l'hôte (défaut R8) : statistiques de chaque camp, entiers bornés ; l'écran de fin de
+// l'invité est refait avec les siennes.
+function recevoirBilan(ev){
+  if(!ev.stats || typeof ev.stats !== 'object') return;
+  const st = {};
+  for(const id of CAMPS_JOUEURS){
+    const v = aCle(ev.stats, id) ? ev.stats[id] : null;
+    if(v && typeof v === 'object') st[id] = {produites:entierEntre(v.produites, 0, 1e6) ? v.produites : 0, perdues:entierEntre(v.perdues, 0, 1e6) ? v.perdues : 0,
+      detruites:entierEntre(v.detruites, 0, 1e6) ? v.detruites : 0};
+  }
+  enLigne.bilan = {stats:st, temps:bornerNb(ev.temps, 0, 1e7, null)};
+  if(enLigne.issueFin) rendreFinEnLigne();
+}
+function brancherInvite(salon){
+  salonInvite = salon;
+  const G = mondes ? mondes.invite : null;
+  salon.on('etat', s => recevoirInstantane(s));
+  salon.on('evenement', ev => dansMonde(G, () => recevoirEvenementInvite(ev)));
+}
+// Ordre du joueur local d'un invité (executerOrdre le détourne ici) : rien n'est appliqué localement, l'ordre
+// part chez l'hôte ; le retour visuel (marques au sol) est calculé tout de suite, sur l'état affiché.
+function envoyerOrdreInvite(camp, ordre){
+  if(camp !== campLocal()) return {ok:false, motif:'Ordre refusé.', code:'reserve'};
+  if(!ordre || typeof ordre !== 'object' || Array.isArray(ordre)) return {ok:false, motif:'Ordre illisible.', code:'invalide'};
+  if(ordre.type === 'pause') return ordre.oui === undefined ? {ok:false, motif:'Seul l’hôte peut mettre la partie en pause.', code:'reserve', genre:'alerte'}
+    : {ok:false, motif:'Pause réservée à l’hôte.', code:'reserve'};
+  if(ordre.type === 'abandon'){ try { if(salonInvite) salonInvite.quitter(); } catch(err){} oublierSiegeInvite(); location.href = location.pathname + adresseSansSalon(); return {ok:true}; }
+  if(ordre.type === 'alliance' || ordre.type === 'proposerTreve') return {ok:false, motif:'Réservé à l’hôte.', code:'reserve'};
+  // Refus que l'hôte rendrait sans genre (muets) mais lisibles dans l'état reçu (défaut 5 du troisième tour) : rendus
+  // ici, comme en solo (ok:false, mêmes motifs), au lieu d'un « ok » sans effet. Le camp éliminé est dit au joueur.
+  const C = camps[camp];
+  if(C && C.elimine) return {ok:false, motif:'Votre camp est éliminé : vous êtes spectateur.', code:'elimine', genre:'info'};
+  if(ordre.type === 'pouvoir' && C && typeof ordre.cle === 'string'){
+    const P = (POUVOIRS[C.faction] || []).find(p => p.cle === ordre.cle);
+    if(P && pouvoirsActifs[camp]){
+      if(!(C.points >= P.cout)) return {ok:false, motif:'Points de commandement insuffisants.', code:'points'};
+      if(C.recharges && (C.recharges[ordre.cle] || 0) > 0) return {ok:false, motif:'Pouvoir en recharge.', code:'recharge'};
+    }
+  }
+  const m = ordreVersReseau(ordre);
+  if(!m) return {ok:false, motif:'Ordre illisible.', code:'invalide'};
+  const s = salonInvite ? salonInvite.envoyerOrdre(m) : 0;
+  if(!s) return {ok:false, motif:'Trop d’ordres à la fois : ordre non envoyé.', code:'debit', genre:'alerte'};
+  const retour = retourOrdreLocal(ordre);
+  return retour ? {ok:true, envoye:s, retour} : {ok:true, envoye:s};
+}
+// Marques au sol d'un ordre de l'invité, mêmes couleurs que celles de appliquerOrdre (approximation sur l'état
+// affiché : l'hôte décide de l'effet réel).
+function retourOrdreLocal(o){
+  const m = (x, y, couleur) => [{x, y, couleur}];
+  const ent = id => typeof id === 'number' ? invite.index.get(id) || null : null;
+  if(o.type === 'ralliement') return m(o.x, o.y, '#7dff8a');
+  if(o.type === 'attaqueDeplacement') return m(o.x, o.y, '#ff6b4a');
+  if(o.type !== 'droit') return null;
+  const mes = (Array.isArray(o.ids) ? o.ids : []).map(ent).filter(Boolean);
+  if(!mes.some(e => e.est === 'unite')) return m(o.x, o.y, '#7dff8a');
+  const cible = o.cibleId === undefined ? entiteSous(o.x, o.y) : ent(o.cibleId);
+  if(cible && hostile(campLocal(), cible.camp)) return m(cible.x, cible.y, '#ff6b4a');
+  const n = noeuds.find(k => k.reste > 0 && Math.hypot(k.x - o.x, k.y - o.y) < k.rayon + 10);
+  if(n && mes.some(e => e.def.collecteur)) return m(n.x, n.y, '#5fc3e4');
+  return m(o.x, o.y, '#7dff8a');
+}
+// Monde d'un invité : camps connus par la description de la partie (faction, équipe, couleur), rien d'autre ;
+// tout le reste arrivera par les instantanés.
+function preparerMondeInvite(listeCamps, campId){
+  camps = {};
+  // Couleur toujours locale (jamais reprise du réseau : elle finit dans un attribut style, défaut S1).
+  for(const k of listeCamps) camps[k.id] = {id:k.id, faction:k.faction, equipe:k.equipe, couleur:couleurDuCamp(k.id), ia:!!k.ia,
+    elimine:false, elimineT:null, emplacement:k.emplacement != null ? k.emplacement : null, reserves:0, points:0, recharges:{}};
+  camps.N = {id:'N', faction:'neutre', reserves:0, points:0, recharges:{}};
+  camps.X = {id:'X', faction:'aliens', reserves:0, points:0, recharges:{}};
+  ents = []; projectiles = []; effets = []; evenements = []; selection = []; groupes = {}; mode = null;
+  temps = 0; enPause = false; partieFinie = false; statsCamps = {}; issuePartie = null;
+  population = {J:0, I:0, K:0, L:0, N:0, X:0};
+  for(const k in alertes) delete alertes[k];
+  popMax = POP_PAR_CAMPS[listeCamps.length] || 60;
+  campJoueur = campId; roleMonde = 'invite'; journalReseau = null;
+  reinitialiserInvite();
+}
+
+// ---------- Deux mondes dans une page (mode ?echo) ----------
+function nouveauMonde(role){ return {role, muet:false, grille:new Uint8Array(grille.length), alertes:{}}; }
+function sauverMonde(m){
+  if(!m) return;
+  Object.assign(m, {ents, projectiles, effets, evenements, camps, temps, prochainId, campJoueur, selection, groupes, mode, enPause, partieFinie,
+    population, noeuds, statsCamps, issuePartie, journal:journalReseau, alertes:Object.assign({}, alertes)});
+  m.grille.set(grille);
+}
+function chargerMonde(m){
+  ents = m.ents; projectiles = m.projectiles; effets = m.effets; evenements = m.evenements; camps = m.camps; temps = m.temps;
+  prochainId = m.prochainId; campJoueur = m.campJoueur; selection = m.selection; groupes = m.groupes; mode = m.mode;
+  enPause = m.enPause; partieFinie = m.partieFinie; population = m.population; noeuds = m.noeuds; statsCamps = m.statsCamps;
+  issuePartie = m.issuePartie; journalReseau = m.journal;
+  grille.set(m.grille);
+  for(const k in alertes) delete alertes[k];
+  Object.assign(alertes, m.alertes);
+  roleMonde = m.role; mondeMuet = m.muet; mondeCourant = m;
+}
+// Exécute fn dans le monde m (sans effet hors du mode ?echo, ou si m est déjà chargé).
+function dansMonde(m, fn){
+  if(!m || m === mondeCourant) return fn();
+  const avant = mondeCourant;
+  sauverMonde(avant); chargerMonde(m);
+  try { return fn(); }
+  finally { sauverMonde(m); chargerMonde(avant); }
+}
+// Un pas du mode ?echo : l'hôte simule (monde muet) et envoie ; l'invité, monde chargé par défaut, avance.
+function pasEcho(dt){
+  dansMonde(mondes.hote, () => {
+    if(!enPause && !partieFinie) miseAJour(dt);
+    ticHote();
+    if(echo.apresPasHote) echo.apresPasHote();
+  });
+  avancerInvite(dt);
+  if(echo.apresPasInvite) echo.apresPasInvite(dt);
+}
+function boucleReseau(dt, brut, ts){
+  if(modeReseau === 'echo'){
+    if(!echo.pret) return;
+    if(!echo.piloteExterne) pasEcho(dt);   // pilote externe (outil de mesure) : il avance lui-même ; on ne fait que dessiner
+  } else if(modeReseau === 'hote') avancerHote(performance.now());   // simulation à l'horloge réelle (section 11 quater)
+  else if(modeReseau === 'invite') pasInvite(dt);
+  enLigne.rafT = performance.now();
+  deplacerCamera(Math.min(0.05, brut));
+  dessiner(roleMonde === 'invite' ? (invite.pause ? 0 : dt) : (enPause || partieFinie ? 0 : dt));
+  if(interfaceAJour || ts - interfaceT >= 100 || ts < interfaceT){
+    interfaceAJour = false; interfaceT = ts;
+    majBarre(); majPanneau(); majFabrique();
+    if(modeReseau !== 'echo') majEtatReseau();
+  }
+}
+// reseau.js est inclus d'office par front-de-sel.html (sans effet au chargement : ni connexion, ni Worker, ni
+// bibliothèque MQTT, qui n'est téléchargée qu'à l'ouverture d'un salon ou à l'arrivée). Cette fonction ne sert que
+// de secours, pour une page qui ne l'inclurait pas (outils d'essai).
+function chargerScriptReseau(){
+  if(window.Reseau) return Promise.resolve();
+  return new Promise((ok, ko) => {
+    const s = document.createElement('script');
+    s.src = 'reseau.js' + (VERSION_FICHIERS ? '?v=' + encodeURIComponent(VERSION_FICHIERS) : '');
+    s.onload = () => window.Reseau ? ok() : ko(new Error('reseau.js chargé sans window.Reseau'));
+    s.onerror = () => ko(new Error('reseau.js introuvable'));
+    document.head.appendChild(s);
+  });
+}
+// Mode d'essai ?echo (aucun serveur) : l'hôte et un invité fictif dans la même page, reliés par la boucle locale de
+// reseau.js (codec complet, retard et pertes réglables : &retard=150&gigue=30&perte=5, en ms et en %). L'hôte tient
+// J (confié à l'ordinateur), l'invité I ; K et L (si la carte a 4 emplacements, &camps=4) sont des ordinateurs.
+// L'écran montre la vue de l'invité : on joue I à la souris, ses ordres partent chez l'hôte.
+async function lancerEcho(params){
+  modeReseau = 'echo'; echo.pret = false; echo.erreur = null;
+  window.enregistrerVictoire = () => {};
+  try {
+    await chargerScriptReseau();
+    declarerTypesReseau();
+    const n = (k, d) => { const v = parseFloat(params.get(k)); return isFinite(v) && v >= 0 ? v : d; };
+    echo.bus = Reseau.simuler({retard:n('retard', 150), gigue:n('gigue', 30), perte:Math.min(1, n('perte', 5)/100)});
+    const nb = Math.min(emplacementsCarte(CARTE).length, params.get('camps') === '2' ? 2 : 4) >= 4 ? 4 : 2;
+    const config = [{id:'J', faction:'halden', equipe:'A', ia:false}, {id:'I', faction:'karsk', equipe:'B', ia:false}];
+    if(nb === 4) config.push({id:'K', faction:'karsk', equipe:'C', ia:true}, {id:'L', faction:'halden', equipe:'D', ia:true});
+    surprise.demandee = false;   // mode Surprises désactivé en multijoueur
+    demarrer('halden', config);
+    confierCampAOrdinateur('J', difficulte);
+    camps.I.ia = false;
+    mondes = {hote:nouveauMonde('hote'), invite:nouveauMonde('invite')};
+    mondes.hote.muet = true;
+    mondeCourant = mondes.hote; roleMonde = 'hote';
+    sauverMonde(mondes.hote);
+    // Monde de l'invité : grille de la carte sans les bâtiments, champs de minerai pleins, camps publics.
+    const publics = config.map(k => ({id:k.id, faction:camps[k.id].faction, equipe:camps[k.id].equipe, couleur:camps[k.id].couleur, ia:camps[k.id].ia, emplacement:camps[k.id].emplacement}));
+    for(const e of ents) if(e.est === 'batiment') empreinteBatiment(e, false);
+    noeuds = noeuds.map(k => Object.assign({}, k));
+    preparerMondeInvite(publics, 'I');
+    mondes.invite.role = 'invite';
+    sauverMonde(mondes.invite); chargerMonde(mondes.invite);
+    // Salon dans la boucle locale.
+    const emplacements = config.map((k, i) => ({camp:k.id, equipe:i + 1, type:k.id === 'J' || k.id === 'I' ? 'humain' : 'ordinateur', faction:k.faction}));
+    const hote = await Reseau.creerSalon({versionJeu:VERSION_FICHIERS, carte:CARTE.id, emplacements, siegeHote:0, pseudonyme:'Hôte', placesLibres:'ordinateur'});
+    const inv = await Reseau.rejoindre(hote.code, 'Invité', {versionJeu:VERSION_FICHIERS, memoriser:false});
+    echo.salonHote = hote; echo.salonInvite = inv;
+    brancherHote(hote); brancherInvite(inv);
+    const lance = hote.lancer({carte:CARTE.id, camps:publics}, {forcer:true});
+    if(!lance || !lance.ok) throw new Error('lancement refusé : ' + JSON.stringify(lance));
+    if(inv.camp && inv.camp !== 'I') console.warn('[Echo] siège de l’invité inattendu :', inv.camp);
+    definirCampLocal('I');
+    const base = basesCarte.I;
+    if(base) centrerSur((base.c + 1.5)*TUILE, (base.r + 1.5)*TUILE + 120);
+    preparerRenduPartie();
+    dansMonde(mondes.hote, () => ticHote(true));
+    echo.pret = true;
+    message('Mode d’essai ?echo : vous jouez l’invité (camp rouge) ; l’hôte simule dans la même page.', 'succes');
+  } catch(err){
+    echo.erreur = String(err && err.message || err);
+    console.warn('[Echo] impossible de lancer le mode d’essai :', err);
+    message('Mode ?echo impossible : ' + echo.erreur, 'alerte');
+  }
+}
+
+// =====================================================================
+//  11 quater. MULTIJOUEUR EN LIGNE : salon, partie à travers le serveur MQTT, cas limites (étapes 6 à 8)
+// =====================================================================
+// Rien de cette section ne tourne en solo : la bibliothèque MQTT n'est chargée (par reseau.js) qu'au clic sur
+// « Ouvrir le salon » ou « Rejoindre », et modeReseau reste null tant qu'aucune partie en ligne n'a commencé.
+// Décisions de la première version : 2 à 4 humains en escarmouche ; places libres tenues par l'ordinateur ou
+// fermées ; campagnes et mode Surprises en solo seulement ; seul l'hôte met en pause ; un invité parti garde son
+// siège 60 s (camp immobile) puis son camp est confié à l'ordinateur ; si l'hôte part, la partie se termine pour
+// tous ; un joueur éliminé reste spectateur ; fin de partie par équipe. Messages signés par reseau.js depuis ?v=28
+// (clé tirée du code du salon, puis clé propre à chaque siège), mais pas chiffrés ; jeton par siège, limite d'ordres
+// (reseau.js) et validation stricte de chaque ordre chez l'hôte (validerOrdre). Un joueur qui a le code peut encore
+// forger ce que l'hôte diffuse (limite L3, NOTES-CONCEPTION.md) : chez l'invité, une élimination lue dans le flux ne
+// donne que l'état « spectateur » (après une seconde, eliminationStable) ; l'écran de fin, définitif, attend la fin
+// confirmée par reseau.js (message privé de l'hôte, eliminationsSures). Seul un
+// pseudonyme libre circule (16 caractères au plus, publié en clair sur le serveur).
+if(el('ecranSalon') && !ECRANS.includes('ecranSalon')) ECRANS.push('ecranSalon');
+const pseudosEnLigne = {};   // camp -> pseudonyme (bandeau des camps), vide en solo
+const enLigne = {vue:null, salon:null, config:null, erreur:'', info:'', occupe:false, finMontree:false, spectateur:false,
+  finGlobale:false, finGlobaleT:0, suspendu:false, injoignable:false, deconnecte:false, arret:null, pasT:0, rafT:0, cacheT:0, titre:''};
+// Pseudonyme proposé la fois suivante (décision du propriétaire, défaut R1) : localStorage, clé frontDeSel.pseudo,
+// hors du préfixe frontDeSel.reseau.<code> que reseau.js purge. La mémoire du siège (identifiant et jeton, par code
+// de salon, 3 heures au plus) est tenue par reseau.js lui-même (Reseau.memoire).
+const CLE_PSEUDO = 'frontDeSel.pseudo';
+function lirePseudo(){ try { const v = localStorage.getItem(CLE_PSEUDO); return v ? Reseau.nettoyerPseudo(v) : ''; } catch(err){ return ''; } }
+function memoriserPseudo(v){ try { localStorage.setItem(CLE_PSEUDO, String(v).slice(0, 16)); } catch(err){} }
+const memoireSiege = code => { try { return window.Reseau && Reseau.memoire ? Reseau.memoire(code) : null; } catch(err){ return null; } };
+const opposeFaction = f => f === 'halden' ? 'karsk' : 'halden';
+const nomFactionSalon = f => f === 'halden' ? 'Halden' : f === 'karsk' ? 'Karsk' : 'Aléatoire';
+// Serveur indiqué dans l'adresse (&srv=h, m, e ou wss://…) ; sans lui, chaîne par défaut de reseau.js
+// (HiveMQ, puis Mosquitto en secours).
+function optionsServeur(){ const s = new URLSearchParams(location.search).get('srv'); return s ? {serveur:s} : {}; }
+// Empreinte de la grille de la carte (rochers tirés par la graine) : l'invité la compare à celle de l'hôte.
+function empreinteCarte(){
+  let h = 2166136261;
+  for(let i = 0; i < grille.length; i++){ h ^= grille[i]; h = Math.imul(h, 16777619); }
+  return (CARTE ? CARTE.id : '?') + ':' + (h >>> 0).toString(36) + ':' + grille.length;
+}
+const PHRASE_SOLO = 'En ligne : escarmouche seulement. Les campagnes et le mode Surprises restent réservés au jeu en solo ' +
+  '(leurs scènes, leurs dialogues et l’alliance contre les envahisseurs supposent un seul joueur).';
+const PHRASE_LIMITES = 'Serveur public gratuit, sans garantie et sans chiffrement : n’indiquez qu’un pseudonyme. ' +
+  'La partie tourne dans le navigateur de l’hôte, qui doit garder son onglet ouvert jusqu’à la fin.';
+const MOTIFS_SALON = {pasAssezDeJoueurs:'Il faut au moins deux joueurs humains.', pasPrets:'Tous les joueurs ne sont pas prêts.',
+  dejaLancee:'La partie est déjà lancée.', siegeOccupe:'Cette place vient d’être prise.', commencee:'La partie a commencé.',
+  sansReponse:'L’hôte ne répond pas.', factionInvalide:'Camp refusé.', refuse:'Demande refusée par l’hôte.'};
+function texteErreurReseau(err){
+  if(!err) return 'Erreur inconnue.';
+  if(err.motif === 'serveur'){
+    const e = err.details && err.details.essais ? err.details.essais.map(x => x.url.replace(/^wss:\/\//, '').replace(/[:/].*$/, '')).join(', ') : '';
+    return 'Aucun serveur n’est joignable' + (e ? ' (essayés : ' + e + ')' : '') + '. Vérifiez la connexion à Internet ; un pare-feu peut bloquer les WebSockets sécurisés.';
+  }
+  return err.message || String(err);
+}
+// Avancement de la connexion fourni par reseau.js (défauts R6, R7) : texte local (table Reseau.ETAPES), affiché à la
+// place de « Connexion au serveur… » (chargement, connexion, nouvelle tentative, serveur de secours, recherche du salon).
+function etapeConnexion(e){
+  if(!e || typeof e.texte !== 'string' || !enLigne.occupe) return;
+  // Recherche simultanée (HiveMQ et Mosquitto) : la phrase « Recherche du salon sur … » reste affichée ; les
+  // connexions de chaque serveur, annoncées ensuite, la remplaceraient par un seul nom de serveur.
+  if(e.etape === 'recherche' && enLigne.etapeTexte === '') enLigne.etapeRecherche = e.texte;
+  else if(enLigne.etapeRecherche && (e.etape === 'connexion' || e.etape === 'bibliotheque')) return;
+  enLigne.etapeTexte = e.texte.slice(0, 120);
+  rendreSalon();
+}
+
+// ---------- Écran du salon ----------
+function montrerSalon(vue){ enLigne.vue = vue; montrerEcran('ecranSalon'); el('sousTitre').textContent = 'EN LIGNE · CARTE : ' + (CARTE ? CARTE.nom : '').toUpperCase(); rendreSalon(); }
+function configSalonDefaut(){
+  const f = (configEcran || lireConfigCamps()).joueur.faction;
+  return {hote:{faction:f, equipe:'A'}, autres:[{type:'humain', equipe:'B'}, {type:'ferme', equipe:'C'}, {type:'ferme', equipe:'D'}]};
+}
+const TYPES_EMPL_SALON = [['humain', 'Joueur (en attente)'], ['halden', 'Ordinateur Halden'], ['karsk', 'Ordinateur Karsk'], ['aleatoire', 'Ordinateur aléatoire'], ['ferme', 'Fermé']];
+// Configuration de l'écran -> emplacements de reseau.js ({camp, equipe 1-4, type, faction}).
+function emplacementsSalon(cfg){
+  const r = [{camp:'J', equipe:EQUIPES.indexOf(cfg.hote.equipe) + 1, type:'humain', faction:cfg.hote.faction}];
+  cfg.autres.forEach((a, i) => {
+    const camp = CAMPS_JOUEURS[i + 1], equipe = EQUIPES.indexOf(a.equipe) + 1;
+    if(a.type === 'humain') r.push({camp, equipe, type:'humain', faction:opposeFaction(cfg.hote.faction)});
+    else if(a.type === 'ferme') r.push({camp, equipe, type:'ferme', faction:null});
+    else r.push({camp, equipe, type:'ordinateur', faction:a.type});
+  });
+  return r;
+}
+function appliquerRaccourciSalon(cle){
+  const R = RACCOURCIS_CAMPS.find(r => r[0] === cle); if(!R) return;
+  const cfg = enLigne.config, eq = R[2];
+  cfg.hote.equipe = eq[0];
+  cfg.autres.forEach((a, i) => {
+    const e = eq[i + 1];
+    if(e === null){ if(!siegeOccupe(i + 1)) a.type = 'ferme'; }
+    else { if(a.type === 'ferme') a.type = i === 0 ? 'humain' : 'aleatoire'; a.equipe = e; }
+  });
+  pousserConfigSalon(); rendreSalon();
+}
+function siegeOccupe(i){ const s = enLigne.salon && enLigne.salon.role === 'hote' ? enLigne.salon.listeSieges()[i] : null; return !!(s && s.id && !s.hote); }
+// Salon ouvert : chaque changement de l'écran est publié (description du salon).
+function pousserConfigSalon(){
+  const S = enLigne.salon; if(!S || S.role !== 'hote' || S.etat !== 'ouvert') return;
+  emplacementsSalon(enLigne.config).forEach((e, i) => {
+    const act = S.listeSieges()[i];
+    const champs = {equipe:e.equipe};
+    if(!(act.id && !act.hote)){ champs.type = e.type; champs.faction = e.faction; }   // place occupée : le joueur garde son camp
+    else if(act.hote) champs.faction = e.faction;
+    S.modifierEmplacement(i, champs);
+  });
+}
+function optionsEquipes(v, attr){ return `<select ${attr}>${EQUIPES.map(e => `<option value="${e}"${e === v ? ' selected' : ''}>Équipe ${e}</option>`).join('')}</select>`; }
+function etatSiegeTexte(s, moi){
+  if(s.type === 'ferme') return {t:'fermé', c:''};
+  if(s.type === 'ordinateur') return {t:'ordinateur', c:''};
+  if(!s.pseudo && !s.id && !s.occupe) return {t:'place libre', c:''};
+  const lat = s.rtt != null ? ' · ' + Math.round(s.rtt) + ' ms' : '';
+  const pres = s.presence && s.presence !== 'la' ? ' · déconnecté' : s.enLigne === false ? ' · déconnecté' : '';
+  if(s.hote) return {t:'hôte' + (moi ? ' (vous)' : ''), c:'pret'};
+  return {t:(s.pret ? 'prêt' : 'pas encore prêt') + lat + pres + (moi ? ' (vous)' : ''), c:s.pret ? 'pret' : ''};
+}
+function rendreSalon(){
+  const zone = el('ecranSalon'); if(!zone) return;
+  const S = enLigne.salon, v = enLigne.vue;
+  const pied = `<p class="probleme" id="salonErreur">${echapper(enLigne.erreur)}</p><p class="info">${echapper(enLigne.info)}</p>`;
+  const notes = `<p class="note">${echapper(PHRASE_SOLO)}</p><p class="note">${echapper(PHRASE_LIMITES)}</p>`;
+  if(v === 'heberger' && !S){
+    const cfg = enLigne.config;
+    const lignes = [`<div class="empl"><span class="pastille" style="background:${COULEURS_CAMPS.J}"></span><b class="qui">Vous (hôte)</b>
+      <select data-k="hfaction"><option value="halden"${cfg.hote.faction === 'halden' ? ' selected' : ''}>Halden</option><option value="karsk"${cfg.hote.faction === 'karsk' ? ' selected' : ''}>Karsk</option></select>
+      ${optionsEquipes(cfg.hote.equipe, 'data-k="hequipe"')}</div>`];
+    cfg.autres.forEach((a, i) => lignes.push(`<div class="empl${a.type === 'ferme' ? ' ferme' : ''}"><span class="pastille" style="background:${a.type === 'ferme' ? 'transparent' : COULEURS_CAMPS[CAMPS_JOUEURS[i + 1]]}"></span>
+      <b class="qui">Place ${i + 2}</b><select data-i="${i}" data-k="type">${TYPES_EMPL_SALON.map(([t, n]) => `<option value="${t}"${t === a.type ? ' selected' : ''}>${n}</option>`).join('')}</select>
+      ${optionsEquipes(a.equipe, `data-i="${i}" data-k="equipe"${a.type === 'ferme' ? ' disabled' : ''}`)}</div>`));
+    zone.innerHTML = `<h2>Héberger une partie</h2>
+      <p class="note">Carte : <b>${echapper(CARTE.nom)}</b> (pour en changer, revenez à l’écran précédent). Les ordinateurs jouent en difficulté
+      <select id="salonDiff">${Object.keys(DIFFICULTES).map(d => `<option value="${d}"${d === difficulte ? ' selected' : ''}>${{facile:'Facile', normal:'Normale', difficile:'Difficile', ultra:'Ultra'}[d] || d}</option>`).join('')}</select>.</p>
+      <label class="champ">Votre pseudonyme<input type="text" id="salonPseudo" maxlength="16" value="${echapper(lirePseudo())}" placeholder="Hôte" autocomplete="off"></label>
+      <div class="raccourcis" id="salonRacc"></div><div class="emplacements">${lignes.join('')}</div>
+      <p class="note">« Joueur (en attente) » : une place pour un ami, qui choisira Halden ou Karsk. Une place de joueur restée vide au lancement est fermée.</p>
+      ${notes}<div class="boutons"><button class="grand principal" id="bOuvrirSalon" type="button"${enLigne.occupe ? ' disabled' : ''}>${enLigne.occupe ? echapper(enLigne.etapeTexte || 'Connexion au serveur…') : 'Ouvrir le salon'}</button>
+      <button class="grand" id="bSalonRetour" type="button">Retour</button></div>${pied}`;
+    const racc = el('salonRacc');
+    for(const [cle, nom] of RACCOURCIS_CAMPS){ const b = document.createElement('button'); b.type = 'button'; b.className = 'petit'; b.textContent = nom; b.onclick = () => appliquerRaccourciSalon(cle); racc.appendChild(b); }
+    brancherSelectsSalon(zone);
+    el('salonDiff').onchange = ev => { difficulte = ev.target.value; const d = el('difficulte'); if(d) d.value = difficulte; };
+    el('bOuvrirSalon').onclick = ouvrirSalon;
+    el('bSalonRetour').onclick = () => { enLigne.erreur = ''; enLigne.info = ''; afficherEscarmouche(); };
+    return;
+  }
+  if(v === 'heberger' && S){
+    const L = S.listeSieges(), desc = S.description();
+    const lignes = L.map((s, i) => {
+      const d = desc.emplacements[i], et = etatSiegeTexte(Object.assign({}, d, s), s.hote);
+      const occupe = s.id && !s.hote, cfgA = i ? enLigne.config.autres[i - 1] : null;
+      const fac = s.hote ? `<select data-k="hfaction"><option value="halden"${s.faction === 'halden' ? ' selected' : ''}>Halden</option><option value="karsk"${s.faction === 'karsk' ? ' selected' : ''}>Karsk</option></select>`
+        : s.type === 'humain' ? `<span class="etatSiege">${occupe ? nomFactionSalon(s.faction) : 'au choix du joueur'}</span>` : '';
+      const type = s.hote ? '' : `<select data-i="${i - 1}" data-k="type"${occupe ? ' disabled' : ''}>${TYPES_EMPL_SALON.map(([t, n]) => `<option value="${t}"${t === cfgA.type ? ' selected' : ''}>${n}</option>`).join('')}</select>`;
+      return `<div class="empl${s.type === 'ferme' ? ' ferme' : ''}${s.hote ? ' moi' : ''}"><span class="pastille" style="background:${s.type === 'ferme' ? 'transparent' : COULEURS_CAMPS[s.camp]}"></span>
+        <b class="qui">${echapper(s.hote ? (s.pseudo || 'Hôte') : occupe ? s.pseudo : 'Place ' + (i + 1))}</b>${type}${fac}
+        ${optionsEquipes(EQUIPES[s.equipe - 1], s.hote ? 'data-k="hequipe"' : `data-i="${i - 1}" data-k="equipe"${s.type === 'ferme' ? ' disabled' : ''}`)}
+        <span class="etatSiege ${et.c}">${echapper(et.t)}</span>${occupe ? `<button class="petit" type="button" data-expulser="${i}">Retirer</button>` : ''}</div>`;
+    });
+    const pb = problemeLancementSalon();
+    zone.innerHTML = `<h2>Salon ouvert</h2><p class="note">Code à donner à vos amis (ou envoyez-leur le lien) :</p>
+      <div class="codeSalon">${echapper(S.codeAffiche)}</div>
+      <div class="boutons" style="margin-top:0"><button class="petit" id="bCopierLien" type="button">Copier le lien d’invitation</button>
+      <input type="text" class="lienSalon" id="lienSalon" readonly value="${echapper(S.lien())}"></div>
+      <p class="note">Serveur : ${echapper(S.serveur.nom || S.serveur.url)} · carte : ${echapper(CARTE.nom)} · ordinateurs en difficulté ${echapper(difficulte)}.</p>
+      <div class="raccourcis" id="salonRacc"></div><div class="emplacements">${lignes.join('')}</div>${notes}
+      <div class="boutons"><button class="grand principal" id="bLancerSalon" type="button"${pb ? ' disabled' : ''}>Lancer la partie</button>
+      <button class="grand" id="bFermerSalon" type="button">Fermer le salon</button></div>
+      <p class="probleme">${echapper(pb || '')}</p>${pied}`;
+    const racc = el('salonRacc');
+    for(const [cle, nom] of RACCOURCIS_CAMPS){ const b = document.createElement('button'); b.type = 'button'; b.className = 'petit'; b.textContent = nom; b.onclick = () => appliquerRaccourciSalon(cle); racc.appendChild(b); }
+    brancherSelectsSalon(zone);
+    for(const b of zone.querySelectorAll('[data-expulser]')) b.onclick = () => { S.expulser(+b.dataset.expulser, 'Retiré par l’hôte.'); rendreSalon(); };
+    el('bCopierLien').onclick = () => copierLienSalon(S.lien());
+    el('bLancerSalon').onclick = () => lancerPartieSalon(el('bLancerSalon'));
+    el('bFermerSalon').onclick = async () => { const s = enLigne.salon; enLigne.salon = null; enLigne.info = 'Salon fermé.'; enLigne.config = configSalonDefaut(); try { await s.fermer(); } catch(err){} rendreSalon(); };
+    return;
+  }
+  if(v === 'rejoindre' && !S){
+    const code = enLigne.codeSaisi || '';
+    zone.innerHTML = `<h2>Rejoindre une partie</h2>
+      <label class="champ">Code du salon<input type="text" id="salonCode" maxlength="9" value="${echapper(code)}" placeholder="K7M-4QX" autocomplete="off" style="text-transform:uppercase;letter-spacing:.1em"></label>
+      <label class="champ">Votre pseudonyme<input type="text" id="salonPseudo" maxlength="16" value="${echapper(lirePseudo())}" placeholder="Joueur" autocomplete="off"></label>
+      ${notes}<div class="boutons"><button class="grand principal" id="bEntrerSalon" type="button"${enLigne.occupe ? ' disabled' : ''}>${enLigne.occupe ? echapper(enLigne.etapeTexte || 'Connexion au serveur…') : 'Rejoindre'}</button>
+      <button class="grand" id="bSalonRetour" type="button">Retour</button></div>${pied}`;
+    el('bEntrerSalon').onclick = () => rejoindreSalon(el('salonCode').value, el('salonPseudo').value);
+    el('salonCode').onkeydown = el('salonPseudo').onkeydown = ev => { if(ev.key === 'Enter') el('bEntrerSalon').click(); };
+    // Seuls les paramètres du jeu en ligne sont retirés de l'adresse (le reste, ?diff=, ?qualite=…, est gardé).
+    el('bSalonRetour').onclick = () => { enLigne.erreur = ''; enLigne.info = '';
+      const p = new URLSearchParams(location.search);
+      if(p.has('salon') || p.has('auto')){ try { history.replaceState(null, '', location.pathname + adresseSansSalon()); } catch(err){} }
+      afficherEscarmouche(); };
+    return;
+  }
+  if(v === 'rejoindre' && S){
+    // Description reçue du réseau (défaut S1) : seuls les emplacements bien formés sont montrés (index entier 0-3
+    // distinct, camp, type et équipe en liste blanche) ; tout texte est échappé, la couleur vient de la table locale.
+    const d = S.description() || {emplacements:[]}, vusIdx = new Set();
+    const empls = (Array.isArray(d.emplacements) ? d.emplacements : []).filter(s => s && entierEntre(s.index, 0, 3) && CAMPS_JOUEURS.includes(s.camp) && ['humain', 'ordinateur', 'ferme'].includes(s.type)
+      && entierEntre(s.equipe, 1, EQUIPES.length) && !vusIdx.has(s.index) && vusIdx.add(s.index));
+    const lignes = empls.map(s => {
+      const moi = s.index === S.siege, et = etatSiegeTexte(s, moi);
+      const libre = s.type === 'humain' && !s.occupe;
+      const fac = moi ? `<select id="salonFaction"><option value="halden"${s.faction === 'halden' ? ' selected' : ''}>Halden</option><option value="karsk"${s.faction === 'karsk' ? ' selected' : ''}>Karsk</option></select>`
+        : s.type === 'ferme' ? '' : `<span class="etatSiege">${s.occupe || s.type === 'ordinateur' ? echapper(nomFactionSalon(s.faction)) : ''}</span>`;
+      const qui = typeof s.pseudo === 'string' && s.pseudo ? s.pseudo : s.type === 'ordinateur' ? 'Ordinateur' : s.type === 'ferme' ? 'Fermé' : 'Place libre';
+      return `<div class="empl${s.type === 'ferme' ? ' ferme' : ''}${moi ? ' moi' : ''}"><span class="pastille" style="background:${s.type === 'ferme' ? 'transparent' : couleurDuCamp(s.camp)}"></span>
+        <b class="qui">${echapper(qui)}</b>${fac}
+        <span class="etatSiege">équipe ${echapper(EQUIPES[s.equipe - 1])}</span><span class="etatSiege ${et.c}">${echapper(et.t)}</span>
+        ${libre ? `<button class="petit" type="button" data-siege="${Number(s.index)}">Prendre cette place</button>` : ''}</div>`;
+    });
+    const mien = empls.find(s => s.index === S.siege) || {};
+    const lat = S.latence();
+    zone.innerHTML = `<h2>Salon ${echapper(S.codeAffiche)}</h2>
+      <p class="note">Carte : <b>${echapper(aCle(CARTES, d.carte) ? CARTES[d.carte].nom : 'carte inconnue')}</b> · serveur : ${echapper(S.serveur.nom || S.serveur.url)} · latence : ${lat == null ? 'mesure…' : Math.round(lat) + ' ms'}</p>
+      <div class="emplacements">${lignes.join('')}</div>
+      <p class="note">Choisissez votre camp (Halden ou Karsk), puis déclarez-vous prêt : l’hôte lance la partie quand tous les joueurs le sont. L’hôte fixe les équipes.</p>
+      <div class="boutons"><button class="grand principal" id="bPret" type="button">${mien.pret ? 'Je ne suis plus prêt' : 'Je suis prêt'}</button>
+      <button class="grand" id="bQuitterSalon" type="button">Quitter le salon</button></div>${pied}`;
+    const f = el('salonFaction');
+    if(f) f.onchange = async () => { enLigne.erreur = ''; const r = await S.demanderFaction(f.value); if(!r.accepte) enLigne.erreur = (aCle(MOTIFS_SALON, r.motif) ? MOTIFS_SALON[r.motif] : 'Refusé.'); rendreSalon(); };
+    for(const b of zone.querySelectorAll('[data-siege]')) b.onclick = async () => { enLigne.erreur = ''; const i = +b.dataset.siege; if(!entierEntre(i, 0, 3)) return; const r = await S.demanderSiege(i); if(!r.accepte) enLigne.erreur = (aCle(MOTIFS_SALON, r.motif) ? MOTIFS_SALON[r.motif] : 'Refusé.'); rendreSalon(); };
+    el('bPret').onclick = async () => { enLigne.erreur = ''; const r = await S.pret(!mien.pret); if(!r.accepte) enLigne.erreur = (aCle(MOTIFS_SALON, r.motif) ? MOTIFS_SALON[r.motif] : 'Refusé.'); rendreSalon(); };
+    el('bQuitterSalon').onclick = async () => { const s = enLigne.salon; enLigne.salon = null; enLigne.info = 'Vous avez quitté le salon.'; try { await s.quitter(); } catch(err){} libererVerrouSiege(s.code); rendreSalon(); };
+  }
+}
+function brancherSelectsSalon(zone){
+  for(const s of zone.querySelectorAll('select[data-k]')) s.onchange = () => {
+    const cfg = enLigne.config, k = s.dataset.k;
+    if(k === 'hfaction') cfg.hote.faction = s.value;
+    else if(k === 'hequipe') cfg.hote.equipe = s.value;
+    else cfg.autres[+s.dataset.i][k] = s.value;
+    pousserConfigSalon(); rendreSalon();
+  };
+}
+function copierLienSalon(lien){
+  const fini = ok => { enLigne.info = ok ? 'Lien copié : collez-le dans un message à vos amis.' : 'Copie impossible : sélectionnez le lien et copiez-le (Ctrl+C).'; rendreSalon(); };
+  try { navigator.clipboard.writeText(lien).then(() => fini(true), () => fini(false)); }
+  catch(err){ const i = el('lienSalon'); if(i){ i.select(); try { fini(document.execCommand('copy')); } catch(e){ fini(false); } } }
+}
+// Raison qui empêche de lancer (null : on peut lancer).
+function problemeLancementSalon(){
+  const S = enLigne.salon; if(!S || S.role !== 'hote') return 'Salon fermé.';
+  const L = S.listeSieges(), humains = L.filter(s => s.type === 'humain' && s.id);
+  if(humains.length < 2) return 'En attente d’au moins un autre joueur.';
+  const pas = humains.filter(s => !s.pret || s.presence !== 'la');
+  if(pas.length) return pas.length === 1 ? 'En attente : ' + pas[0].pseudo + ' n’est pas prêt.' : 'En attente : ' + pas.length + ' joueurs ne sont pas prêts.';
+  const pb = problemeConfiguration(listeDepuisSalon(L, false), emplacementsCarte(CARTE).length);
+  return pb;
+}
+// Sièges du salon -> liste des camps pour demarrer (places humaines vides : fermées ; « Aléatoire » tiré ici).
+function listeDepuisSalon(L, tirer){
+  return L.filter(s => s.type === 'ordinateur' || (s.type === 'humain' && s.id)).map(s => {
+    let f = s.faction === 'halden' || s.faction === 'karsk' ? s.faction : null;
+    if(!f) f = s.type === 'ordinateur' && tirer ? (Math.random() < 0.5 ? 'halden' : 'karsk') : 'halden';
+    return {id:s.camp, faction:f, equipe:EQUIPES[s.equipe - 1] || 'A', ia:s.type === 'ordinateur', pseudo:s.type === 'humain' ? s.pseudo : null};
+  });
+}
+
+// ---------- Hôte : ouverture du salon et lancement ----------
+async function ouvrirSalon(){
+  if(enLigne.occupe) return;
+  const saisi = (el('salonPseudo').value || '').trim(), pseudo = saisi || 'Hôte';
+  if(saisi) memoriserPseudo(saisi);
+  enLigne.erreur = ''; enLigne.info = ''; enLigne.etapeTexte = ''; enLigne.etapeRecherche = null; enLigne.occupe = true; rendreSalon();
+  try {
+    await chargerScriptReseau();
+    declarerTypesReseau();
+    reseauOnglets();
+    const S = await Reseau.creerSalon(Object.assign({versionJeu:VERSION_FICHIERS, carte:CARTE.id, empreinteCarte:empreinteCarte(), etape:etapeConnexion,
+      emplacements:emplacementsSalon(enLigne.config), siegeHote:0, pseudonyme:pseudo, minHumains:2, placesLibres:'ferme',
+      arbitrer:d => d.type === 'faction' ? (d.faction === 'halden' || d.faction === 'karsk' ? true : 'factionInvalide') : d.type === 'equipe' ? 'refuse' : true},
+      optionsServeur()));
+    enLigne.salon = S;
+    for(const ev of ['sieges', 'arrivee', 'depart', 'retour', 'refus']) S.on(ev, () => { if(!enJeu && enLigne.salon === S) rendreSalon(); });
+    S.on('arrivee', d => { if(!enJeu) enLigne.info = d.pseudo + ' est arrivé.'; });
+    S.on('refus', d => { if(!enJeu && d.motif) enLigne.info = 'Arrivée refusée (' + (Reseau.MESSAGES[d.motif] || d.motif) + ').'; });
+    // Latences des invités (battements de cœur) : l'écran du salon est rafraîchi toutes les 2 s.
+    const t = setInterval(() => { if(enLigne.salon !== S || enJeu){ clearInterval(t); return; } if(!document.querySelector('#ecranSalon select:focus')) rendreSalon(); }, 2000);
+  } catch(err){
+    enLigne.erreur = 'Impossible d’ouvrir le salon : ' + texteErreurReseau(err);
+  }
+  enLigne.occupe = false; rendreSalon();
+}
+function lancerPartieSalon(bouton){
+  const S = enLigne.salon; if(!S || lancementEnCours) return;
+  const pb = problemeLancementSalon();
+  if(pb){ enLigne.erreur = pb; rendreSalon(); return; }
+  const liste = listeDepuisSalon(S.listeSieges(), true);
+  const empl = emplacementsCarte(CARTE), rep = empl.length >= liste.length ? repartirEmplacements(liste, empl) : null;
+  const publics = liste.map((k, i) => ({id:k.id, faction:k.faction, equipe:k.equipe, couleur:COULEURS_CAMPS[k.id], ia:k.ia, emplacement:rep ? rep[i] : i, pseudo:k.pseudo}));
+  const r = S.lancer({carte:CARTE.id, empreinte:empreinteCarte(), camps:publics, difficulte});
+  if(!r || !r.ok){ enLigne.erreur = MOTIFS_SALON[r && r.erreur] || 'Lancement refusé.'; rendreSalon(); return; }
+  lancerEnLigne(bouton, () => demarrerHote(S, liste, publics));
+}
+// Lancement en ligne : comme le solo (preparerLancement), sauf onglet caché, où les minuteries du navigateur sont
+// bridées (jusqu'à une par minute) : on démarre alors tout de suite, sans attendre les vignettes.
+// sansAttente : retour dans une partie déjà commencée (chaque seconde compte : le siège n'est gardé que 60 s).
+function lancerEnLigne(bouton, demarrage, sansAttente){
+  if(!document.hidden && !sansAttente) return preparerLancement(bouton, demarrage);
+  if(lancementEnCours) return;
+  if(!document.hidden){   // retour, onglet visible : au tour suivant comme un lancement, mais sans attendre les vignettes
+    lancementEnCours = true;
+    auTourSuivant(() => { try { demarrage(); preparerRenduPartie(); } finally { lancementEnCours = false; } });
+    return;
+  }
+  demarrage(); preparerRenduPartie();
+}
+function demarrerHote(S, liste, publics){
+  surprise.demandee = false;   // mode Surprises : solo seulement
+  for(const k of publics) pseudosEnLigne[k.id] = k.pseudo || null;
+  demarrer(liste[0].faction, liste.map(k => ({id:k.id, faction:k.faction, equipe:k.equipe, ia:k.ia})), {campLocal:S.camp});
+  modeReseau = 'hote'; roleMonde = 'hote';
+  Object.assign(enLigne, {finMontree:false, spectateur:false, finGlobale:false, finGlobaleT:0, suspendu:false, pasT:performance.now(), issueFin:null, bilan:null});
+  brancherHote(S);
+  S.on('depart', d => { if(enJeu) notifier('tous', d.pseudo + ' s’est déconnecté : son camp reste immobile ; il sera confié à l’ordinateur dans 60 secondes s’il ne revient pas.', 'alerte'); });
+  S.on('retour', d => { if(enJeu) notifier('tous', d.pseudo + ' est de retour.', 'succes'); });
+  S.on('campConfie', d => { if(enJeu) notifier('tous', 'Le camp de ' + d.pseudo + ' (' + nomCamp(d.camp).toLowerCase() + ') est confié à l’ordinateur.', 'info'); });
+  S.on('deconnecte', () => { enLigne.suspendu = true; });   // simulation suspendue jusqu'au retour de la connexion
+  S.on('reconnecte', () => { enLigne.suspendu = false; enLigne.pasT = performance.now(); });
+  S.on('fin', d => afficherInterruption(d && d.message || 'La connexion au serveur est perdue.'));
+  demarrerMinuteurReseau();
+  ticHote(true);
+  message('Partie en ligne : vous êtes l’hôte. Gardez cet onglet ouvert jusqu’à la fin ; vous seul pouvez mettre en pause.', 'succes');
+}
+// Simulation de l'hôte à l'horloge réelle, en pas de 50 ms au plus (comme le solo), appelée par la boucle d'affichage
+// et, onglet caché, par le minuteur du Worker. Rattrapage borné à 1 s par appel.
+function avancerHote(maintenant){
+  let brut = Math.min(1, Math.max(0, (maintenant - enLigne.pasT)/1000));
+  enLigne.pasT = maintenant;
+  if(!enLigne.suspendu) while(brut > 1e-4){
+    const dt = Math.min(0.05, brut); brut -= dt;
+    if(!enPause && !partieFinie) miseAJour(dt);
+  }
+  if(!enLigne.suspendu) ticHote();
+  // Plus qu'une équipe en jeu : instantané final, puis fin de partie annoncée à tous 1,5 s plus tard (3 s avant le
+  // septième tour : depuis que l'écran de fin d'un invité attend cette annonce, il restait 3 à 4 s devant un monde figé).
+  if(enLigne.finGlobale && !enLigne.finEnvoyee && maintenant - enLigne.finGlobaleT > 1500 && salonHote){
+    enLigne.finEnvoyee = true;
+    salonHote.terminer({equipe:enLigne.equipeGagnante || null}).catch(() => {});
+  }
+}
+function equipesEnVie(){ return [...new Set(campsEnJeu().filter(enVie).map(equipeDe))]; }
+// Fin en ligne (hôte et invités) : un camp gagne quand toutes les équipes adverses sont éliminées, perd quand
+// toute son équipe l'est ; éliminé seul, il reste spectateur jusqu'à la fin de son équipe.
+function issueEnLigne(camp){
+  const eq = equipeDe(camp), F = faction(camp);
+  const ennemis = campsEnJeu().some(id => enVie(id) && equipeDe(id) !== eq);
+  if(!ennemis) return {victoire:true, texte:F.victoire};
+  if(!campsEnJeu().some(id => enVie(id) && equipeDe(id) === eq)) return {victoire:false, texte:F.defaite};
+  return null;
+}
+function verifierFinEnLigne(){
+  if(modeReseau === 'hote' && !enLigne.finGlobale){
+    const eqs = equipesEnVie();
+    if(eqs.length <= 1){
+      enLigne.finGlobale = true; enLigne.finGlobaleT = performance.now(); enLigne.equipeGagnante = eqs[0] || null; partieFinie = true; ticHote(true);
+      // Bilan pour les invités (défaut R8) : statistiques de chaque camp (seul l'hôte les compte) et durée exacte.
+      if(salonHote){
+        const stats = {};
+        for(const id of campsEnJeu()){ const s = statsDe(id); stats[id] = {produites:s.produites, perdues:s.perdues, detruites:s.detruites}; }
+        try { salonHote.envoyerEvenement('bilan', {temps, stats}); } catch(err){ console.warn('[Réseau] bilan :', err); }
+      }
+    }
+  }
+  if(enLigne.finMontree) return;
+  let issue = issueEnLigne(campLocal());
+  // Invité, fin confirmée : l'équipe gagnante annoncée par l'hôte fait foi sur l'état affiché, qu'un joueur qui a le
+  // code peut fausser juste avant la fin (septième tour : DÉFAITE affichée au vainqueur, ou l'inverse).
+  if(modeReseau === 'invite' && enLigne.finConfirmee && EQUIPES.includes(enLigne.equipeFin) && camps[campLocal()]){
+    const v = equipeDe(campLocal()) === enLigne.equipeFin, F = faction(campLocal());
+    issue = {victoire:v, texte:v ? F.victoire : F.defaite};
+  }
+  // Invité : l'écran de fin n'apparaît que sur une fin confirmée par reseau.js (eliminationsSures) ; l'état
+  // « spectateur » suit le flux, après une seconde d'instantanés consécutifs (eliminationStable). Un invité dont
+  // toute l'équipe est éliminée alors que d'autres équipes jouent encore reste donc spectateur jusqu'à la fin.
+  if(!issue || !eliminationsSures()){
+    const elimine = !enVie(campLocal());
+    if(elimine && !enLigne.spectateur && (modeReseau !== 'invite' || enLigne.finConfirmee || eliminationStable(campLocal()))){
+      enLigne.spectateur = true; message(modeReseau === 'invite' ? 'Votre camp est éliminé : vous restez spectateur jusqu’à la fin de la partie.' : 'Votre camp est éliminé : vous restez spectateur jusqu’à la fin de la partie de votre équipe.', 'alerte');
+    } else if(!elimine && enLigne.spectateur) enLigne.spectateur = false;
+    return;
+  }
+  enLigne.finMontree = true;
+  if(modeReseau === 'invite') partieFinie = true;
+  // Durée (défaut R5) : instant de la dernière élimination qui décide de l'issue (équipes adverses pour une
+  // victoire, la sienne pour une défaite), le même chez l'hôte et chez les invités (l'hôte envoie un instantané à
+  // l'instant exact de la fin), au lieu de l'horloge d'affichage de l'invité, en avance de 0,25 s au plus.
+  const eq = equipeDe(campLocal());
+  const decisifs = campsEnJeu().filter(id => camps[id].elimine && (issue.victoire ? equipeDe(id) !== eq : equipeDe(id) === eq) && estNombre(camps[id].elimineT));
+  const t = decisifs.length ? Math.max(...decisifs.map(id => camps[id].elimineT)) : temps;
+  enLigne.issueFin = {victoire:issue.victoire, texte:issue.texte, t:Math.min(t, temps)};
+  issuePartie = {victoire:issue.victoire, t:enLigne.issueFin.t, camps:sortDesCamps(), enLigne:true};
+  rendreFinEnLigne();
+  el('fin').classList.remove('cache');
+  jouerMusique(issue.victoire ? 'victoire' : 'defaite');
+}
+// Écran de fin en ligne (refait chez l'invité quand le bilan de l'hôte arrive avec ses statistiques).
+function rendreFinEnLigne(){
+  const f = enLigne.issueFin; if(!f || !el('finContenu')) return;
+  const S = modeReseau === 'hote' ? statsDe(campLocal()) : enLigne.bilan && enLigne.bilan.stats[campLocal()] || null;
+  el('finContenu').innerHTML = `<h1 style="color:${f.victoire ? '#6fd67c' : '#ff7a5c'}">${f.victoire ? 'VICTOIRE' : 'DÉFAITE'}</h1>
+    <p class="recit">${f.texte}</p>${tableauCamps(f.victoire, campLocal())}
+    <table><tr><td>Durée</td><td><b>${enMinSec(f.t)}</b></td></tr>
+    ${S ? `<tr><td>Unités produites</td><td><b>${S.produites}</b></td></tr>
+    <tr><td>Pertes (unités et bâtiments)</td><td><b>${S.perdues}</b></td></tr>
+    <tr><td>Ennemis détruits (unités et bâtiments)</td><td><b>${S.detruites}</b></td></tr>` : `<tr><td colspan="2">Statistiques : à la fin de la partie (comptées chez l’hôte).</td></tr>`}</table>
+    ${modeReseau === 'hote' && !enLigne.finGlobale ? '<p class="recit">La partie continue pour les autres équipes : si vous quittez, elle se terminera pour tous.</p>' : ''}
+    <button class="grand" onclick="quitterPartieReseau()">Retour au menu</button>`;
+}
+// Partie interrompue (hôte parti, salon fermé, camp confié, coupure trop longue) : écran clair, retour au menu.
+function afficherInterruption(texte){
+  if(enLigne.finMontree && modeReseau === 'invite') return;   // l'écran de fin est déjà là
+  enLigne.finMontree = true; partieFinie = true;
+  el('finContenu').innerHTML = `<h1 style="color:#ffb38a">PARTIE INTERROMPUE</h1><p class="recit">${echapper(texte)}</p>
+    <button class="grand" onclick="quitterPartieReseau()">Retour au menu</button>`;
+  el('fin').classList.remove('cache');
+}
+// Départ (bouton Quitter, retour au menu) : l'hôte ferme le salon (fin pour tous), l'invité libère sa présence.
+let departReseau = false;
+async function quitterPartieReseau(){
+  if(departReseau) return; departReseau = true;
+  const attendre = p => Promise.race([Promise.resolve(p).catch(() => {}), new Promise(ok => setTimeout(ok, 2500))]);
+  try {
+    if(salonHote && !salonHote.ferme) await attendre(salonHote.fermer());
+    if(salonInvite && !salonInvite.fini) await attendre(salonInvite.quitter());
+  } catch(err){}
+  oublierSiegeInvite();
+  location.href = location.pathname + adresseSansSalon();
+}
+// Paramètres de l'adresse sans ceux du jeu en ligne (salon, auto, et le serveur venu avec un lien d'invitation, sinon
+// une partie hébergée ensuite resterait liée à ce seul serveur) : le reste (?diff=, ?qualite=, ?carte=…) est gardé.
+function adresseSansSalon(){
+  const p = new URLSearchParams(location.search);
+  if(p.has('salon')) p.delete('srv');
+  p.delete('salon'); p.delete('auto');
+  const q = p.toString().replace(/=(?=&|$)/g, '');
+  return q ? '?' + q : '';
+}
+// Le joueur invité a choisi de partir (Retour au menu, Quitter) : la mémoire du siège est effacée, même après une
+// fin incertaine (hôte parti, salon fermé) que reseau.js laisse en place. Jamais pour un onglet sans mémoire
+// (memoriser:false, second onglet) : la mémoire est celle de l'autre onglet.
+function oublierSiegeInvite(){
+  try { if(salonInvite && salonInvite.memoriser !== false && window.Reseau && Reseau.oublierMemoire) Reseau.oublierMemoire(salonInvite.code); } catch(err){}
+}
+
+// ---------- Invité : arrivée, carte, lancement ----------
+function afficherRejoindre(params){
+  enLigne.codeSaisi = params && params.get('salon') ? params.get('salon') : '';
+  enLigne.config = null;
+  montrerSalon('rejoindre');
+  // Retour automatique (défaut R1) : siège mémorisé pour ce salon (page rechargée, ou onglet fermé puis lien rouvert
+  // dans ce navigateur, moins de 3 heures après), ou page rechargée sur la carte de l'hôte (&auto=1). Après un refus
+  // définitif, reseau.js a effacé la mémoire : le lien ouvre alors l'écran « Rejoindre » sans insister.
+  const nc = window.Reseau && enLigne.codeSaisi ? Reseau.normaliserCode(enLigne.codeSaisi) : null;
+  const memo = nc && nc.code ? memoireSiege(nc.code) : null;
+  if(nc && nc.code && (memo || (params.get('auto') === '1' && lirePseudo()))){
+    if(memo) enLigne.info = 'Retour dans la partie…';
+    rejoindreSalon(enLigne.codeSaisi, lirePseudo(), {auto:true});
+  }
+}
+async function rejoindreSalon(saisie, pseudo, o){
+  if(enLigne.occupe) return;
+  const saisi = String(pseudo || '').trim();
+  pseudo = saisi || 'Joueur';
+  enLigne.erreur = ''; enLigne.info = o && o.auto && enLigne.info ? enLigne.info : ''; enLigne.codeSaisi = saisie; enLigne.etapeTexte = ''; enLigne.etapeRecherche = null;
+  try { await chargerScriptReseau(); } catch(err){ enLigne.erreur = 'reseau.js introuvable.'; rendreSalon(); return; }
+  const nc = Reseau.normaliserCode(saisie);
+  if(nc.erreur){ enLigne.erreur = nc.erreur; rendreSalon(); return; }
+  if(saisi) memoriserPseudo(saisi);
+  enLigne.occupe = true; rendreSalon();
+  let S = null, autre = false;
+  try {
+    declarerTypesReseau();
+    // Deux onglets du même navigateur dans le même salon : l'onglet dupliqué (verrou du siège tenu par l'autre onglet,
+    // ou, sans Web Locks, réponse par BroadcastChannel) prend un nouvel identifiant sans lire ni écrire la mémoire du siège, donc une autre place
+    // (ou un refus), au lieu de voler le siège de l'autre.
+    autre = await identifiantPrisParUnAutreOnglet(nc.code);
+    // factions : toutes les valeurs que l'hôte peut publier (ordinateur aléatoire compris) ; aucun niveau n'est publié.
+    const opts = Object.assign({versionJeu:VERSION_FICHIERS, etape:etapeConnexion, factions:['halden', 'karsk', 'aleatoire'], niveaux:Object.keys(DIFFICULTES)}, optionsServeur());
+    if(autre){ opts.memoriser = false; enLigne.info = 'Un autre onglet de ce navigateur occupe déjà une place de ce salon : cet onglet en prend une autre.'; }
+    S = await Reseau.rejoindre(nc.code, pseudo, opts);
+  } catch(err){
+    enLigne.occupe = false; enLigne.etapeTexte = '';
+    if(!autre) libererVerrouSiege();
+    const motif = err && err.motif;
+    enLigne.erreur = autre && motif === 'commencee' ? 'Cette partie est déjà ouverte dans un autre onglet de ce navigateur : continuez-la dans cet onglet.' : texteErreurReseau(err);
+    // Refus définitif (partie commencée, camp confié, retiré, salon fermé) : un message clair, aucune nouvelle tentative.
+    enLigne.info = !autre && ['commencee', 'confie', 'expulse', 'ferme', 'sansSiege'].includes(motif) ? 'Ce lien ne permet plus d’entrer dans cette partie.' : '';
+    rendreSalon(); return;
+  }
+  enLigne.occupe = false; enLigne.etapeTexte = '';
+  // Carte de l'hôte : la page est rechargée sur elle (le décor 3D n'est construit qu'une fois), puis rejoint seule.
+  // Seule une carte du catalogue est admise (clé propre de CARTES), et une seule fois (&auto=1 : pas de boucle).
+  const d = S.description() || {};
+  if(d.carte && (!CARTE || d.carte !== CARTE.id)){
+    const connue = typeof CARTES !== 'undefined' && aCle(CARTES, d.carte) && CARTES[d.carte] && typeof CARTES[d.carte].nom === 'string';
+    const dejaRecharge = new URLSearchParams(location.search).get('auto') === '1';
+    if(!connue || dejaRecharge){ enLigne.erreur = connue ? 'Impossible d’ouvrir la carte de l’hôte : rechargez la page (Ctrl+F5).' : 'Carte inconnue de cette version du jeu.'; try { await S.quitter(); } catch(err){} libererVerrouSiege(); rendreSalon(); return; }
+    enLigne.info = 'Chargement de la carte de l’hôte (' + CARTES[d.carte].nom + ')…'; rendreSalon();
+    // Connexion fermée sans annoncer de départ : la mémoire du siège reste, la page rechargée reprend le même siège.
+    try { if(S.fermerSansPartir) await S.fermerSansPartir(); else await S.quitter(); } catch(err){}
+    const p = new URLSearchParams(location.search);
+    p.set('carte', d.carte); p.set('salon', nc.code); p.set('auto', '1');
+    if(S.serveur && S.serveur.cle && S.serveur.cle !== 'boucle' && !p.get('srv')) p.set('srv', S.serveur.cle);
+    location.href = location.pathname + '?' + p.toString();
+    return;
+  }
+  if(d.empreinte && d.empreinte !== empreinteCarte()){
+    enLigne.erreur = 'La carte de l’hôte diffère de la vôtre (version du jeu différente ?) : rechargez la page (Ctrl+F5).';
+    try { await S.quitter(); } catch(err){} libererVerrouSiege(); rendreSalon(); return;
+  }
+  if(new URLSearchParams(location.search).get('auto')){ const p = new URLSearchParams(location.search); p.delete('auto'); history.replaceState(null, '', location.pathname + '?' + p.toString()); }
+  // Code tapé à la main : l'adresse reçoit ?salon=, pour qu'un rechargement de la page (F5) ramène seul dans le salon
+  // ou dans la partie, comme avec le lien d'invitation (le siège mémorisé fait le reste).
+  try { const p = new URLSearchParams(location.search); if(p.get('salon') !== nc.code){ p.set('salon', nc.code); history.replaceState(null, '', location.pathname + '?' + p.toString().replace(/=(?=&|$)/g, '')); } } catch(err){}
+  enLigne.salon = S;
+  if(!S.debut && enLigne.info === 'Retour dans la partie…') enLigne.info = '';   // simple retour dans le salon, partie non commencée
+  // Retour dans une partie en cours : l'instantané complet et le rappel de pause envoyés par l'hôte à l'arrivée
+  // peuvent précéder le démarrage du monde de l'invité (chargement) ; on garde le dernier pour demarrerInvite,
+  // sinon, hôte en pause, l'invité resterait sans monde jusqu'à la reprise (défaut R2).
+  enLigne.etatAvant = null; enLigne.pauseAvant = null;
+  S.on('etat', s => { if(!enJeu) enLigne.etatAvant = s; });
+  S.on('evenement', ev => { if(!enJeu && ev && ev.t === 'pause') enLigne.pauseAvant = ev.oui === true; });
+  for(const ev of ['description', 'siege']) S.on(ev, () => { if(!enJeu && enLigne.salon === S) rendreSalon(); });
+  S.on('fin', d => {
+    if(enJeu) return finInviteReseau(d);
+    libererVerrouSiege(S.code);   // fin du salon : verrou rendu, même si l'écran montre déjà autre chose
+    if(enLigne.salon === S){ enLigne.salon = null; enLigne.erreur = d && d.message ? d.message : 'Le salon est fermé.'; rendreSalon(); }
+  });
+  S.on('debut', debut => { if(!enJeu && !lancementEnCours) lancerEnLigne(null, () => demarrerInvite(S, debut)); });
+  const t = setInterval(() => { if(enLigne.salon !== S || enJeu){ clearInterval(t); return; } if(!document.querySelector('#ecranSalon select:focus')) rendreSalon(); }, 2000);
+  rendreSalon();
+  // Partie déjà en cours (retour après rechargement) : l'événement debut a pu partir avant nos écouteurs.
+  if(S.debut && !enJeu && !lancementEnCours) lancerEnLigne(null, () => demarrerInvite(S, S.debut), true);
+}
+// Réponse des autres onglets de ce navigateur (BroadcastChannel, créé seulement en ligne).
+let canalOnglets = null;
+function reseauOnglets(){
+  if(canalOnglets || typeof BroadcastChannel !== 'function') return canalOnglets;
+  canalOnglets = new BroadcastChannel('frontDeSel.reseau');
+  canalOnglets.onmessage = ev => {
+    const m = ev.data, S = enLigne.salon || salonInvite;
+    if(m && m.q === 'qui' && S && S.role === 'invite' && S.code === m.code && !S.fini) canalOnglets.postMessage({r:'moi', code:m.code, id:S.id});
+  };
+  return canalOnglets;
+}
+// Verrou du siège (Web Locks, défaut des deux onglets du 14 novembre 2026) : pris par l'onglet qui entre dans un salon
+// et tenu toute sa vie ; le navigateur le libère à la fermeture ou au rechargement de l'onglet. Un onglet figé ou
+// occupé le garde (la question par BroadcastChannel, elle, exigeait une réponse en 250 ms). Rend true (pris), false
+// (tenu par un autre onglet) ou null (pas de verrous dans ce navigateur : on se rabat sur BroadcastChannel).
+let verrouSiege = null;
+function prendreVerrouSiege(code){
+  if(!(navigator.locks && typeof navigator.locks.request === 'function')) return Promise.resolve(null);
+  if(verrouSiege && verrouSiege.code === code) return Promise.resolve(true);
+  libererVerrouSiege();   // verrou d'un autre salon (code différent) : rendu avant d'en prendre un nouveau
+  return new Promise(ok => {
+    let relacher = null;
+    const tenu = new Promise(r => { relacher = r; });
+    navigator.locks.request('frontDeSel.siege.' + code, {ifAvailable:true}, verrou => {
+      if(!verrou){ ok(false); return; }
+      verrouSiege = {code, liberer:() => { verrouSiege = null; relacher(); }};
+      ok(true);
+      return tenu;
+    }).catch(() => ok(null));
+  });
+}
+// code (facultatif) : ne rend le verrou que s'il est celui de ce salon.
+function libererVerrouSiege(code){ if(verrouSiege && (code == null || verrouSiege.code === code)) verrouSiege.liberer(); }
+async function identifiantPrisParUnAutreOnglet(code){
+  const v = await prendreVerrouSiege(code);
+  if(v !== null) return !v;
+  const memo = memoireSiege(code), id = memo ? memo.id : null;   // jamais le jeton (reseau.js le garde)
+  const c = reseauOnglets();
+  if(!id || !c) return Promise.resolve(false);
+  return new Promise(ok => {
+    const f = ev => { if(ev.data && ev.data.r === 'moi' && ev.data.code === code && ev.data.id === id){ c.removeEventListener('message', f); ok(true); } };
+    c.addEventListener('message', f);
+    c.postMessage({q:'qui', code});
+    setTimeout(() => { c.removeEventListener('message', f); ok(false); }, 250);
+  });
+}
+// Description de la partie ('debut') contrôlée avec les tables du jeu (défaut S1) : camp parmi J, I, K, L (distincts),
+// faction Halden ou Karsk, équipe A-D, emplacement entier distinct de la carte, pseudonyme nettoyé ; la couleur
+// n'est jamais reprise. Renvoie la liste des camps, ou null si la description ne tient pas.
+function campsDuDebut(debut){
+  if(!debut || typeof debut !== 'object' || !Array.isArray(debut.camps) || debut.camps.length < 2 || debut.camps.length > 4) return null;
+  if(debut.carte != null && (!CARTE || debut.carte !== CARTE.id)) return null;
+  const nbEmpl = emplacementsCarte(CARTE).length, vusId = new Set(), vusEmpl = new Set(), liste = [];
+  for(const k of debut.camps){
+    if(!k || typeof k !== 'object' || !CAMPS_JOUEURS.includes(k.id) || vusId.has(k.id)) return null;
+    if(k.faction !== 'halden' && k.faction !== 'karsk') return null;
+    if(!EQUIPES.includes(k.equipe)) return null;
+    if(!entierEntre(k.emplacement, 0, nbEmpl - 1) || vusEmpl.has(k.emplacement)) return null;
+    vusId.add(k.id); vusEmpl.add(k.emplacement);
+    const pseudo = typeof k.pseudo === 'string' ? Reseau.nettoyerPseudo(k.pseudo) : '';
+    liste.push({id:k.id, faction:k.faction, equipe:k.equipe, ia:k.ia === true, emplacement:k.emplacement, pseudo:pseudo || null});
+  }
+  return liste;
+}
+function demarrerInvite(S, debut){
+  const liste = campsDuDebut(debut);
+  if(!liste || !liste.some(k => k.id === S.camp)){ afficherInterruption('Description de la partie illisible.'); try { S.quitter(); } catch(err){} return; }
+  surprise.demandee = false;
+  preparerMondeInvite(liste, S.camp);
+  const empl = emplacementsCarte(CARTE);
+  for(const k of liste){ pouvoirsActifs[k.id] = true; pseudosEnLigne[k.id] = k.pseudo || null; if(empl[k.emplacement]) basesCarte[k.id] = empl[k.emplacement]; }
+  modeReseau = 'invite';
+  Object.assign(enLigne, {finMontree:false, spectateur:false, injoignable:false, deconnecte:false, pasT:performance.now(), issueFin:null, bilan:null, finConfirmee:false, equipeFin:null});
+  brancherInvite(S);
+  // Pause d'abord, instantané ensuite : l'état de pause porté par l'instantané (le plus sûr) a le dernier mot.
+  if(enLigne.pauseAvant != null){ recevoirEvenementInvite({t:'pause', oui:enLigne.pauseAvant}); enLigne.pauseAvant = null; }
+  if(enLigne.etatAvant){ recevoirInstantane(enLigne.etatAvant); enLigne.etatAvant = null; }
+  S.on('evenement', ev => {
+    if(ev.t === 'pause' && ev.rappel !== true) message(ev.oui === true ? 'L’hôte a mis la partie en pause.' : 'La partie reprend.', 'info');
+  });
+  S.on('hoteInjoignable', () => { enLigne.injoignable = true; });
+  S.on('hoteRetrouve', () => { enLigne.injoignable = false; });
+  S.on('deconnecte', () => { enLigne.deconnecte = true; });
+  S.on('reconnecte', () => { enLigne.deconnecte = false; });
+  el('menu').classList.add('cache');
+  for(const id of ['barre', 'panneau', 'mini']) el(id).classList.remove('cache');
+  el('bAbandon').textContent = 'Quitter';
+  enJeu = true;
+  construireBarrePouvoirs();
+  R3D.vue.distance = 820;
+  const b = basesCarte[S.camp]; if(b) centrerSur((b.c + 1.5)*TUILE, (b.r + 1.5)*TUILE + 120);
+  construireBandeauCamps();
+  jouerMusique('calme');
+  demarrerMinuteurReseau();
+  message(CARTE.nom + ' : partie en ligne. Vous jouez le camp ' + nomCamp(S.camp).toLowerCase() + ' (' + FACTIONS[camps[S.camp].faction].nom + ').', 'succes');
+}
+function finInviteReseau(d){
+  const motif = d && d.motif;
+  // La partie est finie pour cet onglet : le verrou du siège est rendu (un autre onglet ne se croira pas doublon).
+  libererVerrouSiege(salonInvite && salonInvite.code);
+  if(motif === 'fin'){
+    // Fin confirmée par reseau.js (message privé « fin » de l'hôte, rattrapage privé, ou silence de l'hôte après
+    // l'annonce) : les éliminations lues font foi tout de suite.
+    enLigne.finConfirmee = true;
+    // Équipe gagnante annoncée par l'hôte (lettre A-D contrôlée) : elle décide de l'issue affichée (verifierFinEnLigne).
+    const eqG = d.donnees && EQUIPES.includes(d.donnees.equipe) ? d.donnees.equipe : null;
+    enLigne.equipeFin = eqG;
+    if(!enLigne.finMontree){ try { verifierFin(); } catch(err){} }
+    // Filet (dernier instantané perdu, erreur ci-dessus) : l'issue se lit quand même dans l'équipe annoncée.
+    if(!enLigne.finMontree && eqG && camps[campLocal()]){
+      const victoire = equipeDe(campLocal()) === eqG, F = faction(campLocal());
+      enLigne.finMontree = true; partieFinie = true;
+      enLigne.issueFin = {victoire, texte:victoire ? F.victoire : F.defaite, t:enLigne.bilan && enLigne.bilan.temps != null ? enLigne.bilan.temps : temps};
+      rendreFinEnLigne(); el('fin').classList.remove('cache');
+      jouerMusique(victoire ? 'victoire' : 'defaite');
+    }
+    if(!enLigne.finMontree) afficherInterruption('La partie est terminée.');
+    return;
+  }
+  const textes = {ferme:'L’hôte a fermé la partie.', hoteParti:'L’hôte a quitté la partie : elle se termine pour tous.',
+    hoteInjoignable:'L’hôte ne donne plus de nouvelles depuis une minute : la partie est terminée.', confie:'Votre camp a été confié à l’ordinateur (absence de plus de 60 secondes).',
+    expulse:'L’hôte vous a retiré de la partie.',
+    connexionPerdue:'Votre connexion au serveur est coupée depuis plus d’une minute : la partie continue sans vous et votre camp passe à l’ordinateur.',
+    sansSiege:'L’hôte ne vous compte plus parmi les joueurs : votre place dans cette partie a été libérée.'};
+  afficherInterruption(textes[motif] || (d && d.message) || 'La partie est interrompue.');
+}
+// Pas de l'invité : appelé par la boucle d'affichage, et, onglet caché, par le minuteur du Worker.
+function pasInvite(dt){ enLigne.pasT = performance.now(); avancerInvite(dt); }
+
+// ---------- Onglet caché : minuteur du Worker (non bridé), rendu sauté ----------
+function demarrerMinuteurReseau(){
+  if(enLigne.arret) enLigne.arret();
+  enLigne.titre = document.title;
+  enLigne.arret = Reseau.minuteur(50, () => {
+    const t = performance.now();
+    if(t - enLigne.rafT < 150) return;   // la boucle d'affichage tourne : rien à faire
+    try {
+      if(modeReseau === 'hote') avancerHote(t);
+      else if(modeReseau === 'invite') pasInvite(Math.min(0.25, Math.max(0, (t - enLigne.pasT)/1000)));
+    } catch(err){ console.warn('[Réseau] pas en arrière-plan :', err); }
+  });
+}
+document.addEventListener('visibilitychange', () => {
+  if(modeReseau !== 'hote' || !enJeu) return;
+  if(document.hidden){ enLigne.cacheT = performance.now(); document.title = 'Front de Sel — partie hébergée en cours'; }
+  else {
+    document.title = enLigne.titre || 'Front de Sel';
+    if(enLigne.cacheT && performance.now() - enLigne.cacheT > 2000) message('La partie a continué pendant que cet onglet était caché : ne le fermez pas, elle tourne sur votre navigateur.', 'info');
+    enLigne.cacheT = 0;
+  }
+});
+
+// ---------- État de la connexion (bandeau discret, touche F8) ----------
+function majEtatReseau(){
+  const z = el('etatReseau'); if(!z) return;
+  if(!enJeu || !(modeReseau === 'hote' || modeReseau === 'invite')){ z.classList.add('cache'); return; }
+  let t = '', alerte = false;
+  if(modeReseau === 'hote' && salonHote){
+    const L = salonHote.listeSieges().filter(s => s.type === 'humain' && !s.hote && s.id);
+    const partis = L.filter(s => s.presence && s.presence !== 'la');
+    t = 'En ligne · hôte · salon ' + salonHote.codeAffiche + ' · ' + (L.length + 1) + ' joueurs · gardez cet onglet ouvert';
+    if(partis.length){ alerte = true; t = partis.map(s => s.pseudo + ' déconnecté (confié dans ' + Math.max(0, Math.ceil((60000 - s.horsLigneDepuisMs)/1000)) + ' s)').join(' · '); }
+    if(enLigne.suspendu){ alerte = true; t = 'Connexion au serveur perdue : partie suspendue, reconnexion…'; }
+    if(enPause) t += ' · en pause';
+  } else if(modeReseau === 'invite' && salonInvite){
+    const l = salonInvite.latence();
+    t = 'En ligne · ' + (l == null ? 'latence : mesure…' : 'latence ' + Math.round(l) + ' ms') + (enLigne.spectateur ? ' · spectateur' : '') + (enPause ? ' · pause (hôte)' : '');
+    if(enLigne.injoignable){ alerte = true; t = 'Hôte injoignable : attente de son retour…'; }
+    if(enLigne.deconnecte){ alerte = true; t = 'Connexion perdue : reconnexion…'; }
+  }
+  z.classList.remove('cache'); z.classList.toggle('alerte', alerte);
+  ecrireTexte(z, t);
+}
+function lignesPerfReseau(){
+  const ko = v => (v/1024).toFixed(1) + ' Ko/s';
+  // Messages jetés par la vérification du sceau (reseau.js, statistiques().sceau) : nombres seulement. Les corps
+  // vides (effacement normal d'un message conservé, par exemple la présence d'un invité qui part) ne sont pas comptés.
+  const jetes = st => {
+    const r = st && st.sceau && st.sceau.rejets || {}, n = k => Number.isInteger(r[k]) && r[k] > 0 ? r[k] : 0;
+    const sans = n('sceau') + n('taille') + n('sujet') + n('exception'), rejoues = n('rejeu');
+    return sans || rejoues ? ' · messages jetés : ' + sans + ' sans sceau valable, ' + rejoues + ' rejoués' : '';
+  };
+  try {
+    if(modeReseau === 'hote' && salonHote){
+      const d = salonHote.debit(), lat = salonHote.listeSieges().filter(s => !s.hote && s.id).map(s => s.pseudo + ' ' + (s.rtt == null ? '?' : Math.round(s.rtt)) + ' ms');
+      return ['réseau : hôte · ' + (salonHote.serveur.nom || salonHote.serveur.url) + ' · envoi ' + ko(d.envoi.octetsParS) + ' · reçu ' + ko(d.reception.octetsParS),
+        'aller-retour : ' + (lat.join(', ') || '—') + ' · ordres reçus ' + hoteReseau.ordres.recus + ' (refusés ' + hoteReseau.ordres.refuses + ')'
+          + (salonHote.stats.ordres.rejets.doublon ? ' · doublons jetés ' + salonHote.stats.ordres.rejets.doublon + ' (anomalie si répété)' : '')
+          + jetes(salonHote.statistiques())];
+    }
+    if(modeReseau === 'invite' && salonInvite){
+      const d = salonInvite.debit(), s = salonInvite.statistiques(), l = salonInvite.latence();
+      return ['réseau : invité · ' + (salonInvite.serveur.nom || salonInvite.serveur.url) + ' · aller-retour ' + (l == null ? '?' : Math.round(l) + ' ms') + ' · reçu ' + ko(d.reception.octetsParS),
+        'instantanés : ' + s.instantanes.appliques + ' appliqués / ' + s.instantanes.recus + ' reçus · événements perdus ' + s.evenements.perdus
+          + (s.evenements.conflits ? ' · conflits ' + s.evenements.conflits : '') + (s.ignores.finForgee ? ' · fins forgées ignorées ' + s.ignores.finForgee : '')
+          + (s.ordres.recalages ? ' · ordres recalés ' + s.ordres.recalages : '') + jetes(s)];
+    }
+  } catch(err){}
+  return [];
+}
+
+// ---------- Boutons de l'écran de l'escarmouche ----------
+{
+  const bH = el('bHeberger'), bR = el('bRejoindre');
+  if(bH) bH.onclick = () => { enLigne.erreur = ''; enLigne.info = ''; if(!enLigne.config) enLigne.config = configSalonDefaut(); montrerSalon('heberger'); };
+  if(bR) bR.onclick = () => { enLigne.erreur = ''; enLigne.info = ''; enLigne.codeSaisi = ''; montrerSalon('rejoindre'); };
+}
+
 lancement();

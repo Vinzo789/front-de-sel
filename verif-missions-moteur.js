@@ -32,6 +32,25 @@ function simuler(duree, robot){
 }
 // Outils pour écrire un robot
 const robotJ = () => ents.filter(e => e.camp === 'J' && !e.mort);
+// Ordres du robot (novembre 2026, étape 1 du multijoueur) : comme un joueur, il passe par
+// executerOrdre('J', ordre). OPTIONS_ROBOT.direct (comparaisons d'empreintes) : true = ancien robot, qui
+// écrit directement dans les entités (fonction « direct ») ; 'imite' = ancien robot plus les écritures que
+// l'exécution de l'ordre fait en plus (fonction « ajout »), pour prouver que l'écart vient de là.
+// ROBOT_REFUS compte les ordres refusés par motif.
+window.ROBOT_REFUS = {};
+function ordreRobot(ordre, direct, ajout){
+  const m = typeof OPTIONS_ROBOT !== 'undefined' && OPTIONS_ROBOT.direct;
+  if(m && direct){ direct(); if(m === 'imite' && ajout) ajout(); return true; }
+  const r = executerOrdre('J', ordre);
+  if(!r.ok) ROBOT_REFUS[r.motif] = (ROBOT_REFUS[r.motif] || 0) + 1;
+  return r.ok;
+}
+// Raccourcis : mise en file, chantier, attaque-déplacement d'une unité, clic droit d'une unité sur une entité.
+const robotCommander = (b, t) => ordreRobot({type:'produire', batId:b.id, unite:t}, () => commander(b, t));
+const robotConstruire = (type, c, r, o) => ordreRobot({type:'construire', bat:type, c, r, ouvrierIds:[o.id]}, () => construireBatiment('J', type, c, r, [o]));
+const robotAttaqueDeplacement = (u, x, y) => ordreRobot({type:'attaqueDeplacement', ids:[u.id], x, y, cibleId:null},
+  () => { u.ordre = {type:'attaqueDeplacement', x, y}; }, () => { u.cible = null; u.chemin = null; });
+const robotPouvoir = (cle, x, y) => ordreRobot(x == null ? {type:'pouvoir', cle} : {type:'pouvoir', cle, x, y}, () => activerPouvoir('J', cle, x, y));
 // Économie à collecteurs (novembre 2026) : les ouvriers ne récoltent plus. Le robot garde quatre
 // ouvriers (chantiers, réparations) et rachète ses collecteurs jusqu'à trois, qui travaillent seuls.
 // « armee » ne contient que des unités armées (ni ouvriers ni collecteurs).
@@ -41,11 +60,12 @@ function robotEconomie(){
   const qg = robotJ().find(b => b.type === 'qg');
   const coll = uns.filter(u => u.def.collecteur).length + (qg ? qg.file.filter(t => t === 'collecteur').length : 0);
   if(qg && !qg.enCours && qg.file.length < 1){
-    if(coll < ROBOT_COLLECTEURS && noeuds.some(n => n.reste > 0) && camps.J.reserves >= UNITES.collecteur.cout) commander(qg, 'collecteur');
-    else if(ouv.length < ROBOT_OUVRIERS && camps.J.reserves >= 50) commander(qg, FACTIONS[camps.J.faction].ouvrier);
+    if(coll < ROBOT_COLLECTEURS && noeuds.some(n => n.reste > 0) && camps.J.reserves >= UNITES.collecteur.cout) robotCommander(qg, 'collecteur');
+    else if(ouv.length < ROBOT_OUVRIERS && camps.J.reserves >= 50) robotCommander(qg, FACTIONS[camps.J.faction].ouvrier);
   }
-  // Ouvriers inoccupés : ils réparent ce qui est entamé.
-  for(const o of ouv) if(!o.ordre){ const b = batimentAReparer(o, 1400); if(b) o.ordre = {type:'reparer', bat:b}; }
+  // Ouvriers inoccupés : ils réparent ce qui est entamé (clic droit sur le bâtiment).
+  for(const o of ouv) if(!o.ordre){ const b = batimentAReparer(o, 1400); if(b) ordreRobot({type:'droit', ids:[o.id], x:b.x, y:b.y, cibleId:b.id},
+    () => { o.ordre = {type:'reparer', bat:b}; }, () => { o.chemin = null; }); }
   return {qg, ouv, armee: uns.filter(u => !u.def.ouvrier && !u.def.collecteur)};
 }
 function robotBatir(type, pres){
@@ -54,7 +74,7 @@ function robotBatir(type, pres){
   const D = BATIMENTS[type]; if(camps.J.reserves < D.cout) return;
   if(D.requiert && !bats.some(b => b.type === D.requiert && !b.enCours)) return;
   const o = robotJ().find(u => u.est === 'unite' && u.def.ouvrier); if(!o) return;
-  const p = trouverEmplacement(type, pres || bats[0]); if(p) construireBatiment('J', type, p.c, p.r, [o]);
+  const p = trouverEmplacement(type, pres || bats[0]); if(p) robotConstruire(type, p.c, p.r, o);
 }
 function robotProduire(type){
   for(const b of robotJ()) if(b.est === 'batiment' && !b.enCours && b.file.length < 2){
@@ -65,16 +85,18 @@ function robotProduire(type){
     if(!prod.includes(type) || !UNITES[type] || camps.J.reserves < UNITES[type].cout) continue;
     if(UNITES[type].avion && (typeof aeroportPlein === 'function' ? aeroportPlein(b) : avionsDe(b).length + b.file.length >= PLACES_AEROPORT.length)) continue;
     if(UNITES[type].forme === 'helico' && typeof helicosPlein === 'function' && helicosPlein(b)) continue;   // quatre par aéroport
-    commander(b, type);
+    robotCommander(b, type);
   }
 }
-function robotAttaquer(unites, x, y){ for(const u of unites) if(!u.ordre && !u.cible) u.ordre = {type:'attaqueDeplacement', x:x + (Math.random()-.5)*100, y:y + (Math.random()-.5)*100}; }
+function robotAttaquer(unites, x, y){
+  for(const u of unites) if(!u.ordre && !u.cible){ const ax = x + (Math.random()-.5)*100, ay = y + (Math.random()-.5)*100; robotAttaqueDeplacement(u, ax, ay); }
+}
 
 // Frappe de précision sur la première cible d'un type donné proche de l'armée.
 function robotFrappe(armee, types){
   if(camps.J.faction !== 'halden' || camps.J.points < 3) return;
   const c = ents.find(e => e.camp === 'I' && !e.mort && types.includes(e.type) && armee.some(u => Math.hypot(u.x-e.x, u.y-e.y) < 450));
-  if(c) activerPouvoir('J', 'frappe', c.x, c.y);
+  if(c) robotPouvoir('frappe', c.x, c.y);
 }
 // Esquive (missions Karsk) : comme un joueur qui voit le marqueur d'une Frappe ou d'un Essaim
 // Halden au sol, les unités prises dans le cercle s'en écartent (2,2 s de préavis pour l'Essaim,
@@ -98,7 +120,7 @@ function robotChantiers(){
   const ch = robotJ().filter(b => b.est === 'batiment' && b.enCours);
   for(const b of ch) if(!robotJ().some(u => u.ordre && u.ordre.type === 'construire' && u.ordre.bat === b)){
     const o = robotJ().filter(u => u.est === 'unite' && u.def.ouvrier).sort((a,c) => Math.hypot(a.x-b.x,a.y-b.y) - Math.hypot(c.x-b.x,c.y-b.y))[0];
-    if(o){ o.ordre = {type:'construire', bat:b}; o.chemin = null; o.cible = null; }
+    if(o) ordreRobot({type:'droit', ids:[o.id], x:b.x, y:b.y, cibleId:b.id}, () => { o.ordre = {type:'construire', bat:b}; o.chemin = null; o.cible = null; });
   }
   return ch.length > 0;
 }
@@ -179,7 +201,7 @@ const ROBOTS = {
     // Frappe : jamais à moins de 250 px de la station (consigne de la mission)
     const st = ents.find(e => e.nom === 'stationUsine');
     const c = ents.find(e => e.camp === 'I' && !e.mort && ['bunker','ours','grele'].includes(e.type) && armee.some(u => Math.hypot(u.x-e.x, u.y-e.y) < 450) && (!st || Math.hypot(st.x-e.x, st.y-e.y) > 250));
-    if(c && camps.J.points >= 3) activerPouvoir('J', 'frappe', c.x, c.y);
+    if(c && camps.J.points >= 3) robotPouvoir('frappe', c.x, c.y);
   },
   // Karsk 1 (novembre 2026) : comme la radio l'enseigne. Conscrits au rassemblement, Grêle sur
   // les tourelles (à 400 m), assaut de la caserne une fois les tourelles tombées ; puis base
@@ -204,7 +226,7 @@ const ROBOTS = {
     const {armee} = robotEconomie();
     if(!robotChantiers()){ robotBatir('caserne', qg); robotBatir('depot', qg); }
     robotProduire('conscrit');
-    if(camps.J.points >= 3) activerPouvoir('J', 'renforts');
+    if(camps.J.points >= 3) robotPouvoir('renforts');
     const menace = ents.filter(e => e.camp === 'I' && !e.mort && e.est === 'unite' && Math.hypot(e.x-qg.x, e.y-qg.y) < 900)
       .sort((a,b) => (b.type === 'lynx') - (a.type === 'lynx'))[0];
     for(const u of armee) if(u.type !== 'grele'){
@@ -224,12 +246,12 @@ const ROBOTS = {
     const o = robotJ().find(u => u.est === 'unite' && u.def.ouvrier && !u.enConstruction);
     if(bunkers.length < 2 && !robotJ().some(b => b.type === 'bunker' && b.enCours) && camps.J.reserves >= BATIMENTS.bunker.cout + 100 && o){
       const p = trouverEmplacement('bunker', {x:ent.x + (bunkers.length ? 160 : -160), y:ent.y + 120});
-      if(p) construireBatiment('J', 'bunker', p.c, p.r, [o]);
+      if(p) robotConstruire('bunker', p.c, p.r, o);
     }
     if(autorise('unites', 'sentinelle') && armee.filter(u => u.type === 'sentinelle').length < 4) robotProduire('sentinelle');
     if(camps.J.reserves > 250) robotProduire('ours');
     robotProduire('conscrit');
-    if(camps.J.points >= 3) activerPouvoir('J', 'renforts');
+    if(camps.J.points >= 3) robotPouvoir('renforts');
     const menace = ents.filter(e => e.camp === 'I' && !e.mort && e.est === 'unite' && Math.hypot(e.x-ent.x, e.y-ent.y) < 650)
       .sort((a,b) => Math.hypot(a.x-ent.x,a.y-ent.y) - Math.hypot(b.x-ent.x,b.y-ent.y))[0];
     for(const u of armee){
@@ -252,7 +274,7 @@ const ROBOTS = {
     if(armee.filter(u => u.type === 'grele').length < 3) robotProduire('grele');
     if(camps.J.reserves > 300) robotProduire('ours');
     robotProduire('conscrit');
-    if(camps.J.points >= 3 && qg) activerPouvoir('J', 'renforts');
+    if(camps.J.points >= 3 && qg) robotPouvoir('renforts');
     const base = qg || {x:400, y:400};
     const menace = ents.find(e => e.camp === 'I' && !e.mort && e.est === 'unite' && Math.hypot(e.x-base.x, e.y-base.y) < 750);
     const alerte = MS.declencheurs.find(d => d.id === 'contre_alerte');
@@ -292,7 +314,7 @@ const ROBOTS = {
     if(armee.filter(u => u.type === 'grele').length < 4 && camps.J.reserves > 440) robotProduire('grele');
     if(camps.J.reserves > 300) robotProduire('ours');
     robotProduire('conscrit');
-    if(camps.J.points >= 13) activerPouvoir('J', 'renforts');
+    if(camps.J.points >= 13) robotPouvoir('renforts');
     const st = ents.find(e => e.nom === 'station' && !e.mort);
     const loinStation = e => !st || Math.hypot(st.x-e.x, st.y-e.y) > 380;
     const sortie = MS.declencheurs.find(d => d.id === 'sortie_garnison').fait;
@@ -332,7 +354,7 @@ const ROBOTS = {
       const c = ents.find(e => e.camp === 'I' && !e.mort && loinStation(e) && armee.some(u => Math.hypot(u.x-e.x, u.y-e.y) < 500)
         && ents.filter(f => f.camp === 'I' && !f.mort && Math.hypot(f.x-e.x, f.y-e.y) < 220).length >= 4
         && !armee.some(u => Math.hypot(u.x-e.x, u.y-e.y) < 200));
-      if(c) activerPouvoir('J', 'marteau', c.x, c.y);
+      if(c) robotPouvoir('marteau', c.x, c.y);
     }
   }; })(),
 };
@@ -381,7 +403,7 @@ function robotEscarmouche(){
   if(chantier){
     if(!ouvriers.some(o => o.ordre && o.ordre.type === 'construire' && o.ordre.bat === chantier)){
       const o = ouvriers.find(o => !o.ordre || o.ordre.type === 'reparer');
-      if(o){ o.ordre = {type:'construire', bat:chantier}; o.chemin = null; }
+      if(o) ordreRobot({type:'droit', ids:[o.id], x:chantier.x, y:chantier.y, cibleId:chantier.id}, () => { o.ordre = {type:'construire', bat:chantier}; o.chemin = null; });
     }
   }
   // (Novembre 2026 : batterie mixte en fin de liste, quand elle existe.)
@@ -428,7 +450,7 @@ function robotEscarmouche(){
   // jamais un allié ni le camp neutre ; les envahisseurs restent l'affaire de robotInvasion.
   const ennemi = e => e.camp !== 'N' && e.camp !== 'X' && hostile('J', e.camp);
   const menace = qg && ents.find(e => ennemi(e) && !e.mort && e.est === 'unite' && !enVol(e) && Math.hypot(e.x-qg.x, e.y-qg.y) < 650);
-  if(menace){ for(const u of terre) if(!u.cible) u.ordre = {type:'attaqueDeplacement', x:menace.x, y:menace.y}; }
+  if(menace){ for(const u of terre) if(!u.cible) robotAttaqueDeplacement(u, menace.x, menace.y); }
   else if(OPTIONS_ROBOT.attaque && temps >= OPTIONS_ROBOT.apres && terre.filter(u => !u.ordre && !u.cible).length >= OPTIONS_ROBOT.attaque){
     // Le QG ennemi le plus proche, sinon le bâtiment ennemi le plus proche.
     const depuis = qg || terre[0], proche = l => l.sort((a, b) => Math.hypot(a.x-depuis.x, a.y-depuis.y) - Math.hypot(b.x-depuis.x, b.y-depuis.y))[0];
@@ -445,7 +467,10 @@ function robotEscarmouche(){
     let c = null;
     if(u.def.armeAir && intrus && intrus.length) c = plusProcheDe(u, intrus);
     if(!c && frappeurs.includes(u)) c = menace && peutCibler(u, menace) ? menace : frappe;
-    if(c) u.ordre = {type:'attaquer', cible:c};
+    // Attaque d'une cible désignée (attaque-déplacement sur elle). L'exécution pose aussi u.cible, et ne
+    // donne pas l'ordre si l'appareil ne peut pas viser cette cible (peutCibler).
+    if(c) ordreRobot({type:'attaqueDeplacement', ids:[u.id], x:c.x, y:c.y, cibleId:c.id}, () => { u.ordre = {type:'attaquer', cible:c}; },
+      () => { if(peutCibler(u, c)) u.cible = c; else u.ordre = null; });
   }
 }
 // Mode Surprises, invasion avec alliance (page chargée avec ?verif&surprise=<s>) : robot « joueur
@@ -1021,3 +1046,290 @@ function verifierMissionMoteur(){
   }
   return pb;
 }
+
+// ---------------------------------------------------------------------
+//  Multijoueur, étapes 1 et 2 (novembre 2026) : ordres et retour au joueur par camp.
+// ---------------------------------------------------------------------
+// Empreinte de l'état (hachage FNV-1a 32 bits) : temps, réserves, points et élimination de chaque camp,
+// puis, pour chaque entité dans l'ordre de ents : id, type, camp, position, points de vie, mort. Sert à
+// comparer deux versions du moteur sur des parties à hasard fixé (avecGraine) : même code autonome que celui
+// injecté dans la copie de référence.
+function empreinteEtat(){
+  let h = 2166136261 >>> 0;
+  const aj = s => { s = String(s); for(let i = 0; i < s.length; i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } };
+  aj('t' + temps);
+  for(const id of Object.keys(camps).sort()){ const C = camps[id]; aj(id + ':' + C.reserves + ':' + C.points + ':' + !!C.elimine); }
+  const n = {};
+  for(const e of ents){ aj(e.id + e.type + e.camp + ':' + e.x + ',' + e.y + ':' + e.pv + (e.mort ? 'm' : '')); n[e.camp] = (n[e.camp] || 0) + 1; }
+  return {empreinte:h.toString(16), temps:+temps.toFixed(2), entites:n, reserves:Object.fromEntries(Object.keys(camps).sort().map(id => [id, Math.round(camps[id].reserves)]))};
+}
+window.empreinteEtat = empreinteEtat;
+// Photographie détaillée de l'état (pour constater qu'un ordre refusé ne change rien) : en plus de
+// l'empreinte, les ordres, cibles, chemins, files, points de ralliement, recharges, pause, grille.
+function photoEtat(){
+  const ref = x => x && typeof x === 'object' ? (x.id != null ? '#' + x.id : noeuds.indexOf(x) >= 0 ? 'n' + noeuds.indexOf(x) : JSON.stringify(x)) : String(x);
+  const ordre = o => o ? Object.keys(o).sort().map(k => k + '=' + ref(o[k])).join(',') : '-';
+  let g = 0; for(let i = 0; i < grille.length; i++) g = (g*31 + grille[i]) % 1000000007;
+  return JSON.stringify({temps, enPause, partieFinie, alliance, mode:mode ? mode.type : null, g, selection:selection.map(e => e.id),
+    camps:Object.keys(camps).sort().map(id => [id, camps[id].reserves, camps[id].points, JSON.stringify(camps[id].recharges || {}), !!camps[id].elimine, !!camps[id].ia]),
+    ents:ents.map(e => [e.id, e.type, e.camp, e.x, e.y, e.pv, !!e.mort, ordre(e.ordre), ref(e.cible), e.chemin ? e.chemin.length : 0,
+      e.file ? e.file.join('+') : '', e.rally ? e.rally.x + ',' + e.rally.y : '', !!e.gare, e.prodT, ref(e.cibleSoin), !!e.enCours]),
+    n:[ents.length, projectiles.length, effets.length, evenements.length]});
+}
+window.photoEtat = photoEtat;
+// Ordres invalides ou hostiles envoyés au nom du camp J (une partie en cours : demarrer() si besoin) : chacun
+// doit être refusé (ok:false, motif) et l'état doit rester identique (photoEtat avant / après chaque ordre).
+// Renvoie {refuses, acceptes:[...], changes:[...], motifs} : acceptes et changes doivent être vides.
+function essaiOrdresHostiles(){
+  window.enregistrerVictoire = () => {};
+  if(!enJeu) demarrer('halden', configTest('halden', 'duel'));
+  const de = (camp, f) => ents.find(e => e.camp === camp && !e.mort && f(e));
+  const qgJ = de('J', e => e.type === 'qg'), qgI = de('I', e => e.type === 'qg');
+  const uJ = de('J', e => e.est === 'unite' && e.def.arme && !e.def.ouvrier), uI = de('I', e => e.est === 'unite' && e.def.arme);
+  const oJ = de('J', e => e.est === 'unite' && e.def.ouvrier), oI = de('I', e => e.est === 'unite' && e.def.ouvrier);
+  const FJ = FACTIONS[camps.J.faction], FI = FACTIONS[camps.I.faction];
+  const requis = Object.keys(BATIMENTS).find(t => BATIMENTS[t].requiert && batimentsConstructibles(FJ).includes(t) && !ents.some(b => b.camp === 'J' && b.type === BATIMENTS[t].requiert));
+  const pouvoirI = (POUVOIRS[camps.I.faction] || []).find(p => !(POUVOIRS[camps.J.faction] || []).some(q => q.cle === p.cle));
+  const pouvoirJ = (POUVOIRS[camps.J.faction] || []).find(p => p.cible);
+  const nonProduit = Object.keys(UNITES).find(t => !(FJ.production.qg || []).includes(t) && !UNITES[t].aerien);
+  const x = uJ.x, y = uJ.y, ids = [uJ.id];
+  camps.J.points = 0;   // aucun pouvoir payable
+  const essais = [
+    ['unité d’un autre camp', 'J', {type:'droit', ids:[uI.id], x, y}],
+    ['identifiant inconnu', 'J', {type:'droit', ids:[987654], x, y}],
+    ['une unité à nous et une adverse', 'J', {type:'droit', ids:[uJ.id, uI.id], x, y}],
+    ['x non fini (NaN)', 'J', {type:'droit', ids, x:NaN, y}],
+    ['x infini', 'J', {type:'droit', ids, x:Infinity, y}],
+    ['hors carte (négatif)', 'J', {type:'droit', ids, x:-50, y}],
+    ['hors carte (au-delà)', 'J', {type:'droit', ids, x:LARG + 100, y:HAUT + 100}],
+    ['x en texte', 'J', {type:'droit', ids, x:String(x), y}],
+    ['ids n’est pas un tableau', 'J', {type:'droit', ids:String(uJ.id), x, y}],
+    ['ids vide', 'J', {type:'droit', ids:[], x, y}],
+    ['identifiant non entier', 'J', {type:'droit', ids:[uJ.id + 0.5], x, y}],
+    ['identifiant en double', 'J', {type:'droit', ids:[uJ.id, uJ.id], x, y}],
+    ['trop d’identifiants', 'J', {type:'droit', ids:Array.from({length:201}, (_, i) => i + 1), x, y}],
+    ['cible inconnue', 'J', {type:'droit', ids, x, y, cibleId:987654}],
+    ['champs manquants', 'J', {type:'droit'}],
+    ['attaque-déplacement d’un bâtiment', 'J', {type:'attaqueDeplacement', ids:[qgJ.id], x, y}],
+    ['arrêt d’une unité adverse', 'J', {type:'arret', ids:[uI.id]}],
+    ['ralliement d’un bâtiment adverse', 'J', {type:'ralliement', ids:[qgI.id], x, y}],
+    ['ralliement d’une unité', 'J', {type:'ralliement', ids, x, y}],
+    ['bâtiment non constructible (QG)', 'J', {type:'construire', bat:'qg', c:10, r:10, ouvrierIds:[oJ.id]}],
+    ['bâtiment inexistant', 'J', {type:'construire', bat:'chateau', c:10, r:10, ouvrierIds:[oJ.id]}],
+    ['bâtiment « __proto__ »', 'J', {type:'construire', bat:'__proto__', c:10, r:10, ouvrierIds:[oJ.id]}],
+    ['case hors carte', 'J', {type:'construire', bat:'caserne', c:-5, r:3, ouvrierIds:[oJ.id]}],
+    ['case en texte', 'J', {type:'construire', bat:'caserne', c:'10', r:'10', ouvrierIds:[oJ.id]}],
+    ['emplacement occupé (sur le QG)', 'J', {type:'construire', bat:'caserne', c:qgJ.c, r:qgJ.r, ouvrierIds:[oJ.id]}],
+    ['bâtiment requis absent (' + requis + ')', 'J', {type:'construire', bat:requis, c:qgJ.c + 8, r:qgJ.r, ouvrierIds:[oJ.id]}],
+    ['ouvrier d’un autre camp', 'J', {type:'construire', bat:'caserne', c:qgJ.c + 8, r:qgJ.r, ouvrierIds:[oI.id]}],
+    ['« ouvrier » qui n’en est pas un', 'J', {type:'construire', bat:'caserne', c:qgJ.c + 8, r:qgJ.r, ouvrierIds:[uJ.id]}],
+    ['production dans le QG adverse', 'J', {type:'produire', batId:qgI.id, unite:FI.ouvrier}],
+    ['type non productible par ce bâtiment (' + nonProduit + ')', 'J', {type:'produire', batId:qgJ.id, unite:nonProduit}],
+    ['type d’unité inconnu', 'J', {type:'produire', batId:qgJ.id, unite:'licorne'}],
+    ['type « constructor »', 'J', {type:'produire', batId:qgJ.id, unite:'constructor'}],
+    ['production par une unité', 'J', {type:'produire', batId:uJ.id, unite:FJ.ouvrier}],
+    ['retrait de la file du QG adverse', 'J', {type:'retirer', batId:qgI.id, unite:FI.ouvrier}],
+    ['retrait d’un type absent de la file', 'J', {type:'retirer', batId:qgJ.id, unite:FJ.ouvrier}],
+    ['pouvoir de l’autre faction (' + (pouvoirI && pouvoirI.cle) + ')', 'J', {type:'pouvoir', cle:pouvoirI && pouvoirI.cle, x, y}],
+    ['pouvoir sans points (' + pouvoirJ.cle + ')', 'J', {type:'pouvoir', cle:pouvoirJ.cle, x, y}],
+    ['pouvoir, cible en texte', 'J', {type:'pouvoir', cle:pouvoirJ.cle, x:'100', y:'100'}],
+    ['pouvoir, cible NaN', 'J', {type:'pouvoir', cle:pouvoirJ.cle, x:NaN, y}],
+    ['type d’ordre inconnu', 'J', {type:'teleporter', ids, x, y}],
+    ['ordre null', 'J', null],
+    ['ordre en texte', 'J', 'droit'],
+    ['ordre tableau', 'J', ['droit']],
+    ['camp inconnu', 'Z', {type:'droit', ids, x, y}],
+    ['camp des envahisseurs', 'X', {type:'arret', ids}],
+    ['pause demandée par un camp distant', 'I', {type:'pause'}],
+    ['pause, champ « oui » invalide', 'J', {type:'pause', oui:'oui'}],
+    ['alliance sans dialogue', 'J', {type:'alliance', oui:true}],
+    ['trêve sans invasion', 'J', {type:'proposerTreve'}],
+    ['abandon par un camp distant', 'I', {type:'abandon'}],
+    ['camp éliminé', 'I', {type:'arret', ids:[uI.id]}, () => { camps.I.elimine = true; }, () => { camps.I.elimine = false; }],
+  ];
+  const res = {refuses:0, acceptes:[], changes:[], motifs:{}};
+  for(const [nom, camp, ordre, avant, apres] of essais){
+    if(avant) avant();
+    const p0 = photoEtat();
+    let r;
+    try { r = executerOrdre(camp, ordre); } catch(e){ r = {ok:'EXCEPTION ' + e.message}; }
+    const p1 = photoEtat();
+    if(apres) apres();
+    if(r.ok) res.acceptes.push(nom + ' : ' + r.ok); else res.refuses++;
+    if(p1 !== p0) res.changes.push(nom);
+    res.motifs[nom] = r.motif;
+  }
+  // Contre-épreuve : un ordre valide est accepté et change bien l'état.
+  const p0 = photoEtat(), r = executerOrdre('J', {type:'droit', ids, x:x + 120, y});
+  res.controle = {ok:r.ok, change:photoEtat() !== p0};
+  res.nombre = essais.length;
+  return res;
+}
+window.essaiOrdresHostiles = essaiOrdresHostiles;
+// Partie où le joueur local tient le camp « id » (I par défaut) : duel J (ordinateur) contre id (humain,
+// interface locale). À lancer sur une page fraîche ; la vérification se fait ensuite à l'écran ou dans la console.
+function essaiCampLocal(id, factionJ){
+  id = id || 'I';
+  window.enregistrerVictoire = () => {};
+  if(!enJeu) demarrer(factionJ || 'halden', configTest(factionJ || 'halden', 'duel'));
+  confierAOrdinateur('J', 'normal');
+  camps[id].ia = false;
+  definirCampLocal(id);
+  return {campLocal:campLocal(), ia:Object.fromEntries(campsEnJeu().map(c => [c, !!camps[c].ia])), faction:camps[id].faction};
+}
+window.essaiCampLocal = essaiCampLocal;
+
+// ---------------------------------------------------------------------
+//  Multijoueur, étapes 3 à 5 (novembre 2026) : comparaison hôte / invité dans le mode d'essai ?echo.
+// ---------------------------------------------------------------------
+// Robot de l'invité : il joue le camp local de l'invité par des ordres envoyés à l'hôte (executerOrdre détourné
+// vers le réseau) ; il ne lit que l'état affiché de l'invité. Production, une caserne, attaque toutes les 40 s.
+function robotInvite(etat){
+  const moi = campLocal(), C = camps[moi], F = FACTIONS[C.faction];
+  const mes = ents.filter(e => e.camp === moi && !e.mort);
+  const envoyer = o => { const r = executerOrdre(moi, o); etat.envoyes++; if(!r.ok){ etat.refusLocaux++; etat.motifs[r.code] = (etat.motifs[r.code] || 0) + 1; } };
+  let budget = C.reserves;
+  const nCol = mes.filter(e => e.def.collecteur).length;
+  for(const b of mes){
+    if(b.est !== 'batiment' || b.enCours || b.file.length >= 2) continue;
+    const liste = (F.production[b.type] || []).filter(t => UNITES[t] && !UNITES[t].avion);
+    if(!liste.length) continue;
+    const armes = liste.filter(t => UNITES[t].arme && !UNITES[t].ouvrier && !UNITES[t].collecteur);
+    const t = b.type === 'qg' ? (nCol < 3 ? liste.find(x => UNITES[x].collecteur) : null) : armes[etat.k++ % Math.max(1, armes.length)];
+    if(!t || UNITES[t].cout > budget) continue;
+    budget -= UNITES[t].cout;
+    envoyer({type:'produire', batId:b.id, unite:t});
+  }
+  const qg = mes.find(b => b.type === 'qg');
+  if(qg && mes.filter(b => b.type === 'caserne').length < 2 && budget >= BATIMENTS.caserne.cout && etat.t - etat.chantierT > 20){
+    for(let d = 4; d < 14 && etat.t - etat.chantierT > 20; d++) for(const [dc, dr] of [[d, 0], [-d, 0], [0, d], [0, -d], [d, d], [-d, -d]]){
+      const c = qg.c + dc, r = qg.r + dr;
+      if(emplacementValide('caserne', c, r, true)){ envoyer({type:'construire', bat:'caserne', c, r}); etat.chantierT = etat.t; break; }
+    }
+  }
+  if(etat.t % 40 === 0){
+    const armee = mes.filter(e => e.est === 'unite' && e.def.arme && !e.def.ouvrier && !e.def.collecteur);
+    const cible = ents.find(e => e.type === 'qg' && !e.mort && hostile(moi, e.camp));
+    if(armee.length >= 6 && cible) envoyer({type:'attaqueDeplacement', ids:armee.slice(0, 200).map(e => e.id), x:cible.x, y:cible.y, cibleId:null});
+  }
+  etat.t++;
+}
+window.robotInvite = robotInvite;
+// Partie de « duree » secondes dans le mode ?echo (page ouverte avec ?echo&verif, retard et pertes réglés dans
+// l'adresse : &retard=150&perte=5), menée en temps réel par le minuteur du Worker de reseau.js (non bridé en
+// arrière-plan). Compare champ par champ l'hôte et l'invité :
+//  - brut : dernier instantané appliqué par l'invité contre l'état de l'hôte au même instant (positions,
+//    entités manquantes ou en trop, réserves, files de production) ;
+//  - affichage : positions lissées de l'invité à son instant d'affichage contre celles de l'hôte au même instant
+//    de jeu (interpolées entre deux pas de l'hôte) ;
+//  - sauts : déplacements affichés de plus de 40 px en un pas de 0,05 s alors que l'hôte a bougé de moins de 20 px.
+// Renvoie une promesse du rapport (chiffres mesurés, rien d'estimé).
+function essaiEcho(opts){
+  opts = Object.assign({duree:480, robot:true, dessin:1}, opts || {});
+  if(modeReseau !== 'echo' || !echo.pret) return Promise.resolve({erreur:'ouvrir la page avec ?echo&verif et attendre echo.pret'});
+  window.enregistrerVictoire = () => {};
+  echo.piloteExterne = true;
+  const histo = [];
+  const photo = () => {
+    const pos = new Map(), files = new Map(), res = {};
+    for(const e of ents){ if(e.mort) continue; pos.set(e.id, e.est === 'unite' ? [e.x, e.y] : null); if(e.est === 'batiment') files.set(e.id, e.file.join('+')); }
+    for(const id of campsEnJeu()) res[id] = camps[id].reserves;
+    return {T:temps, pos, files, res};
+  };
+  const posHote = (id, T) => {
+    for(let i = histo.length - 1; i > 0; i--){
+      const a = histo[i - 1], b = histo[i];
+      if(a.T <= T + 1e-9 && T <= b.T + 1e-9){
+        const pa = a.pos.get(id), pb = b.pos.get(id);
+        if(!pa || !pb) return pa || pb || null;
+        const f = b.T > a.T ? (T - a.T)/(b.T - a.T) : 0;
+        return [pa[0] + (pb[0] - pa[0])*f, pa[1] + (pb[1] - pa[1])*f];
+      }
+    }
+    return null;
+  };
+  const M = {aff:[], brutMax:0, brutSomme:0, brutN:0, manquantes:0, enTrop:0, manquantesMax:0, enTropMax:0, reservesMax:0, files:0,
+    echantillons:0, sansHote:0, sauts:0, sautsEx:[], erreurs:[], entitesHote:0, entitesInvite:0};
+  const robot = {t:0, k:0, envoyes:0, refusLocaux:0, motifs:{}, chantierT:-99};
+  echo.apresPasHote = () => { histo.push(photo()); if(histo.length > 80) histo.shift(); };
+  let prec = new Map(), TaPrec = null;
+  const comparer = final => {
+    const s0 = invite.courant; if(!s0) return;
+    const h0 = histo.find(h => Math.abs(h.T - s0.T) < 0.0015);
+    if(!h0){ M.sansHote++; return; }
+    M.echantillons++;
+    for(const [id, r] of s0.unites){ const p = h0.pos.get(id); if(p){ const d = Math.hypot(r.x - p[0], r.y - p[1]); M.brutSomme += d; M.brutN++; if(d > M.brutMax) M.brutMax = d; } }
+    let manq = 0, trop = 0;
+    for(const id of h0.pos.keys()) if(!invite.index.has(id)) manq++;
+    for(const id of invite.index.keys()) if(!h0.pos.has(id)) trop++;
+    M.manquantes += manq; M.enTrop += trop; M.manquantesMax = Math.max(M.manquantesMax, manq); M.enTropMax = Math.max(M.enTropMax, trop);
+    for(const id in h0.res) if(camps[id]) M.reservesMax = Math.max(M.reservesMax, Math.abs(camps[id].reserves - h0.res[id]));
+    for(const [id, f] of h0.files){ const b = invite.index.get(id); if(b && b.file.join('+') !== f) M.files++; }
+    // Affichage : positions lissées à l'instant d'affichage.
+    for(const e of ents){ if(e.mort || e.est !== 'unite') continue; const p = posHote(e.id, invite.Ta); if(p) M.aff.push(Math.hypot(e.x - p[0], e.y - p[1])); }
+    if(final){ M.entitesHote = h0.pos.size; M.entitesInvite = invite.index.size; M.final = {manquantes:manq, enTrop:trop}; }
+  };
+  echo.apresPasInvite = () => {
+    // Sauts visibles d'un pas à l'autre.
+    const Ta = invite.Ta, cur = new Map();
+    for(const e of ents){
+      if(e.mort || e.est !== 'unite') continue;
+      cur.set(e.id, [e.x, e.y]);
+      const q = prec.get(e.id);
+      if(q && TaPrec != null){
+        const d = Math.hypot(e.x - q[0], e.y - q[1]);
+        if(d > 40){
+          const a = posHote(e.id, TaPrec), b = posHote(e.id, Ta), dh = a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : null;
+          if(dh !== null && dh < 20){ M.sauts++; if(M.sautsEx.length < 5) M.sautsEx.push({id:e.id, type:e.type, d:+d.toFixed(1), hote:+dh.toFixed(1), Ta:+Ta.toFixed(2)}); }
+        }
+      }
+    }
+    prec = cur; TaPrec = Ta;
+  };
+  const debut = performance.now();
+  let pas = 0;
+  return new Promise(fin => {
+    let arret = null, fini = false;
+    const terminer = () => {
+      if(fini) return; fini = true;
+      if(arret) arret();
+      echo.apresPasHote = echo.apresPasInvite = null; echo.piloteExterne = false;
+      comparer(true);
+      const aff = M.aff.sort((a, b) => a - b), duree = (performance.now() - debut)/1000;
+      const H = echo.salonHote, I = echo.salonInvite, dh = H.debit(), di = I.debit();
+      fin({
+        dureeReelle:+duree.toFixed(1), tempsHote:+dansMonde(mondes.hote, () => temps).toFixed(2), tempsInvite:+invite.Ta.toFixed(2),
+        reglages:{retard:echo.bus && echo.bus.params, stats:echo.bus && echo.bus.stats},
+        debit:{hoteEnvoiOctetsParS:+(dh.envoi.octets/duree).toFixed(0), inviteReceptionOctetsParS:+(di.reception.octets/duree).toFixed(0),
+          inviteEnvoiOctetsParS:+(di.envoi.octets/duree).toFixed(0), messagesHoteParS:+(dh.envoi.messages/duree).toFixed(1)},
+        instantanes:{hote:H.statistiques().instantanes, invite:I.statistiques().instantanes, appliques:invite.appliques, recalages:invite.recalages},
+        evenements:I.statistiques().evenements,
+        ordres:{robot, hote:hoteReseau.ordres, invite:I.statistiques().ordres},
+        ecartBrut:{moyen:M.brutN ? +(M.brutSomme/M.brutN).toFixed(4) : null, max:+M.brutMax.toFixed(4), mesures:M.brutN},
+        ecartAffichage:{moyen:aff.length ? +(aff.reduce((s, v) => s + v, 0)/aff.length).toFixed(2) : null,
+          median:aff.length ? +aff[aff.length >> 1].toFixed(2) : null, p95:aff.length ? +aff[Math.floor(aff.length*0.95)].toFixed(2) : null,
+          max:aff.length ? +aff[aff.length - 1].toFixed(2) : null, mesures:aff.length},
+        entites:{echantillons:M.echantillons, sansHote:M.sansHote, manquantesCumul:M.manquantes, enTropCumul:M.enTrop, manquantesMax:M.manquantesMax,
+          enTropMax:M.enTropMax, final:M.final, hote:M.entitesHote, invite:M.entitesInvite},
+        reservesEcartMax:+M.reservesMax.toFixed(2), filesDifferentes:M.files,
+        sautsVisibles:M.sauts, exemplesSauts:M.sautsEx, erreurs:M.erreurs,
+        camps:Object.fromEntries(campsEnJeu().map(id => [id, {elimine:!!camps[id].elimine, reserves:Math.round(camps[id].reserves)}])),
+      });
+    };
+    const tic = () => {
+      if(fini) return;
+      const du = Math.min(4, Math.floor((performance.now() - debut)/50) - pas);
+      for(let k = 0; k < du; k++){
+        pasEcho(0.05); pas++;
+        if(pas % 20 === 0){
+          if(opts.robot) robotInvite(robot);
+          comparer(false);
+          if(opts.dessin && (pas/20) % opts.dessin === 0) dessiner(0.05);
+        }
+        if(pas*0.05 >= opts.duree){ terminer(); return; }
+      }
+    };
+    arret = Reseau.minuteur(50, () => { try { tic(); } catch(e){ M.erreurs.push('t=' + invite.Ta.toFixed(1) + ' ' + e.message + ' | ' + String(e.stack || '').split('\n').slice(1, 3).join(' | ')); terminer(); } });
+  });
+}
+window.essaiEcho = essaiEcho;

@@ -241,6 +241,21 @@ select{font:inherit;background:var(--bouton);color:var(--texte);border:1px solid
 #bandeauCamps .fac{min-width:44px}
 #bandeauCamps .eq{color:#9aa3a8}
 #bandeauCamps .etat{color:#9aa3a8;font-size:10.5px}
+/* Multijoueur : salon et état de la connexion */
+.salon h2{margin:0 0 8px;letter-spacing:.06em}
+.salon .note{color:var(--doux);font-size:13px;max-width:640px;line-height:1.45}
+.salon label.champ{display:inline-flex;flex-direction:column;gap:3px;font-size:13px;color:var(--doux);margin:0 14px 10px 0}
+.salon input[type=text]{font:inherit;font-size:15px;background:#11161a;color:var(--texte);border:1px solid var(--bord);border-radius:5px;padding:5px 8px;width:200px}
+.salon .codeSalon{font:700 44px/1.1 Consolas,monospace;letter-spacing:.14em;color:var(--accent);margin:4px 0 8px}
+.salon input.lienSalon{width:420px;max-width:90%;font-size:12px}
+.salon .empl.moi{border-color:var(--accent)}
+.salon .etatSiege{color:var(--doux);font-size:12.5px;min-width:150px}
+.salon .etatSiege.pret{color:var(--ok)}
+.salon .probleme{color:var(--alerte);font-size:13px;min-height:16px}
+.salon .info{color:var(--ok);font-size:13px;min-height:16px}
+#etatReseau{position:fixed;left:50%;transform:translateX(-50%);top:46px;z-index:6;pointer-events:none;font-size:12px;color:#d9d4c7;
+  background:rgba(14,17,20,.66);border:1px solid rgba(255,255,255,.08);border-radius:5px;padding:2px 10px;white-space:nowrap}
+#etatReseau.alerte{color:#ffb38a;border-color:#7a3b22}
 /* Affichage des performances (F8, ou case de la fenêtre Commandes) : au-dessus de la minicarte */
 #perfAff{position:fixed;right:8px;bottom:192px;z-index:7;pointer-events:none;white-space:pre;font:12px/1.35 Consolas,monospace;
   color:#e8e3d6;background:rgba(10,13,16,.78);border:1px solid var(--bord);border-radius:4px;padding:5px 8px}
@@ -273,6 +288,7 @@ select{font:inherit;background:var(--bouton);color:var(--texte);border:1px solid
 <div id="infobulle" class="cache"></div>
 <div id="mini" class="cache"><canvas id="miniCv" width="240" height="168"></canvas></div>
 <div id="perfAff" class="cache" aria-live="off"></div>
+<div id="etatReseau" class="cache" aria-live="polite"></div>
 
 <!-- ===================== MENUS ===================== -->
 <div id="menu" class="voile">
@@ -346,6 +362,9 @@ select{font:inherit;background:var(--bouton);color:var(--texte);border:1px solid
    <div class="emplacements" id="emplacementsCamps"></div>
    <div class="lancerEsc"><button class="grand principal" id="bLancerEscarmouche" type="button">Lancer la partie</button>
     <span class="probleme" id="problemeCamps"></span></div>
+   <h3 class="titreCartes">En ligne : 2 à 4 joueurs</h3>
+   <div class="lancerEsc"><button class="grand" id="bHeberger" type="button">Héberger une partie</button>
+    <button class="grand" id="bRejoindre" type="button">Rejoindre une partie</button></div>
    <div class="cartes">
     <div class="carte">
      <h2 style="color:#3fa7ff">Groupe Halden</h2>
@@ -372,6 +391,9 @@ select{font:inherit;background:var(--bouton);color:var(--texte);border:1px solid
    </div>
    <button class="petit retour bRetourAccueil">Retour</button>
   </div>
+
+  <!-- Multijoueur : salon (héberger ou rejoindre), construit par jeu.js (section 11 quater) -->
+  <div id="ecranSalon" class="cache salon"></div>
 
   <!-- Campagne : liste des missions -->
   <div id="ecranCampagne" class="cache campagne">
@@ -436,30 +458,33 @@ if(/[?&]mission=/.test(location.search)){
      L'ORDRE COMPTE : chaque fichier s'appuie sur ceux qui le précèdent (jeu.js en dernier).
      onerror : un fichier absent est ignoré sans bruit ; le jeu démarre sans lui quand il est facultatif
      (musique, post-traitement, envahisseurs, vignettes), sinon jeu.js affiche le message « Rendu 3D indisponible ». -->
-<script src="musique.js?v=24" onerror="void 0"></script>
-<script src="cartes.js?v=24" onerror="void 0"></script>
-<script src="campagnes/campagnes.js?v=24" onerror="void 0"></script>
-<script src="campagnes/halden-1.js?v=24" onerror="void 0"></script>
-<script src="campagnes/halden-2.js?v=24" onerror="void 0"></script>
-<script src="campagnes/halden-3.js?v=24" onerror="void 0"></script>
-<script src="campagnes/halden-4.js?v=24" onerror="void 0"></script>
-<script src="campagnes/karsk-1.js?v=24" onerror="void 0"></script>
-<script src="campagnes/karsk-2.js?v=24" onerror="void 0"></script>
-<script src="campagnes/karsk-3.js?v=24" onerror="void 0"></script>
-<script src="campagnes/karsk-4.js?v=24" onerror="void 0"></script>
-<script src="r3d-scene.js?v=24" onerror="void 0"></script>
-<script src="r3d-post.js?v=24" onerror="void 0"></script>
-<script src="r3d-unites.js?v=24" onerror="void 0"></script>
-<script src="r3d-batiments.js?v=24" onerror="void 0"></script>
-<script src="r3d-effets.js?v=24" onerror="void 0"></script>
-<script src="r3d-aliens.js?v=24" onerror="void 0"></script>
+<script src="musique.js?v=32" onerror="void 0"></script>
+<script src="cartes.js?v=32" onerror="void 0"></script>
+<script src="campagnes/campagnes.js?v=32" onerror="void 0"></script>
+<script src="campagnes/halden-1.js?v=32" onerror="void 0"></script>
+<script src="campagnes/halden-2.js?v=32" onerror="void 0"></script>
+<script src="campagnes/halden-3.js?v=32" onerror="void 0"></script>
+<script src="campagnes/halden-4.js?v=32" onerror="void 0"></script>
+<script src="campagnes/karsk-1.js?v=32" onerror="void 0"></script>
+<script src="campagnes/karsk-2.js?v=32" onerror="void 0"></script>
+<script src="campagnes/karsk-3.js?v=32" onerror="void 0"></script>
+<script src="campagnes/karsk-4.js?v=32" onerror="void 0"></script>
+<script src="r3d-scene.js?v=32" onerror="void 0"></script>
+<script src="r3d-post.js?v=32" onerror="void 0"></script>
+<script src="r3d-unites.js?v=32" onerror="void 0"></script>
+<script src="r3d-batiments.js?v=32" onerror="void 0"></script>
+<script src="r3d-effets.js?v=32" onerror="void 0"></script>
+<script src="r3d-aliens.js?v=32" onerror="void 0"></script>
 <!-- Vignettes des boutons (images des modèles 3D) : facultatif, des pictogrammes neutres le remplacent. -->
-<script src="r3d-vignettes.js?v=24" onerror="void 0"></script>
-<script src="jeu.js?v=24" onerror="void 0"></script>
+<script src="r3d-vignettes.js?v=32" onerror="void 0"></script>
+<!-- Multijoueur (reseau.js) : aucun effet au chargement (ni connexion, ni minuteur) ; la bibliothèque MQTT
+     n'est téléchargée qu'au moment d'héberger ou de rejoindre une partie. -->
+<script src="reseau.js?v=32" onerror="void 0"></script>
+<script src="jeu.js?v=32" onerror="void 0"></script>
 <!-- Outils de test (verif-missions-moteur.js) : chargés seulement avec ?verif ou &verif dans l'adresse. -->
 <script>
 if(/[?&]verif(=|&|$)/.test(location.search)){
-  const s = document.createElement('script'); s.src = 'verif-missions-moteur.js?v=24'; document.body.appendChild(s);
+  const s = document.createElement('script'); s.src = 'verif-missions-moteur.js?v=32'; document.body.appendChild(s);
 }
 </script>
 </body>

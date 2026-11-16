@@ -2490,7 +2490,9 @@
       proxy.scale.set(t - 6, m.corps[4] + 4, t - 6); proxy.position.y = (m.corps[4] + 4)/2;
     }
     proxy.userData.entId = b.id; racine.add(proxy);
-    const sel = new THREE.Mesh(geoSelection(m.taille), b.camp === 'J' ? matSelJ : b.camp === 'N' ? matSelN : matSelI);
+    // Anneau « à nous » : celui du camp du joueur local (campLocal() du moteur ; 'J' sans moteur).
+    const local = typeof campLocal === 'function' ? campLocal() : 'J';
+    const sel = new THREE.Mesh(geoSelection(m.taille), b.camp === local ? matSelJ : b.camp === 'N' ? matSelN : matSelI);
     sel.position.y = 1.9; sel.visible = false; racine.add(sel);
     groupe.add(racine);
     return {b, fac, m, racine, inst, proxy, sel, etat:'normal', chantier:null, porte:0,
@@ -2539,7 +2541,8 @@
     return {g, fan, an, ligne};
   }
   function majRally(s, b, temps){
-    const montrer = b.camp === 'J' && b.selectionne && b.rally;
+    // Drapeau de ralliement : seulement pour les bâtiments du joueur local (campLocal() du moteur).
+    const montrer = b.camp === (typeof campLocal === 'function' ? campLocal() : 'J') && b.selectionne && b.rally;
     if(!montrer){ if(s.rally){ s.rally.g.visible = s.rally.ligne.visible = false; } return; }
     if(!s.rally) s.rally = creerRally();
     const R = s.rally, H = R3D.hauteurSol(b.rally.x, b.rally.y);

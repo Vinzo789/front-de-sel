@@ -3382,7 +3382,7 @@
     if(u.camp === 'N') return COUL_N;
     if(u.camp === 'X') return COUL_X;
     const hex = couleurCampDe(u);
-    if(!hex) return u.camp === 'J' ? COUL_J : COUL_I;
+    if(!hex) return u.camp === (typeof campLocal === 'function' ? campLocal() : 'J') ? COUL_J : COUL_I;   // camp du joueur local
     return claire(hex, 0.35);
   }
   function anneau(o, u){
