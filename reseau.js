@@ -57,10 +57,14 @@ const REGLAGES = {
   delaiConnexionMs:8000,     // au-delà, on essaie le serveur suivant
   battementMs:1000,          // battement de cœur (invité → hôte et hôte → invités)
   silenceInjoignableMs:5000, // invité muet depuis 5 s → « injoignable »
-  delaiConfieMs:60000,       // invité parti depuis 60 s → camp confié à l'ordinateur
+  // Invité parti depuis 120 s → camp confié à l'ordinateur (60 s avant le 16 novembre 2026, décision du propriétaire :
+  // sur un PC lent, le chargement de la page mangeait presque tout le délai). L'invité dont la connexion tombe en
+  // partie attend le même délai avant de renoncer (_surveiller de l'invité).
+  delaiConfieMs:120000,
   hoteInjoignableMs:3000,    // rien reçu de l'hôte depuis 3 s → bandeau « hôte injoignable »
   graceHoteMs:10000,         // après le message de dernière volonté de l'hôte : 10 s pour revenir
-  hoteAbandonMs:60000,       // hôte muet (ou hôte déconnecté) depuis 60 s → fin de partie
+  hoteAbandonMs:60000,       // hôte muet (ou hôte déconnecté) depuis 60 s → fin de partie ; invité coupé dans le salon : 60 s aussi
+  reponseHoteMs:15000,       // invité qui vient de se reconnecter : l'hôte a au moins 15 s pour se manifester avant « injoignable »
   periodeCompletMs:2000,     // instantané complet toutes les 2 s
   memoireEvenements:200,     // événements gardés par l'hôte pour le rattrapage
   ordresParSeconde:20,       // par siège (seau de 20 jetons, rempli à 20 par seconde)
@@ -120,7 +124,7 @@ const MESSAGES = {
   inconnu:'Aucun salon ne répond à ce code.',
   ferme:'Ce salon est fermé.',
   expulse:'L’hôte vous a retiré du salon.',
-  confie:'Votre camp a été confié à l’ordinateur.',
+  confie:'Votre camp a été confié à l’ordinateur (absence de plus de 2 minutes).',
   sansReponse:'L’hôte ne répond pas.',
   serveur:'Aucun serveur n’est joignable.',
   code:'Code de salon invalide.',
@@ -134,7 +138,7 @@ const MESSAGES = {
   config:'Réglage réseau invalide.',
   // Troisième tour (14 novembre 2026)
   sansSiege:'Vous n’avez plus de place dans ce salon : rejoignez-le de nouveau.',
-  connexionPerdue:'Votre connexion au serveur est coupée depuis plus d’une minute : la partie continue sans vous et votre camp passe à l’ordinateur.',
+  connexionPerdue:'Votre connexion au serveur est coupée depuis plus de deux minutes : la partie continue sans vous et votre camp passe à l’ordinateur.',
   connexionPerdueSalon:'Votre connexion au serveur est coupée depuis plus d’une minute : votre place dans le salon a été libérée.',
   crypto:'Ce navigateur ne fournit pas les fonctions cryptographiques nécessaires (la page doit être ouverte en https).',
   // Quatrième tour (14 novembre 2026)
@@ -2028,7 +2032,9 @@ class SalonInvite extends Diffuseur {
     this.sOrdre = Date.now(); this.sCtl = Date.now(); this.seau = nouveauSeau(REGLAGES.ordresParSeconde);
     this.recepteur = creerRecepteur();
     this.rtt = null; this.echantillonsRtt = [];
-    this.dernierHote = maintenant(); this.hoteInjoignable = false; this.willHote = 0;
+    // dernierHote : dernier signe de l'hôte, avancé à ma reconnexion (voir « reconnecte ») ; dernierHoteReel : dernier
+    // signe réellement reçu, jamais avancé autrement (borne absolue de _surveiller).
+    this.dernierHote = this.dernierHoteReel = maintenant(); this.hoteInjoignable = false; this.willHote = 0;
     this.derniereDemandeComplet = 0; this.demandeComplet = true;
     // Compteurs des battements et des présences (refus du rejeu chez l'hôte) : partent de l'horloge, donc un onglet
     // rouvert repart au-delà de l'ancien.
@@ -2077,6 +2083,11 @@ class SalonInvite extends Diffuseur {
     T.on('reconnecte', () => {
       this.decoDepuis = 0;
       if(this.fini || !this.entre) return;
+      // Pendant MA coupure, je n'ai pas pu entendre l'hôte : revenu après plus de hoteAbandonMs (permis en partie
+      // jusqu'à delaiConfieMs), je le déclarerais injoignable avant sa réponse. Il reçoit donc au moins reponseHoteMs
+      // pour se manifester ; pas davantage, sinon une connexion qui clignote masquerait sans fin un hôte parti.
+      const t = maintenant();
+      this.dernierHote = Math.max(this.dernierHote, Math.min(t, t - REGLAGES.hoteAbandonMs + REGLAGES.reponseHoteMs));
       this._publierPresence();                     // la dernière volonté l'a remplacée par « parti »
       this.demandeComplet = true; this._battre();
       this._emettre('reconnecte', {});
@@ -2198,7 +2209,7 @@ class SalonInvite extends Diffuseur {
     if(sujet === S.vieH){ if(octets.length === 1){ this._hoteVu(); this.vieHoteT = maintenant(); } else this._ignorer('vie'); }
   }
   _hoteVu(){
-    this.dernierHote = maintenant(); this.willHote = 0;
+    this.dernierHote = this.dernierHoteReel = maintenant(); this.willHote = 0;
     if(this.hoteInjoignable){ this.hoteInjoignable = false; this._emettre('hoteRetrouve', {}); }
   }
   _description(octets, genre){
@@ -2493,11 +2504,16 @@ class SalonInvite extends Diffuseur {
     const t = maintenant();
     if(!this.hoteInjoignable && t - this.dernierHote > REGLAGES.hoteInjoignableMs){ this.hoteInjoignable = true; this._emettre('hoteInjoignable', {will:false}); }
     if(this.willHote && t - this.willHote > REGLAGES.graceHoteMs) return this._fin('hoteParti');
-    if(t - this.dernierHote > REGLAGES.hoteAbandonMs){
-      // Ma propre connexion est coupée : c'est elle qui est en cause, pas l'hôte (motif et texte le disent).
-      if(this.decoDepuis || !this.transport.connecte) return this._fin('connexionPerdue', null, false, this.debut ? MESSAGES.connexionPerdue : MESSAGES.connexionPerdueSalon);
-      return this._fin('hoteInjoignable');
-    }
+    // Ma propre connexion est coupée : c'est elle qui est en cause, pas l'hôte (motif et texte le disent). En partie,
+    // j'attends son retour aussi longtemps que l'hôte garde mon siège : delaiConfieMs, plus le temps qu'il met à
+    // remarquer mon silence (il date mon absence de ce moment-là) ; dans le salon, hoteAbandonMs.
+    const coupe = !!this.decoDepuis || !this.transport.connecte;
+    const finCoupe = () => this._fin('connexionPerdue', null, false, this.debut ? MESSAGES.connexionPerdue : MESSAGES.connexionPerdueSalon);
+    // Borne absolue : aucun signe réel de l'hôte depuis delaiConfieMs + hoteAbandonMs, quoi que fasse ma connexion.
+    if(t - this.dernierHoteReel > REGLAGES.delaiConfieMs + REGLAGES.hoteAbandonMs) return coupe ? finCoupe() : this._fin('hoteInjoignable');
+    if(coupe){
+      if(t - this.dernierHote > (this.debut ? REGLAGES.delaiConfieMs + REGLAGES.silenceInjoignableMs : REGLAGES.hoteAbandonMs)) return finCoupe();
+    } else if(t - this.dernierHote > REGLAGES.hoteAbandonMs) return this._fin('hoteInjoignable');
     if(this.memoT && t - this.memoT > REGLAGES.rafraichirMemoireMs) this._memoriser();   // partie de plus de 3 h
     if(this.attenteEvts.size){
       if(t - this.trouDepuis > 5000) this._sauterTrou(); else this._demanderRattrapage();
@@ -2554,7 +2570,7 @@ class SalonInvite extends Diffuseur {
   // oublier : vrai seulement quand la fin est sûre (message privé « fin » de l'hôte, ou fin dans son rattrapage) ; c'est
   // aussi le seul cas où un « parti » avec preuve est publié. Sinon la
   // mémoire du siège est gardée jusqu'à son délai de 3 heures : si la fin était fausse (coïncidence d'une annonce
-  // forgée et d'un silence de l'hôte), le lien rouvert rend le siège pendant les 60 s de grâce ; si elle était vraie,
+  // forgée et d'un silence de l'hôte), le lien rouvert rend le siège pendant le délai de grâce (delaiConfieMs) ; si elle était vraie,
   // le lien rouvert trouve un salon fermé et la mémoire est effacée à ce moment (refus définitif).
   async _fin(motif, donnees, oublier, message){
     if(this.fini) return;

@@ -7680,7 +7680,7 @@ function brancherHote(salon){
     hoteReseau.nouveautes.push(['message', {camp, texte:String(texte).slice(0, 200), genre}]);
   };
   salon.on('ordre', ({camp, ordre}) => dansMonde(H, () => recevoirOrdreHote(camp, ordre)));
-  // Invité absent depuis 60 s (décision de la première version) : son camp passe à l'ordinateur.
+  // Invité absent depuis 120 s (60 s avant le 16 novembre 2026, décision du propriétaire) : son camp passe à l'ordinateur.
   salon.on('campConfie', ({camp}) => dansMonde(H, () => { if(camps[camp]) confierCampAOrdinateur(camp, difficulte); }));
 }
 // Camp confié à l'ordinateur en cours de partie (invité parti ; outils de test).
@@ -8215,7 +8215,7 @@ async function lancerEcho(params){
 // « Ouvrir le salon » ou « Rejoindre », et modeReseau reste null tant qu'aucune partie en ligne n'a commencé.
 // Décisions de la première version : 2 à 4 humains en escarmouche ; places libres tenues par l'ordinateur ou
 // fermées ; campagnes et mode Surprises en solo seulement ; seul l'hôte met en pause ; un invité parti garde son
-// siège 60 s (camp immobile) puis son camp est confié à l'ordinateur ; si l'hôte part, la partie se termine pour
+// siège 120 s (camp immobile ; 60 s avant ?v=33) puis son camp est confié à l'ordinateur ; si l'hôte part, la partie se termine pour
 // tous ; un joueur éliminé reste spectateur ; fin de partie par équipe. Messages signés par reseau.js depuis ?v=28
 // (clé tirée du code du salon, puis clé propre à chaque siège), mais pas chiffrés ; jeton par siège, limite d'ordres
 // (reseau.js) et validation stricte de chaque ordre chez l'hôte (validerOrdre). Un joueur qui a le code peut encore
@@ -8503,7 +8503,7 @@ function lancerPartieSalon(bouton){
 }
 // Lancement en ligne : comme le solo (preparerLancement), sauf onglet caché, où les minuteries du navigateur sont
 // bridées (jusqu'à une par minute) : on démarre alors tout de suite, sans attendre les vignettes.
-// sansAttente : retour dans une partie déjà commencée (chaque seconde compte : le siège n'est gardé que 60 s).
+// sansAttente : retour dans une partie déjà commencée (chaque seconde compte : le siège n'est gardé que 120 s).
 function lancerEnLigne(bouton, demarrage, sansAttente){
   if(!document.hidden && !sansAttente) return preparerLancement(bouton, demarrage);
   if(lancementEnCours) return;
@@ -8521,7 +8521,7 @@ function demarrerHote(S, liste, publics){
   modeReseau = 'hote'; roleMonde = 'hote';
   Object.assign(enLigne, {finMontree:false, spectateur:false, finGlobale:false, finGlobaleT:0, suspendu:false, pasT:performance.now(), issueFin:null, bilan:null});
   brancherHote(S);
-  S.on('depart', d => { if(enJeu) notifier('tous', d.pseudo + ' s’est déconnecté : son camp reste immobile ; il sera confié à l’ordinateur dans 60 secondes s’il ne revient pas.', 'alerte'); });
+  S.on('depart', d => { if(enJeu) notifier('tous', d.pseudo + ' s’est déconnecté : son camp reste immobile ; il sera confié à l’ordinateur dans 2 minutes s’il ne revient pas.', 'alerte'); });
   S.on('retour', d => { if(enJeu) notifier('tous', d.pseudo + ' est de retour.', 'succes'); });
   S.on('campConfie', d => { if(enJeu) notifier('tous', 'Le camp de ' + d.pseudo + ' (' + nomCamp(d.camp).toLowerCase() + ') est confié à l’ordinateur.', 'info'); });
   S.on('deconnecte', () => { enLigne.suspendu = true; });   // simulation suspendue jusqu'au retour de la connexion
@@ -8862,9 +8862,9 @@ function finInviteReseau(d){
     return;
   }
   const textes = {ferme:'L’hôte a fermé la partie.', hoteParti:'L’hôte a quitté la partie : elle se termine pour tous.',
-    hoteInjoignable:'L’hôte ne donne plus de nouvelles depuis une minute : la partie est terminée.', confie:'Votre camp a été confié à l’ordinateur (absence de plus de 60 secondes).',
+    hoteInjoignable:'L’hôte ne donne plus de nouvelles depuis une minute : la partie est terminée.', confie:'Votre camp a été confié à l’ordinateur (absence de plus de 2 minutes).',
     expulse:'L’hôte vous a retiré de la partie.',
-    connexionPerdue:'Votre connexion au serveur est coupée depuis plus d’une minute : la partie continue sans vous et votre camp passe à l’ordinateur.',
+    connexionPerdue:'Votre connexion au serveur est coupée depuis plus de deux minutes : la partie continue sans vous et votre camp passe à l’ordinateur.',
     sansSiege:'L’hôte ne vous compte plus parmi les joueurs : votre place dans cette partie a été libérée.'};
   afficherInterruption(textes[motif] || (d && d.message) || 'La partie est interrompue.');
 }
@@ -8903,7 +8903,7 @@ function majEtatReseau(){
     const L = salonHote.listeSieges().filter(s => s.type === 'humain' && !s.hote && s.id);
     const partis = L.filter(s => s.presence && s.presence !== 'la');
     t = 'En ligne · hôte · salon ' + salonHote.codeAffiche + ' · ' + (L.length + 1) + ' joueurs · gardez cet onglet ouvert';
-    if(partis.length){ alerte = true; t = partis.map(s => s.pseudo + ' déconnecté (confié dans ' + Math.max(0, Math.ceil((60000 - s.horsLigneDepuisMs)/1000)) + ' s)').join(' · '); }
+    if(partis.length){ alerte = true; t = partis.map(s => s.pseudo + ' déconnecté (confié dans ' + Math.max(0, Math.ceil((Reseau.REGLAGES.delaiConfieMs - s.horsLigneDepuisMs)/1000)) + ' s)').join(' · '); }
     if(enLigne.suspendu){ alerte = true; t = 'Connexion au serveur perdue : partie suspendue, reconnexion…'; }
     if(enPause) t += ' · en pause';
   } else if(modeReseau === 'invite' && salonInvite){

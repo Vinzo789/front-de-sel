@@ -458,33 +458,33 @@ if(/[?&]mission=/.test(location.search)){
      L'ORDRE COMPTE : chaque fichier s'appuie sur ceux qui le précèdent (jeu.js en dernier).
      onerror : un fichier absent est ignoré sans bruit ; le jeu démarre sans lui quand il est facultatif
      (musique, post-traitement, envahisseurs, vignettes), sinon jeu.js affiche le message « Rendu 3D indisponible ». -->
-<script src="musique.js?v=32" onerror="void 0"></script>
-<script src="cartes.js?v=32" onerror="void 0"></script>
-<script src="campagnes/campagnes.js?v=32" onerror="void 0"></script>
-<script src="campagnes/halden-1.js?v=32" onerror="void 0"></script>
-<script src="campagnes/halden-2.js?v=32" onerror="void 0"></script>
-<script src="campagnes/halden-3.js?v=32" onerror="void 0"></script>
-<script src="campagnes/halden-4.js?v=32" onerror="void 0"></script>
-<script src="campagnes/karsk-1.js?v=32" onerror="void 0"></script>
-<script src="campagnes/karsk-2.js?v=32" onerror="void 0"></script>
-<script src="campagnes/karsk-3.js?v=32" onerror="void 0"></script>
-<script src="campagnes/karsk-4.js?v=32" onerror="void 0"></script>
-<script src="r3d-scene.js?v=32" onerror="void 0"></script>
-<script src="r3d-post.js?v=32" onerror="void 0"></script>
-<script src="r3d-unites.js?v=32" onerror="void 0"></script>
-<script src="r3d-batiments.js?v=32" onerror="void 0"></script>
-<script src="r3d-effets.js?v=32" onerror="void 0"></script>
-<script src="r3d-aliens.js?v=32" onerror="void 0"></script>
+<script src="musique.js?v=33" onerror="void 0"></script>
+<script src="cartes.js?v=33" onerror="void 0"></script>
+<script src="campagnes/campagnes.js?v=33" onerror="void 0"></script>
+<script src="campagnes/halden-1.js?v=33" onerror="void 0"></script>
+<script src="campagnes/halden-2.js?v=33" onerror="void 0"></script>
+<script src="campagnes/halden-3.js?v=33" onerror="void 0"></script>
+<script src="campagnes/halden-4.js?v=33" onerror="void 0"></script>
+<script src="campagnes/karsk-1.js?v=33" onerror="void 0"></script>
+<script src="campagnes/karsk-2.js?v=33" onerror="void 0"></script>
+<script src="campagnes/karsk-3.js?v=33" onerror="void 0"></script>
+<script src="campagnes/karsk-4.js?v=33" onerror="void 0"></script>
+<script src="r3d-scene.js?v=33" onerror="void 0"></script>
+<script src="r3d-post.js?v=33" onerror="void 0"></script>
+<script src="r3d-unites.js?v=33" onerror="void 0"></script>
+<script src="r3d-batiments.js?v=33" onerror="void 0"></script>
+<script src="r3d-effets.js?v=33" onerror="void 0"></script>
+<script src="r3d-aliens.js?v=33" onerror="void 0"></script>
 <!-- Vignettes des boutons (images des modèles 3D) : facultatif, des pictogrammes neutres le remplacent. -->
-<script src="r3d-vignettes.js?v=32" onerror="void 0"></script>
+<script src="r3d-vignettes.js?v=33" onerror="void 0"></script>
 <!-- Multijoueur (reseau.js) : aucun effet au chargement (ni connexion, ni minuteur) ; la bibliothèque MQTT
      n'est téléchargée qu'au moment d'héberger ou de rejoindre une partie. -->
-<script src="reseau.js?v=32" onerror="void 0"></script>
-<script src="jeu.js?v=32" onerror="void 0"></script>
+<script src="reseau.js?v=33" onerror="void 0"></script>
+<script src="jeu.js?v=33" onerror="void 0"></script>
 <!-- Outils de test (verif-missions-moteur.js) : chargés seulement avec ?verif ou &verif dans l'adresse. -->
 <script>
 if(/[?&]verif(=|&|$)/.test(location.search)){
-  const s = document.createElement('script'); s.src = 'verif-missions-moteur.js?v=32'; document.body.appendChild(s);
+  const s = document.createElement('script'); s.src = 'verif-missions-moteur.js?v=33'; document.body.appendChild(s);
 }
 </script>
 </body>

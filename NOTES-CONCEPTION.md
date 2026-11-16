@@ -45,7 +45,7 @@ d'effets, et les modules 3D les mettent en scène à chaque image, à travers
 l'objet global `R3D`. On peut donc modifier les règles sans toucher au rendu,
 et inversement.
 
-Chaque balise `<script>` porte un numéro de version (`?v=32` au 15 novembre 2026 : annonce du salon liée à son serveur, issue de la partie annoncée par l'hôte ; `?v=31` : écran de fin de l'invité seulement sur la fin confirmée par l'hôte, clés des joueurs partis jamais oubliées, voir « Multijoueur » ; `?v=30` : compteurs datés dans le futur et identifiant d'un joueur sorti du salon ; `?v=29` : retour d'un invité et fin de partie protégés ; `?v=28` : messages en ligne signés ; `?v=26` et `?v=27` : multijoueur corrigé et protégé ; `?v=25` : multijoueur en ligne ; `?v=24` : seconde passe de fluidité, voir « Fluidité » à la fin ; la version publiée sur GitHub Pages est encore la 24, solo seulement). **Il faut
+Chaque balise `<script>` porte un numéro de version (`?v=33` au 16 novembre 2026 : délai de retour d'un joueur porté à 120 secondes ; `?v=32` : annonce du salon liée à son serveur, issue de la partie annoncée par l'hôte ; `?v=31` : écran de fin de l'invité seulement sur la fin confirmée par l'hôte, clés des joueurs partis jamais oubliées, voir « Multijoueur » ; `?v=30` : compteurs datés dans le futur et identifiant d'un joueur sorti du salon ; `?v=29` : retour d'un invité et fin de partie protégés ; `?v=28` : messages en ligne signés ; `?v=26` et `?v=27` : multijoueur corrigé et protégé ; `?v=25` : multijoueur en ligne ; `?v=24` : seconde passe de fluidité, voir « Fluidité » à la fin ; la version publiée sur GitHub Pages est encore la 24, solo seulement). **Il faut
 l'augmenter à chaque modification d'un fichier**, sinon le navigateur garde
 l'ancienne version en mémoire.
 
@@ -760,7 +760,7 @@ La vue se déplace avec les flèches ou en amenant le curseur au bord de la
 fenêtre ; clic droit sur un allié avec un réparateur sélectionné : le soigner.
 Le bouton « Commandes » du jeu donne la liste complète.
 
-## Multijoueur (13 novembre 2026, `?v=25` ; corrigé le 14 novembre 2026, `?v=26`, `?v=27`, `?v=28` : messages signés, puis `?v=29`, `?v=30`, et `?v=31`, `?v=32` le 15 novembre)
+## Multijoueur (13 novembre 2026, `?v=25` ; corrigé le 14 novembre 2026, `?v=26`, `?v=27`, `?v=28` : messages signés, puis `?v=29`, `?v=30`, `?v=31` et `?v=32` le 15 novembre, `?v=33` le 16)
 
 Escarmouche en ligne de 2 à 4 joueurs humains, places restantes tenues par l'ordinateur ou fermées. Un
 joueur **héberge** : son navigateur fait tourner la partie et fait autorité. Les autres **rejoignent** :
@@ -800,7 +800,8 @@ ordres du joueur, que l'hôte vérifie avant de les appliquer. Conception et mes
 
 ### Reprendre son siège (14 novembre 2026)
 - **Onglet rechargé, ou fermé puis lien rouvert** dans le même navigateur : le jeu rentre seul dans la partie en
-  cours, au même camp, s'il revient **avant 60 secondes** (ensuite le camp est confié à l'ordinateur). Pour cela,
+  cours, au même camp, s'il revient **avant 2 minutes** (120 secondes depuis `?v=33`, 60 avant ; ensuite le camp est
+  confié à l'ordinateur). Pour cela,
   le navigateur garde, pour chaque salon, un identifiant d'onglet et un « jeton » de siège (clé
   `frontDeSel.reseau.<CODE>`, avec la date). Cette mémoire est effacée à une fin de partie certaine (depuis
   `?v=29` : annoncée par l'hôte dans un message que lui seul peut signer pour ce joueur), quand le joueur quitte, après un refus définitif à l'arrivée (partie commencée, camp confié,
@@ -849,10 +850,16 @@ ordres du joueur, que l'hôte vérifie avant de les appliquer. Conception et mes
   tout de suite chez l'invité, comme en solo (avant, il partait et rien ne se passait) ; si l'hôte le refuse quand
   même (état changé entre-temps), le motif s'affiche chez l'invité.
 - **Invité parti** (onglet fermé, coupure) : annonce à tous environ 2,5 s après la coupure (une coupure plus
-  brève n'est pas annoncée) ; son camp reste immobile ; s'il revient dans les 60 secondes (même onglet
+  brève n'est pas annoncée) ; son camp reste immobile ; s'il revient dans les 2 minutes (même onglet
   rechargé, ou lien rouvert dans le même navigateur : voir « Reprendre son siège »), il reprend son siège ;
   sinon son camp est confié à l'ordinateur, le bandeau des camps l'indique chez tous (« ordinateur (Alice
-  parti) ») et un retour est refusé.
+  parti) ») et un retour est refusé. **Délai porté de 60 à 120 secondes en `?v=33`** (décision du propriétaire, le
+  16 novembre 2026) : le bandeau de l'hôte décompte « confié dans … s » à partir de 120. Si c'est la connexion de
+  l'invité qui tombe sans qu'il ferme l'onglet, son jeu attend maintenant lui aussi 2 minutes le retour de la
+  connexion et reprend seul (avant, il renonçait au bout d'une minute) ; passé ce délai, il affiche « Votre
+  connexion au serveur est coupée depuis plus de deux minutes… ». Inchangé : si c'est l'hôte qui ne donne plus de
+  nouvelles pendant une minute, la partie se termine pour tous (au pire 3 minutes chez un invité dont la connexion
+  tombe et revient sans arrêt pendant ce temps).
 - **Hôte parti** : la partie se termine pour tous (écran « Partie interrompue », retour au menu). Si l'hôte
   quitte par le bouton, l'annonce arrive en 3 s environ (vérification : l'invité attend que l'hôte se taise,
   `?v=27` ; elle était immédiate avant) ; s'il ferme brutalement l'onglet, les invités attendent 10 secondes
@@ -1211,6 +1218,31 @@ ordinateurs ni entre deux réseaux.**
   tournent, sur la même adresse locale. Un essai de retour mené en même temps doit donc se faire sur une autre
   adresse (par exemple `127.0.0.1` au lieu de `localhost`), sinon la place mémorisée disparaît en cours de route.
 
+### Vérifié le 16 novembre 2026, huitième tour (`?v=33` : délai de retour d'un joueur porté de 60 à 120 secondes)
+Même poste, onglets cachés du navigateur intégré. **Toujours jamais joué à la souris en ligne, jamais entre deux
+ordinateurs ni entre deux réseaux.**
+- Ce qui change : voir « En partie », Invité parti. En plus du délai de l'hôte : l'invité dont la connexion tombe
+  en partie attend lui aussi (125 s : les 120 s, plus les 5 s que l'hôte met à remarquer son silence) ; à sa
+  reconnexion, l'hôte a au moins 15 s pour répondre avant d'être déclaré injoignable ; sans aucun vrai signe de l'hôte
+  pendant 3 minutes, la partie de l'invité se termine quoi que fasse sa connexion ; le refus affiché à la réouverture
+  d'un lien trop tardive dit maintenant « (absence de plus de 2 minutes) ».
+- `essai-codec.html` complet : 82 verdicts sur 82, dont trois nouveaux ou refaits : invité coupé plus longtemps que
+  l'ancien délai et moins que le nouveau (aucune fin, siège gardé, états repris) ; hôte réellement parti et connexion
+  de l'invité qui clignote (fin au bout de la borne, 11,9 s pour 12 s avec les délais d'essai) ; coupure de 100 s aux
+  délais réels (siège gardé, tous les événements rattrapés).
+- Partie réelle à travers HiveMQ, deux onglets : coupure brève de la connexion de l'invité réparée en 1,2 s, sans
+  fin ni annonce ; onglet de l'invité fermé : départ vu par l'hôte 2,8 s après, bandeau de l'hôte « confié dans
+  91 s » à 30 s ; lien rouvert dans un onglet neuf : **siège repris 72 s après la fermeture** (refusé avant
+  `?v=33`), même identifiant, ordre accepté ; fin : VICTOIRE et DÉFAITE, même durée (02:13) ; aucune erreur.
+- Contrôles indépendants (deux agents en lecture seule), aucun défaut bloquant ni important. Vrais onglets, délais
+  réels : retour à 76 s accepté ; absence de 150 s : camp confié à l'ordinateur 120,0 s après le départ, refus clair
+  au retour, mémoire du siège effacée, aucune nouvelle tentative ; annonce « dans 2 minutes » et décompte du bandeau
+  relevés mot pour mot. Boucle locale : retour rendu à 0,9 fois le délai, refusé à 1,1 fois ; salon : 60 s inchangé ;
+  hôte muet, connexion bonne : fin à 60 s, inchangée. Leurs constats mineurs sont corrigés dans cette version (borne de
+  3 minutes ci-dessus, texte du refus, essais renforcés).
+- Règle d'or, pages neuves : `7d442efb`, `22f9e99a`, `6053f9be` (victoire à 549 s), identiques à la référence v24 ;
+  aucune erreur en console.
+
 ## Essais et outils
 
 - `?demo` : vitrine de toutes les unités et de tous les bâtiments. Dans la
@@ -1278,9 +1310,10 @@ développement, le 11 novembre 2026 :
   (`?diff=`, `?qualite=`…) et n'en retirent que le salon (et le serveur venu avec un lien d'invitation). Quand un
   joueur tape le code à la main, l'adresse de sa page reçoit `?salon=CODE` : un rechargement (F5) le ramène alors
   seul dans le salon ou dans la partie.
-- (`?v=32`) Un invité qui ferme son onglet a 60 secondes pour revenir, chargement de la page compris. Sur un PC
-  lent, ce chargement peut prendre une bonne partie du délai. Porter le délai à 120 secondes est possible (le camp
-  resterait alors immobile jusqu'à 2 minutes avant de passer à l'ordinateur) : à décider.
+- (`?v=33`) Le délai de retour d'un invité est passé de 60 à 120 secondes : **décidé par le propriétaire** le
+  16 novembre 2026 (sur un PC lent, le chargement de la page pouvait prendre une bonne partie des 60 secondes).
+  Choix d'accompagnement, à valider : l'invité dont la connexion tombe en partie attend lui aussi 120 secondes ;
+  le délai laissé à l'hôte, lui, reste à 60 secondes (hôte muet une minute : fin de la partie pour tous).
 - (`?v=31`) Le code du salon reste à 6 signes. Un code à 8 signes résisterait bien plus longtemps à la recherche
   par force (limite L4), au prix d'un code plus long à dicter (à décider).
 - (`?v=31`) Les messages restent signés mais non chiffrés (limite L1) : les pseudonymes sont lisibles sur le

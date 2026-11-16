@@ -41,6 +41,10 @@ compte : seul un pseudonyme est demandé.
 - Les messages sont signés (personne ne peut les falsifier sans le code du
   salon) mais pas chiffrés : ne mettez aucune donnée personnelle dans le
   pseudonyme, et ne donnez le code qu'à des personnes de confiance.
+- Un joueur qui ferme son onglet par erreur, ou dont la connexion tombe, retrouve
+  sa place s'il revient en moins de 2 minutes (en rouvrant le lien dans le même
+  navigateur) ; ensuite, l'ordinateur prend son camp. Si l'hôte part, la partie
+  s'arrête pour tous.
 - Les campagnes et le mode « Surprises » restent en solo.
 
 Le détail, les limites connues et ce qui a été vérifié sont dans
