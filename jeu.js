@@ -2111,6 +2111,8 @@ function economieIA(C, F, bats, ouvriers, armee, qg){
     : menaceAir ? ['caserne', F.special, 'usine', F.special, 'aeroport', 'batterie', 'caserne', 'usine', F.defense]
                 : ['caserne', F.special, 'usine', F.special, 'aeroport', 'caserne', 'usine', F.defense, 'batterie'])
     .filter(t => t && BATIMENTS[t] && ((t !== 'aeroport' && t !== 'batterie') || autorise('batiments', t)));
+  // Galerie de tir (novembre 2026, option cochée seulement) : ajoutée au plan selon le niveau (§ 9.1).
+  if(galeriesActives()) ajouterGalerieAuPlan(C.id, F, plan, U);
   // Aviation : avion à commander (null : rien pour l'instant). Un aéroport prêt, avec une place libre
   // et rien en commande, veut un chasseur si le joueur a des appareils et qu'elle n'en a pas (urgent),
   // sinon des avions d'attaque. Le tout premier avion passe avant la suite du plan de construction.
@@ -2132,23 +2134,36 @@ function economieIA(C, F, bats, ouvriers, armee, qg){
   const premierAvion = !!avionVoulu && (ia.nAvions === 0 || avionsDe(aero).length === 0);
   ia.besoin = null;
   let iBesoin = -1;   // rang du bâtiment voulu dans le plan
-  if(!chantiers.length && !premierAvion){
+  // Galerie de tir (novembre 2026, option cochée) : l'attente du premier avion ne retient ni la galerie ni la
+  // batterie qui la précède dans le plan (rangs entre l'aéroport et la galerie) ; les autres bâtiments
+  // attendent toujours l'avion. (Essai du 18 novembre 2026 : l'ordinateur Difficile, réserves dépensées en
+  // unités, n'achetait jamais ce premier avion ; la galerie, placée après l'aéroport, n'était donc jamais
+  // bâtie.) Option décochée : galerieLibre est faux et la condition est exactement celle d'avant.
+  const galerieLibre = premierAvion && galeriesActives() && !!F.galerie && plan.includes(F.galerie);
+  if(!chantiers.length && (!premierAvion || galerieLibre)){
     const compte = {};
     for(let i = 0; i < plan.length; i++){
       const t = plan[i];
       compte[t] = (compte[t]||0) + 1;
       if(bats.filter(b => b.type === t).length < compte[t]){ ia.besoin = t; iBesoin = i; break; }
     }
+    if(galerieLibre && !(iBesoin > plan.indexOf('aeroport') && iBesoin <= plan.indexOf(F.galerie))){ ia.besoin = null; iBesoin = -1; }
     // Ultra sous la menace : seuls les bâtiments vitaux (première caserne, première usine, batterie contre
     // des appareils ou le vaisseau) ; le reste attend, et son prix n'est pas mis de côté.
     if(U && ia.besoin && !batimentPermisUltra(C.id, ia.besoin, bats)){ ia.besoin = null; iBesoin = -1; }
     if(ia.besoin){
       const D = BATIMENTS[ia.besoin];
       const ok = !D.requiert || bats.some(b => b.type === D.requiert && !b.enCours);
-      if(ok && C.reserves - gardeC >= D.cout && ouvriers.length >= 1){
-        const pos = trouverEmplacement(ia.besoin, U ? centreChantierUltra(C.id, ia.besoin, qg || bats[0]) : (qg || bats[0]));
+      // (Galerie de tir, novembre 2026 : une seule par camp, chantier compris, comme pour le joueur. Sans
+      // galerie dans le plan, D.galerie est faux et rien ne change.)
+      if(ok && C.reserves - gardeC >= D.cout && ouvriers.length >= 1 && (!D.galerie || !empechementGalerie(C.id, ia.besoin))){
+        const pos = trouverEmplacement(ia.besoin, U ? centreChantierUltra(C.id, ia.besoin, qg || bats[0])
+          : D.galerie ? centreGalerieIA(C.id, qg || bats[0]) : (qg || bats[0]));
         const o = ouvriers.find(libre) || ouvriers[0];
-        if(pos && o) construireBatiment(C.id, ia.besoin, pos.c, pos.r, [o]);
+        if(pos && o){
+          const nb = construireBatiment(C.id, ia.besoin, pos.c, pos.r, [o]);
+          if(nb && D.galerie) noterGalerieIA(C.id, {quoi:'chantier', x:Math.round(nb.x), y:Math.round(nb.y)});
+        }
       }
     }
   }
@@ -2156,7 +2171,9 @@ function economieIA(C, F, bats, ouvriers, armee, qg){
   // usine, défense fixe) : ils ne retiennent plus l'achat des avions ni des unités.
   const iAero = plan.indexOf('aeroport');
   // (Exception : la batterie mixte, sinon jamais financée — avions et hélicoptères passaient toujours avant.)
-  const apresAero = iAero >= 0 && iBesoin > iAero && ia.besoin !== 'batterie';
+  // (Galerie de tir, novembre 2026 : financée comme la batterie ; sans galerie dans le plan, le dernier terme
+  // est toujours vrai.)
+  const apresAero = iAero >= 0 && iBesoin > iAero && ia.besoin !== 'batterie' && !(ia.besoin && BATIMENTS[ia.besoin].galerie);
   // (Avant les collecteurs, le seuil était « six ouvriers » : l'économie installée.)
   const reserveMin = (ia.besoin && collecteurs >= 2 && !apresAero ? BATIMENTS[ia.besoin].cout : 0) + gardeC;
   const infanterie = armee.filter(u => u.def.forme === 'infanterie').length;
@@ -2212,6 +2229,11 @@ function economieIA(C, F, bats, ouvriers, armee, qg){
   // Véhicules à dépanner (hélicoptères compris).
   const aDepanner = armee.filter(u => u.def.forme !== 'infanterie' && !u.def.repare && u.def.arme).length;
   const [repInf, repVeh] = (F.reparateurs || []).map(t => autorise('unites', t) ? t : null);
+  // Galerie de tir (novembre 2026, option cochée seulement) : un missile à commander, au-delà de la réserve
+  // de sécurité (collecteur à racheter, bâtiment du plan, plus reserveMissile du niveau) (§ 9.2). (Essai du
+  // 18 novembre 2026 : en gardant aussi l'épargne d'un avion et le prix d'un char, aucun ordinateur n'a
+  // commandé un seul missile en six minutes de galerie debout.)
+  if(galeriesActives()) fabriquerMissileIA(C, bats, reserveMin);
   // Ultra : production par analyse de l'adversaire (contres, réparateurs, DCA), sans les tours de rôle.
   if(U){ productionUltra(C, F, bats, armee, gardeC, reserveMin, epargne); return; }
   // Char attendu par une usine libre : la caserne le laisse passer (sinon les fantassins, moins chers,
@@ -2374,6 +2396,8 @@ function majIAAviation(camp, bats, avions, menacesSol){
     else ia.frappeT = temps + ATTENTE_FRAPPE;
   }
 }
+// Densité minimale d'un groupe visé par un pouvoir de l'ordinateur ordinaire (scoreGroupe) : super-arme, petit pouvoir.
+const SEUIL_GROUPE_IA = {super:6, petit:3};
 function pouvoirsIA(C, menaces, armee){
   const id = C.id;
   if(!pouvoirsActifs[id]) return;
@@ -2383,9 +2407,12 @@ function pouvoirsIA(C, menaces, armee){
     if(!P.super && sup && (C.recharges[sup.cle]||0) <= 0) continue;
     if(!P.cible){ if(menaces.length || armee.length < 4) activerPouvoir(id, P.cle); continue; }
     // Le groupe adverse le plus dense, parmi tous ses ennemis : camps adverses et envahisseurs.
+    // (Galeries de tir, novembre 2026 : option cochée, une galerie ouverte qui se refermera avant l'impact ne
+    // compte pas, pour tous les niveaux ; option décochée, delai est absent et rien ne change.)
+    const delai = galeriesActives() ? delaiPouvoir(P) : undefined;
     let g = null;
-    for(const camp of [...campsEnJeu(), 'X']) if(hostile(id, camp) && camp !== 'N'){ const h = meilleurGroupe(camp); if(h && (!g || h.score > g.score)) g = h; }
-    if(g && g.score >= (P.super ? 6 : 3)) activerPouvoir(id, P.cle, g.x, g.y);
+    for(const camp of [...campsEnJeu(), 'X']) if(hostile(id, camp) && camp !== 'N'){ const h = meilleurGroupe(camp, delai); if(h && (!g || h.score > g.score)) g = h; }
+    if(g && g.score >= (P.super ? SEUIL_GROUPE_IA.super : SEUIL_GROUPE_IA.petit)) activerPouvoir(id, P.cle, g.x, g.y);
   }
 }
 // Chaque camp ordinateur réfléchit toutes les 0,8 s, avec son propre état (décalé d'un camp à l'autre
@@ -2529,7 +2556,10 @@ function majIACamp(id, ia){
     : ia.campCible ? cibleVague(centre, id, ia.campCible) : null;
   for(const u of armee) if(u.enVague && !u.ordre && !u.cible && cibleJ)
     u.ordre = {type:'attaqueDeplacement', x:cibleJ.x + (Math.random()-.5)*80, y:cibleJ.y + (Math.random()-.5)*80};
+  if(galeriesActives()) riposteGalerieIA(id, C, bats);   // galerie hostile ouverte : riposte (19 novembre 2026, § 9.4)
   pouvoirsIA(C, menaces, armeeAll);
+  if(galeriesActives()) tirGalerieIA(id, bats);   // galerie de tir (novembre 2026, § 9.3)
+  if(galeriesActives()) esquiveGalerieIA(id, uns);   // Difficile : esquive des missiles de galerie (§ 9.5), en dernier
 }
 // IA d'une mission : base facultative, vagues programmées, point d'attaque préféré.
 const LAISSE_DEFENSE = 700, DEFENSE_RAYON = 700, RETOUR_POSTE_MAX = 25, RETOUR_FINAL_MAX = 20;
@@ -2813,16 +2843,370 @@ function cibleVague(centre, camp, seul){
   }
   return best;
 }
-function meilleurGroupe(camp){
-  // Galerie de tir fermée (novembre 2026) : ni visée ni comptée dans la densité d'un groupe.
-  const liste = ents.filter(e => e.camp === camp && !e.mort && !(e.def.avion && enVol(e)) && !galerieFermee(e));
+// Entités d'un camp qui comptent pour un pouvoir à cible de l'ordinateur ordinaire.
+// Galerie de tir fermée (novembre 2026) : ni visée ni comptée dans la densité d'un groupe.
+// delai (novembre 2026, cahier § 9.4, facultatif : passé seulement option « Galeries de tir » cochée) : s entre
+// l'ordre du pouvoir et son dernier impact ; une galerie ouverte qui se sera refermée d'ici là n'y entre pas
+// (sinon le pouvoir est gaspillé sur une porte close). Sans delai, ou sans galerie, la liste est celle d'avant.
+function listeGroupe(camp, delai){
+  return ents.filter(e => e.camp === camp && !e.mort && !(e.def.avion && enVol(e)) && !galerieFermee(e)
+    && !(delai != null && galerieHorsDeAtteinte(e, delai, MARGE_RIPOSTE)));
+}
+// Densité d'un groupe autour de (x, y) : bâtiment 2, vaisseau-mère 6, unité 1, à moins de 170 px (fonction pure).
+function scoreGroupe(liste, x, y){
+  let s = 0;
+  for(const f of liste) if(Math.hypot(f.x-x, f.y-y) < 170) s += f.est === 'batiment' ? 2 : f.def.forme === 'vaisseauMere' ? 6 : 1;
+  return s;
+}
+function meilleurGroupe(camp, delai){
+  const liste = listeGroupe(camp, delai);
   let best = null;
   for(const e of liste){
-    let s = 0;
-    for(const f of liste) if(Math.hypot(f.x-e.x, f.y-e.y) < 170) s += f.est === 'batiment' ? 2 : f.def.forme === 'vaisseauMere' ? 6 : 1;
+    const s = scoreGroupe(liste, e.x, e.y);
     if(!best || s > best.score) best = {x:e.x, y:e.y, score:s};
   }
   return best;
+}
+
+// ---------- Galerie de tir de l'ordinateur (novembre 2026, lot 2 : cahier des charges § 9) ----------
+// L'ordinateur ordinaire (Normale, Difficile) et Ultra bâtissent leur galerie, fabriquent leurs missiles et
+// tirent, SANS TRICHE : construction comme ses autres bâtiments (construireBatiment, même prix), missiles par
+// commanderMissile, tir par ouvrirGalerie, avec les mêmes empêchements que le joueur. Il ne lit que ce que
+// tout joueur voit (la carte entière, sans brouillard).
+// Toutes ces fonctions ne sont appelées que derrière une garde galeriesActives() (ou l'existence d'une
+// galerie) : option décochée, aucune ne tourne, et rien ne change aux calculs, aux tirages au hasard ni à
+// l'ordre des décisions de l'ordinateur.
+// Seuils par niveau, en un seul endroit pour le réglage. Facile est absent de la table : jamais de galerie.
+//   reserveMissile : crédits gardés, en plus de ce que l'économie retient déjà (collecteur à racheter,
+//                    bâtiment du plan, avion, char attendu), avant de commander un missile ;
+//   valeurMin      : valeur minimale d'une zone visée, en part du prix des missiles engagés (1 : « le tir
+//                    rembourse au moins ses missiles ») ;
+//   attenteSeul    : s au-delà desquelles un seul missile prêt part sans attendre le second (Karsk) ;
+//   retenueValeur, retenueRayon : il n'ouvre pas si des unités ennemies valant plus de retenueValeur (somme
+//                    des prix) sont à moins de retenueRayon px de sa galerie (16 s de vulnérabilité) ;
+//   retenueAir     : px ; un appareil ennemi capable de frapper au sol à cette distance interdit l'ouverture
+//                    (0 : pas de contrôle ; Ultra seulement) ;
+//   recherche      : s d'attente après une recherche de cible infructueuse (économie de calcul).
+// Riposte à une galerie hostile ouverte (§ 9.4) et esquive (§ 9.5), ajoutées le 19 novembre 2026 :
+//   riposteSuper   : la super-arme aussi sur la galerie ouverte, si elle et son voisinage valent le seuil
+//                    habituel (le petit pouvoir à cible, lui, part dès qu'il est prêt, dès Normale) ;
+//   contreTir      : sa propre galerie tire sur la galerie adverse tant que le missile peut arriver avant
+//                    qu'elle se referme ;
+//   esquive        : ses unités sortent du cercle annoncé d'un missile de galerie adverse (Ultra le fait déjà
+//                    par son analyse, pour tous les pouvoirs : faux ici pour ne pas le faire deux fois).
+const IA_GALERIE = {
+  normal:   {reserveMissile:150, valeurMin:0.9,  attenteSeul:90, retenueValeur:500, retenueRayon:600, retenueAir:0,    recherche:4,
+             riposteSuper:false, contreTir:false, esquive:false, apres:0},
+  difficile:{reserveMissile:100, valeurMin:0.75, attenteSeul:90, retenueValeur:500, retenueRayon:600, retenueAir:0,    recherche:3,
+             riposteSuper:true,  contreTir:true,  esquive:true,  apres:0},
+  ultra:    {reserveMissile:100, valeurMin:0.75, attenteSeul:90, retenueValeur:500, retenueRayon:600, retenueAir:1200, recherche:3,
+             riposteSuper:true,  contreTir:true,  esquive:false, apres:0},
+};
+//   apres          : s de jeu avant lesquelles l'ordinateur ordinaire ne met pas la galerie à son plan (0 : dès
+//                    que le plan y arrive). RÉGLAGE À FAIRE : mise au plan dès l'aéroport, la galerie fait
+//                    mettre 1 200 de côté vers 6 minutes, au détriment des unités (contrôle du 19 novembre
+//                    2026 : une partie presque gagnée ne se terminait plus). Essai le même jour avec 540 s
+//                    (Normale) et 420 s (Difficile) : plus aucune galerie avant 750 s. La bonne valeur reste à
+//                    trouver par des séries de parties. Ultra a ses propres conditions (ajouterGalerieAuPlan).
+// (Essai du 18 novembre 2026 : avec 300 / 200 / 200 de réserve de sécurité, le premier missile n'était
+// commandé que 3 à 4 minutes après la fin de la galerie ; réserves de l'ordinateur rarement au-delà de 600.)
+function reglagesGalerieIA(id){ return IA_GALERIE[niveauIA(id)] || null; }
+// Mémoire de la galerie d'un ordinateur (créée seulement option cochée) : pretT = heure où un premier missile
+// était prêt (null sinon), rechercheT = prochaine recherche de cible permise, journal = décisions datées
+// (chantier, commande, tir), lu par les essais.
+function memoireGalerieIA(id){
+  const E = etatIA(id);
+  return E.galerie || (E.galerie = {pretT:null, rechercheT:0, journal:[]});
+}
+function noterGalerieIA(id, ligne){
+  const J = memoireGalerieIA(id).journal;
+  J.push(Object.assign({t:Math.round(temps*10)/10}, ligne)); if(J.length > 200) J.shift();
+  journalUltra(id, 'galerie : ' + ligne.quoi + (ligne.valeur ? ' (valeur ' + Math.round(ligne.valeur) + ')' : ''));
+}
+// Galerie terminée et vivante du camp, parmi ses bâtiments (null s'il n'en a pas).
+function galerieDuCamp(bats){ return bats.find(b => estGalerie(b) && !b.enCours && !b.mort) || null; }
+// 9.1. Place de la galerie dans le plan de construction (plan modifié sur place) : juste après l'aéroport,
+// et après la batterie quand elle le suit (plan contre une aviation adverse). Ultra : seulement quand son
+// armée domine, ou réserves au-dessus de 1 500, ou après 600 s (sa batterie avancée, quand elle est prévue,
+// est déjà placée avant l'aéroport). Prérequis (usine) vérifié par economieIA comme pour tout bâtiment.
+// (Essai du 18 novembre 2026, cinq parties de 900 s à graine fixe : placée en toute fin de plan, après la
+// seconde caserne, la seconde usine, la défense fixe et la batterie, Normale et Difficile n'en bâtissaient
+// AUCUNE ; leur plan n'est jamais achevé en 15 minutes.)
+function ajouterGalerieAuPlan(id, F, plan, U){
+  const R = reglagesGalerieIA(id);
+  if(!R || !F.galerie || !BATIMENTS[F.galerie]) return;
+  if(!U && temps < R.apres) return;
+  if(U){
+    const S = etatUltra(id);
+    if(!(S.domine || camps[id].reserves > 1500 || temps > 600)) return;
+  }
+  let i = plan.indexOf('aeroport');
+  if(i < 0){ plan.push(F.galerie); return; }
+  if(plan[i + 1] === 'batterie') i++;
+  plan.splice(i + 1, 0, F.galerie);
+}
+// Emplacement : dans sa base, à l'opposé de l'adversaire le plus proche (bâtiment d'abord : cibleVague), pour
+// qu'une armée qui arrive tombe d'abord sur le reste de la base. trouverEmplacement cherche ensuite une zone
+// libre de 3 × 3 autour de ce point.
+function centreGalerieIA(id, defaut){
+  const e = cibleVague(defaut, id);
+  if(!e) return defaut;
+  const dx = defaut.x - e.x, dy = defaut.y - e.y, d = Math.hypot(dx, dy) || 1, m = TUILE*3;
+  return {x:Math.max(m, Math.min(LARG - m, defaut.x + dx/d*200)), y:Math.max(m, Math.min(HAUT - m, defaut.y + dy/d*200))};
+}
+// 9.2. Fabrication : galerie fermée, place libre sur un lanceur, et réserves au-delà de retenue (ce que
+// l'économie garde pour un collecteur et le prochain bâtiment) plus la réserve de sécurité du niveau. commanderMissile fait les mêmes contrôles et
+// prélève le même prix que pour le joueur ; empechementFabrication est consulté avant pour ne pas encombrer
+// les messages du camp d'un refus.
+function fabriquerMissileIA(C, bats, retenue){
+  const b = galerieDuCamp(bats), R = b && reglagesGalerieIA(C.id);
+  if(!R || b.gal.t0 !== null) return;
+  const G = b.def.galerie;
+  // (Contrôle du 19 novembre 2026 : avec « retenue » en plus, l'économie de l'ordinateur ne réunissait presque
+  // jamais la somme, et la galerie de Halden, bâtie pour 1 200, restait sans missile. La galerie est payée :
+  // le missile passe maintenant avant le prochain bâtiment ; seule la réserve de sécurité du niveau reste.)
+  if(C.reserves < G.coutMissile + R.reserveMissile || empechementFabrication(b)) return;
+  if(commanderMissile(b)) noterGalerieIA(C.id, {quoi:'commande', stock:b.gal.stock, fab:b.gal.fab});
+}
+// Dégâts attendus d'un tir sur une entité à d px (bord compris) du point visé : n missiles, chute linéaire
+// jusqu'à la moitié au bord (explosionZone, bord 0,5), efficacité de l'arme « missileGalerie ». La dispersion
+// (Karsk) est comptée comme un éloignement moyen de la moitié de l'écart maximal. Fonction pure.
+function degatsAttendusGalerie(G, n, e, d){
+  const dd = d + G.dispersion*0.5;
+  if(dd > G.rayon) return 0;
+  return G.degats * n * (1 - 0.5*dd/G.rayon) * efficacite('missileGalerie', e);
+}
+// Valeur, en crédits, de ce qu'un tir ôte à une entité ennemie (fonction pure). Bâtiments d'abord, pondérés
+// selon leur rôle (aéroport, usine, défenses, QG ; le QG, sans prix, vaut 1 500), avec un bonus s'il est
+// détruit ; unités ensuite, comptées à moitié (13 s séparent l'ouverture de l'impact : elles ont pu partir).
+function valeurCibleGalerie(e, deg){
+  if(deg <= 0) return 0;
+  const part = Math.min(1, deg / Math.max(1, e.pv));
+  if(e.est === 'batiment'){
+    const prix = e.type === 'qg' ? 1500 : (e.def.cout || 400);
+    const role = e.def.aeroport ? 1.6 : e.type === 'usine' ? 1.4 : e.def.arme ? 1.3 : e.type === 'qg' ? 1.2 : 1;
+    return prix * role * part * (deg >= e.pv ? 1.5 : 1);
+  }
+  return Math.max(30, e.def.cout || 0) * part * 0.5;
+}
+// Entités qu'un missile de galerie du camp id peut viser ou compter : ennemies, vivantes, jamais une galerie
+// fermée (intouchable), ni un avion en vol (efficacité nulle). Les neutres sont rendus à part (à éviter).
+// delai (facultatif) : s entre l'ordre de tir et le dernier impact (delaiTirGalerie) ; une galerie adverse
+// ouverte qui se sera refermée d'ici là n'est ni visée ni comptée. (Correction du 19 novembre 2026 : sans ce
+// filtre, le tir ordinaire pouvait viser une galerie ouverte depuis plus de 3 s, refermée 13 s plus tard à
+// l'impact, et gaspiller ses missiles sur une porte close.)
+function ciblesGalerieIA(id, delai){
+  const cibles = [], neutres = [];
+  for(const e of ents){
+    if(e.mort || e.demo || galerieFermee(e) || (e.def.avion && enVol(e))) continue;
+    if(delai != null && galerieHorsDeAtteinte(e, delai, MARGE_CONTRE_TIR)) continue;
+    if(e.camp === 'N'){ if(!allies(id, e.camp)) neutres.push(e); continue; }
+    if(hostile(id, e.camp)) cibles.push(e);
+  }
+  return {cibles, neutres};
+}
+// Valeur d'une zone pour un tir de n missiles de la galerie G centré en (x, y) (sert aussi au contre-tir,
+// contreTirGalerieIA). Une zone qui toucherait un bâtiment ou une unité neutre vaut 0 (aucun dégât collatéral voulu).
+function valeurZoneGalerie(G, n, liste, x, y){
+  let v = 0;
+  for(const e of liste.cibles){
+    const d = Math.max(0, Math.hypot(e.x - x, e.y - y) - e.rayon*0.5);
+    if(d <= G.rayon) v += valeurCibleGalerie(e, degatsAttendusGalerie(G, n, e, d));
+  }
+  for(const e of liste.neutres) if(Math.hypot(e.x - x, e.y - y) - e.rayon*0.5 <= G.rayon + 20) return 0;
+  return v;
+}
+// Zone adverse de plus grande valeur pour la galerie G et n missiles : chaque entité ennemie est un centre
+// candidat. Bâtiments d'abord : la meilleure zone centrée sur un bâtiment est retenue si elle atteint seuil ;
+// sinon, la meilleure de toutes (groupes d'unités compris). La zone retenue est ensuite recentrée une fois
+// sur le barycentre (pondéré par la valeur) de ce qu'elle touche, si cela vaut davantage.
+// Renvoie {x, y, valeur, cible} (cible : entité au centre) ou null.
+function meilleureZoneGalerie(id, G, n, seuil){
+  const liste = ciblesGalerieIA(id, delaiTirGalerie(n));
+  let best = null, bestBat = null;
+  for(const c of liste.cibles){
+    const v = valeurZoneGalerie(G, n, liste, c.x, c.y);
+    if(v <= 0) continue;
+    if(!best || v > best.valeur) best = {x:c.x, y:c.y, valeur:v, cible:c};
+    if(c.est === 'batiment' && (!bestBat || v > bestBat.valeur)) bestBat = {x:c.x, y:c.y, valeur:v, cible:c};
+  }
+  if(bestBat && bestBat.valeur >= (seuil || 0)) best = bestBat;
+  if(!best) return null;
+  let sx = 0, sy = 0, sp = 0;
+  for(const e of liste.cibles){
+    const d = Math.max(0, Math.hypot(e.x - best.x, e.y - best.y) - e.rayon*0.5);
+    if(d > G.rayon) continue;
+    const p = valeurCibleGalerie(e, degatsAttendusGalerie(G, n, e, d));
+    sx += e.x*p; sy += e.y*p; sp += p;
+  }
+  if(sp > 0){
+    const x = sx/sp, y = sy/sp, v = valeurZoneGalerie(G, n, liste, x, y);
+    if(v > best.valeur) best = {x, y, valeur:v, cible:best.cible};
+  }
+  return best;
+}
+// Retenue (sert aussi au contre-tir, contreTirGalerieIA). Somme des prix des unités ennemies à
+// moins de rayon px de (x, y), avions en vol compris (ils peuvent frapper la galerie ouverte).
+function valeurEnnemiePres(id, x, y, rayon){
+  let s = 0;
+  for(const e of ents) if(e.est === 'unite' && !e.mort && hostile(id, e.camp) && Math.hypot(e.x - x, e.y - y) < rayon) s += e.def.cout || 0;
+  return s;
+}
+// Un appareil ennemi capable de frapper au sol (hélicoptère, drone, avion en vol ; pas le vaisseau-mère) vole
+// à moins de rayon px de (x, y) ?
+function appareilMenacantPres(id, x, y, rayon){
+  return ents.some(e => e.est === 'unite' && !e.mort && e.def.aerien && e.def.sol && e.def.forme !== 'vaisseauMere' &&
+    (!e.def.avion || enVol(e)) && hostile(id, e.camp) && Math.hypot(e.x - x, e.y - y) < rayon);
+}
+// Motif de retenue du tir (texte pour le journal), ou null : ouvrir, c'est offrir 16 s de vulnérabilité.
+function retenueGalerieIA(id, b, R){
+  if(valeurEnnemiePres(id, b.x, b.y, R.retenueRayon) > R.retenueValeur) return 'ennemis près de la galerie';
+  if(R.retenueAir > 0 && appareilMenacantPres(id, b.x, b.y, R.retenueAir)) return 'appareil ennemi à proximité';
+  return null;
+}
+// 9.3. Tir : dès que tous les lanceurs sont chargés (ou un seul depuis attenteSeul s), sur la zone adverse de
+// plus grande valeur, si elle vaut au moins valeurMin fois le prix des missiles engagés, et sauf retenue.
+// Le tir passe par ouvrirGalerie (mêmes empêchements que le joueur).
+function tirGalerieIA(id, bats){
+  const b = galerieDuCamp(bats), R = b && reglagesGalerieIA(id);
+  if(!R) return;
+  const M = memoireGalerieIA(id), g = b.gal, G = b.def.galerie;
+  if(g.t0 !== null || g.stock < 1){ M.pretT = null; return; }
+  if(M.pretT === null) M.pretT = temps;
+  const n = Math.min(g.stock, G.lanceurs);
+  if(n < G.lanceurs && temps - M.pretT < R.attenteSeul) return;
+  if(temps < M.rechercheT) return;
+  M.rechercheT = temps + R.recherche;
+  if(retenueGalerieIA(id, b, R)) return;
+  const seuil = R.valeurMin * G.coutMissile * n, z = meilleureZoneGalerie(id, G, n, seuil);
+  if(!z || z.valeur < seuil || empechementTirGalerie(b, z.x, z.y)) return;
+  if(ouvrirGalerie(b, z.x, z.y)){
+    M.pretT = null;
+    noterGalerieIA(id, {quoi:'tir', n, x:Math.round(z.x), y:Math.round(z.y), valeur:z.valeur, cible:z.cible.type, camp:z.cible.camp, cibleId:z.cible.id});
+  }
+}
+
+// ---------- 9.4. Riposte à une galerie hostile ouverte (19 novembre 2026) ----------
+// Une galerie adverse en cycle de tir (b.galT non nul) est vulnérable 16 s. Tout joueur le sait : l'alerte
+// « Galerie ennemie en ouverture ! » donne sa position, la minicarte la marque. L'ordinateur s'en sert :
+// petit pouvoir à cible (Normale et au-dessus), super-arme et contre-tir de sa propre galerie (Difficile, Ultra).
+// Délai entre l'ordre d'un pouvoir à cible et son DERNIER impact (s), relevé dans activerPouvoir (à tenir en
+// accord avec lui) : Frappe 1,2 ; Essaim 2,2 + 25 × 0,11 ; Marteau 2,6 + 15 × 0,22. Le dernier impact, et non
+// le premier, pour que tout le pouvoir porte sur la galerie encore ouverte.
+const DELAI_IMPACT_POUVOIR = {frappe:1.2, essaim:2.2 + 25*0.11, marteau:2.6 + 15*0.22};
+const MARGE_RIPOSTE = 1;      // s : « temps restant > délai du pouvoir + 1 s » (cahier § 9.4)
+// s de marge d'un tir de galerie : le départ et l'impact tombent au pas de simulation (50 ms) qui suit leur date,
+// et la fermeture adverse aussi ; 0,5 s couvre ces arrondis avec de la réserve.
+const MARGE_CONTRE_TIR = 0.5;
+function delaiPouvoir(P){ return DELAI_IMPACT_POUVOIR[P.cle] != null ? DELAI_IMPACT_POUVOIR[P.cle] : 3; }
+// s entre l'ordre de tir d'une galerie qui engage n missiles et l'impact du dernier (départ + vol de 5 s).
+function delaiTirGalerie(n){ return CYCLE_GALERIE.departs[Math.max(0, Math.min(n, CYCLE_GALERIE.departs.length) - 1)] + CYCLE_GALERIE.vol; }
+// Secondes d'ouverture qui restent à une galerie en cycle de tir (0 si elle est fermée). Fonction pure.
+function resteOuvertureGalerie(b){ return b.galT == null ? 0 : CYCLE_GALERIE.duree - b.galT; }
+// Vrai pour une galerie terminée qu'un coup arrivant dans delai s ne touchera pas : fermée, ou ouverte mais
+// refermée d'ici là (marge comprise). Toujours faux pour tout le reste, chantier de galerie compris
+// (vulnérable comme tout chantier) : sans galerie, aucun filtre qui l'emploie ne change rien. Fonction pure.
+function galerieHorsDeAtteinte(e, delai, marge){
+  return estGalerie(e) && !e.enCours && !(resteOuvertureGalerie(e) > delai + marge);
+}
+// Galeries hostiles au camp id en cycle de tir.
+function galeriesOuvertesHostiles(id){
+  const l = [];
+  for(const e of ents) if(e.galT != null && !e.mort && estGalerie(e) && hostile(id, e.camp)) l.push(e);
+  return l;
+}
+// Parmi ces galeries ouvertes, celle qu'un coup arrivant dans delai s touchera encore, avec le plus de temps
+// d'ouverture restant (la plus sûre) ; null si aucune.
+function galerieOuverteAtteignable(ouvertes, delai, marge){
+  let best = null;
+  for(const g of ouvertes) if(!galerieHorsDeAtteinte(g, delai, marge) && (!best || resteOuvertureGalerie(g) > resteOuvertureGalerie(best))) best = g;
+  return best;
+}
+// La super-arme P vaut-elle d'être lancée sur la galerie ouverte g ? Même seuil que pour un pouvoir ordinaire
+// du niveau : densité du groupe autour de la galerie (ordinaire, scoreGroupe) ou valeur de la zone (Ultra,
+// valeurZoneUltra, seuil SEUIL_ZONE_ULTRA.super), ce qui se sera refermé avant l'impact n'étant pas compté.
+function superArmeVautRiposte(id, g, P){
+  const delai = delaiPouvoir(P);
+  if(estUltra(id)){
+    const A = etatUltra(id).analyse;
+    if(!A) return false;
+    let v = 0;
+    voisinsUltra(A, g.x, g.y, P.rayon*0.9, e => { if(!galerieHorsDeAtteinte(e, delai, MARGE_RIPOSTE)) v += valeurZoneUltra(e, true); });
+    return v >= SEUIL_ZONE_ULTRA.super;
+  }
+  return scoreGroupe(listeGroupe(g.camp, delai), g.x, g.y) >= SEUIL_GROUPE_IA.super;
+}
+// Pouvoirs à cible sur une galerie ouverte : la super-arme d'abord (Difficile, Ultra, si elle le vaut), sinon
+// le petit pouvoir s'il est prêt. Un seul pouvoir par réflexion ; la suivante (0,8 s plus tard) peut lancer
+// l'autre si la galerie reste ouverte assez longtemps. Les points gardés d'habitude pour la super-arme ne
+// retiennent pas le petit pouvoir ici : une galerie ouverte est une occasion rare (choix fait sans le
+// propriétaire, à valider). activerPouvoir fait les mêmes contrôles et prélève le même prix que pour le joueur.
+function pouvoirsRiposteGalerieIA(id, C, ouvertes, R){
+  if(!pouvoirsActifs[id]) return false;
+  const Ps = POUVOIRS[C.faction] || [];
+  for(const sup of [true, false]) for(const P of Ps){
+    if(!P.cible || !!P.super !== sup || (P.super && !R.riposteSuper)) continue;
+    if(C.points < P.cout || (C.recharges[P.cle] || 0) > 0) continue;
+    const g = galerieOuverteAtteignable(ouvertes, delaiPouvoir(P), MARGE_RIPOSTE);
+    if(!g || (P.super && !superArmeVautRiposte(id, g, P))) continue;
+    if(activerPouvoir(id, P.cle, g.x, g.y)){
+      noterGalerieIA(id, {quoi:'ripostePouvoir', pouvoir:P.cle, cible:g.type, camp:g.camp, cibleId:g.id, galT:Math.round(g.galT*100)/100});
+      return true;
+    }
+  }
+  return false;
+}
+// Contre-tir : sa galerie fermée, au moins un missile prêt, tire sur une galerie adverse ouverte si le DERNIER
+// missile engagé peut arriver avant qu'elle se referme (départ 8 s ou 8,6 s, vol 5 s, marge 0,5 s : il faut
+// l'ordre dans les 2,5 premières secondes de l'ouverture adverse pour un missile, 1,9 s pour deux). Tous les
+// missiles prêts partent, sans attendre le second lanceur. L'ordinateur réfléchit toutes les 0,8 s (majIA) :
+// il voit l'ouverture au plus 0,85 s après, donc toujours à temps ; aucune cadence n'est changée pour cela.
+// La retenue du tir ordinaire (ennemis près de sa galerie, appareil pour Ultra) s'applique aussi : ouvrir,
+// c'est offrir 16 s de vulnérabilité. Un point qui toucherait un neutre est écarté (valeurZoneGalerie nulle).
+function contreTirGalerieIA(id, bats, ouvertes, R){
+  const b = galerieDuCamp(bats);
+  if(!b || b.gal.t0 !== null || b.gal.stock < 1) return false;
+  const G = b.def.galerie, n = Math.min(b.gal.stock, G.lanceurs);
+  const cible = galerieOuverteAtteignable(ouvertes, delaiTirGalerie(n), MARGE_CONTRE_TIR);
+  if(!cible) return false;
+  const motif = retenueGalerieIA(id, b, R);
+  if(motif){ noterGalerieIA(id, {quoi:'retenue', motif, contreTir:true, cibleId:cible.id}); return false; }
+  if(valeurZoneGalerie(G, n, ciblesGalerieIA(id, delaiTirGalerie(n)), cible.x, cible.y) <= 0 || empechementTirGalerie(b, cible.x, cible.y)) return false;
+  if(!ouvrirGalerie(b, cible.x, cible.y)) return false;
+  memoireGalerieIA(id).pretT = null;
+  noterGalerieIA(id, {quoi:'contreTir', n, cible:cible.type, camp:cible.camp, cibleId:cible.id, galT:Math.round(cible.galT*100)/100});
+  return true;
+}
+// Riposte d'un ordinateur (Normale et au-dessus ; Facile : rien). Appelée derrière galeriesActives(), avant
+// ses pouvoirs habituels et son propre tir : le contre-tir passe avant un tir ordinaire.
+function riposteGalerieIA(id, C, bats){
+  const R = reglagesGalerieIA(id);
+  if(!R) return;
+  const ouvertes = galeriesOuvertesHostiles(id);
+  if(!ouvertes.length) return;
+  if(R.contreTir) contreTirGalerieIA(id, bats, ouvertes, R);
+  pouvoirsRiposteGalerieIA(id, C, ouvertes, R);
+}
+
+// ---------- 9.5. Esquive des missiles de galerie, niveau Difficile (19 novembre 2026) ----------
+// Même esquive qu'Ultra (esquiverZonesUltra : sortir du cercle par le plus court, ordre « aller »), pour les
+// seuls marqueurs d'impact pouvoir:'galerie' d'un camp hostile, avec la même zone qu'analyserUltra pour un
+// marqueur sans débord connu (rayon + 80 + 15). Réutilisable sans risque : l'ordinateur ordinaire donne déjà
+// des ordres « aller » (rassemblement, esquive du rayon du vaisseau-mère) et ne réassigne une unité qu'une fois
+// l'ordre fini ; un ouvrier détourné est renvoyé à son chantier par economieIA, un collecteur reprend seul sa
+// récolte (majCollecteur). Les avions (au sol ou en vol) ne bougent pas. Appelée en fin de réflexion, pour que
+// l'esquive soit le dernier ordre donné (la défense de la base, plus haut, réassigne sinon ces unités).
+function zonesMissilesGalerie(id){
+  let zones = null;
+  for(const f of effets) if(f.type === 'marqueur' && f.pouvoir === 'galerie' && f.camp && f.camp !== id && !allies(id, f.camp))
+    (zones || (zones = [])).push({x:f.x, y:f.y, r:f.r + 80 + 15});
+  return zones;
+}
+function esquiveGalerieIA(id, uns){
+  const R = reglagesGalerieIA(id);
+  if(!R || !R.esquive) return;
+  const zones = zonesMissilesGalerie(id);
+  if(zones) esquiverZonesUltra(uns.filter(u => !u.def.avion), zones);
 }
 
 // =====================================================================
@@ -3103,6 +3487,9 @@ function batimentPermisUltra(id, type, bats){
 // Emplacement : le dépôt près du champ lointain, les défenses fixes sur l'axe d'où vient la menace.
 function centreChantierUltra(id, type, defaut){
   const S = etatUltra(id), F = faction(id);
+  // Galerie de tir (novembre 2026) : à l'opposé de l'adversaire, comme pour l'ordinateur ordinaire. Jamais
+  // demandée option décochée (elle n'entre alors dans aucun plan).
+  if(BATIMENTS[type] && BATIMENTS[type].galerie) return centreGalerieIA(id, defaut);
   if(type === 'depot' && S.champLointain){
     const n = S.champLointain, dx = defaut.x - n.x, dy = defaut.y - n.y, d = Math.hypot(dx, dy) || 1;
     return {x:n.x + dx/d*120, y:n.y + dy/d*120};
@@ -3205,7 +3592,12 @@ function productionUltra(C, F, bats, armee, gardeC, reserveMin, epargne){
   // (Contre-essai du 13 novembre 2026 : aviation permise pendant dix minutes, mais jamais d'aéroport, son
   // prix n'étant pas mis de côté ; le premier aéroport compte désormais parmi les bâtiments du cœur.)
   const coeur = besoin && (((besoin === 'caserne' || besoin === 'usine') && !bats.some(b => b.type === besoin)) || (besoin === 'depot' && S.champLointain)
-    || (besoin === 'aeroport' && !bats.some(b => b.def.aeroport) && aviationUltra(id)));
+    || (besoin === 'aeroport' && !bats.some(b => b.def.aeroport) && aviationUltra(id))
+    // Galerie de tir (novembre 2026, option cochée) : elle n'entre au plan qu'aux conditions du § 9.1
+    // (armée qui domine, réserves au-delà de 1 500 ou après 600 s) ; son prix est alors mis de côté.
+    // (Essai du 18 novembre 2026 : sans cela, Ultra la demandait pendant quatre minutes sans jamais réunir
+    // 1 200.) Option décochée, besoin n'est jamais une galerie : rien ne change.
+    || !!BATIMENTS[besoin].galerie);
   const domine = monArmee >= plusForte*1.2 + 800;
   S.domine = domine;
   const resBat = besoin && !coeur && !domine ? Math.max(0, reserveMin - BATIMENTS[besoin].cout) : reserveMin;
@@ -3348,7 +3740,9 @@ function majUltra(id, ia, ctx){
     u.ordre = {type:'aller', x:ctx.rassemblement.x + (Math.random()-.5)*160, y:ctx.rassemblement.y + (Math.random()-.5)*160};
   combattreUltra(id, S, A, combattants);
   soutenirUltra(id, S, reparateurs, ctx);
+  if(galeriesActives()) riposteGalerieIA(id, C, bats);   // galerie hostile ouverte : riposte (19 novembre 2026, § 9.4)
   pouvoirsUltra(C, S, A, ctx);
+  if(galeriesActives()) tirGalerieIA(id, bats);   // galerie de tir (novembre 2026, § 9.3)
 }
 // Trêve : une unité qui ne peut pas toucher le vaisseau, à moins de 600 px de lui, s'en écarte (700 px,
 // à l'opposé) ; un collecteur est marqué en détour (defendreUltra lève le détour après 12 s).
@@ -3780,21 +4174,32 @@ function pouvoirsUltra(C, S, A, ctx){
       if((S.menace > 0 || S.phase === 'assaut') && population[id] < popMax - 5){ activerPouvoir(id, P.cle); journalUltra(id, 'pouvoir ' + P.nom); }
       continue;
     }
-    const seuil = P.super ? 1800 : 500;
-    const z = meilleureZoneUltra(id, A, P.rayon, ctx, !!P.super, seuil);
+    const seuil = P.super ? SEUIL_ZONE_ULTRA.super : SEUIL_ZONE_ULTRA.petit;
+    // (Galeries de tir, novembre 2026 : option cochée, une galerie ouverte qui se refermera avant l'impact ne
+    // compte pas ; option décochée, delai est absent et rien ne change.)
+    const z = meilleureZoneUltra(id, A, P.rayon, ctx, !!P.super, seuil, galeriesActives() ? delaiPouvoir(P) : undefined);
     if(z){
       if(activerPouvoir(id, P.cle, z.x, z.y)) journalUltra(id, 'pouvoir ' + P.nom + ' sur une zone de valeur ' + Math.round(z.valeur) +
         [' (cible éloignée)', ' (groupe serré)', ' (combat au contact)'][z.prio] + (z.cle ? ' (bâtiment clé)' : ''));
     }
   }
 }
+// Valeur d'une zone visée par un pouvoir d'Ultra : super-arme, petit pouvoir.
+const SEUIL_ZONE_ULTRA = {super:1800, petit:500};
 // lourd : super-arme (les bâtiments comptent) ; sinon petit pouvoir (300 dégâts) : seulement ce qu'il peut
 // détruire ou presque (bâtiments à moins de 400 PV, unités pondérées par la part de PV qu'il leur ôte).
-function meilleureZoneUltra(id, A, rayon, ctx, lourd, seuil){
-  seuil = seuil || 0;
-  const valeurZone = e => e.est === 'batiment'
+// Fonction pure (sortie de meilleureZoneUltra en novembre 2026 pour servir aussi à la riposte aux galeries).
+function valeurZoneUltra(e, lourd){
+  return e.est === 'batiment'
     ? (lourd || e.pv < 400 ? (e.def.cout || 600)*0.6 + (e.def.aeroport || e.type === 'usine' || e.type === 'qg' ? 600 : e.def.arme ? 400 : 0) : 0)
     : Math.max(30, e.def.cout || 0) * (e.def.avion && enVol(e) ? 0 : lourd ? 1 : Math.min(1, 300/Math.max(1, e.pv)));
+}
+// delai (galeries de tir, novembre 2026, facultatif : passé seulement option cochée) : s entre l'ordre du
+// pouvoir et son dernier impact ; une galerie ouverte qui se sera refermée d'ici là n'est ni centre ni comptée.
+function meilleureZoneUltra(id, A, rayon, ctx, lourd, seuil, delai){
+  seuil = seuil || 0;
+  const fugace = e => delai != null && galerieHorsDeAtteinte(e, delai, MARGE_RIPOSTE);
+  const valeurZone = e => fugace(e) ? 0 : valeurZoneUltra(e, lourd);
   // Pas de pénalité pour nos unités dans le rayon : un pouvoir ne blesse jamais son camp ni ses alliés
   // (explosionZone). (Avant le 13 novembre 2026, deux fois leur coût était retiré : Ultra ne tirait donc
   // jamais un pouvoir sur un combat au contact.)
@@ -3808,7 +4213,7 @@ function meilleureZoneUltra(id, A, rayon, ctx, lourd, seuil){
   let best = null;
   for(const K of Object.values(A.ennemis)){
     for(const c of K.armee.concat(K.bats)){
-      if(c.def.forme === 'vaisseauMere' || (c.def.avion && enVol(c))) continue;
+      if(c.def.forme === 'vaisseauMere' || (c.def.avion && enVol(c)) || fugace(c)) continue;
       let v = 0, cle = false, n = 0;
       voisinsUltra(A, c.x, c.y, rayon*0.9, e => { v += valeurZone(e); if(e.est === 'unite' && valeurZone(e) > 0) n++; if(e.est === 'batiment' && (e.def.aeroport || e.type === 'usine' || e.type === 'qg')) cle = true; });
       if(v < seuil && !(lourd && cle && v >= 1100)) continue;

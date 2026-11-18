@@ -45,7 +45,7 @@ d'effets, et les modules 3D les mettent en scène à chaque image, à travers
 l'objet global `R3D`. On peut donc modifier les règles sans toucher au rendu,
 et inversement.
 
-Chaque balise `<script>` porte un numéro de version (`?v=34` au 18 novembre 2026 : galeries de tir en escarmouche solo, voir « Galeries de tir » ; `?v=33` au 16 novembre 2026 : délai de retour d'un joueur porté à 120 secondes ; `?v=32` : annonce du salon liée à son serveur, issue de la partie annoncée par l'hôte ; `?v=31` : écran de fin de l'invité seulement sur la fin confirmée par l'hôte, clés des joueurs partis jamais oubliées, voir « Multijoueur » ; `?v=30` : compteurs datés dans le futur et identifiant d'un joueur sorti du salon ; `?v=29` : retour d'un invité et fin de partie protégés ; `?v=28` : messages en ligne signés ; `?v=26` et `?v=27` : multijoueur corrigé et protégé ; `?v=25` : multijoueur en ligne ; `?v=24` : seconde passe de fluidité, voir « Fluidité » à la fin ; la version publiée sur GitHub Pages est encore la 24, solo seulement). **Il faut
+Chaque balise `<script>` porte un numéro de version (`?v=35` au 19 novembre 2026 : l’ordinateur construit et utilise une galerie de tir ; `?v=34` au 18 novembre 2026 : galeries de tir en escarmouche solo, voir « Galeries de tir » ; `?v=33` au 16 novembre 2026 : délai de retour d'un joueur porté à 120 secondes ; `?v=32` : annonce du salon liée à son serveur, issue de la partie annoncée par l'hôte ; `?v=31` : écran de fin de l'invité seulement sur la fin confirmée par l'hôte, clés des joueurs partis jamais oubliées, voir « Multijoueur » ; `?v=30` : compteurs datés dans le futur et identifiant d'un joueur sorti du salon ; `?v=29` : retour d'un invité et fin de partie protégés ; `?v=28` : messages en ligne signés ; `?v=26` et `?v=27` : multijoueur corrigé et protégé ; `?v=25` : multijoueur en ligne ; `?v=24` : seconde passe de fluidité, voir « Fluidité » à la fin ; la version publiée sur GitHub Pages est encore la 24, solo seulement). **Il faut
 l'augmenter à chaque modification d'un fichier**, sinon le navigateur garde
 l'ancienne version en mémoire.
 
@@ -788,9 +788,33 @@ détruire que pendant qu'il tire. Option C retenue : une version par camp.
   les véhicules légers (une salve ne tue pas un collecteur) ; aucune récompense
   en points de commandement pour ses destructions ; un camp réduit à sa galerie
   est éliminé et elle s'effondre (sinon il serait impossible à éliminer).
-- **Ordinateur** : dans ce lot, il ne construit pas de galerie et ne s'en sert
-  pas ; il sait seulement ne jamais viser une galerie fermée. À faire ensuite :
-  construction, tir, riposte pendant la fenêtre.
+- **Ordinateur** (lot 2, 19 novembre 2026, `?v=35`, option cochée seulement) :
+  Normale, Difficile et Ultra construisent leur galerie juste après l'aéroport
+  (Facile jamais), fabriquent leurs missiles et tirent sur la zone adverse de
+  plus grande valeur, bâtiments d'abord, sauf si des ennemis valant plus de 500
+  sont à moins de 600 px de leur galerie. Riposte quand une galerie adverse
+  s'ouvre : le petit pouvoir à cible dès Normale (la Frappe de Halden), la
+  super-arme et un contre-tir de sa propre galerie pour Difficile et Ultra ;
+  un pouvoir ne part que s'il tombe avant la fermeture. Difficile esquive le
+  marqueur d'impact, comme Ultra. Sans triche : mêmes fonctions, mêmes prix et
+  mêmes empêchements que le joueur ; il ne lit jamais le point visé par une
+  galerie adverse. Seuils par niveau dans `IA_GALERIE` (`jeu.js`).
+  Vérifié : deux étapes d'écriture puis deux relecteurs indépendants, aucun
+  défaut bloquant ; option décochée, empreintes identiques (`7d442efb`,
+  `8e338d28`, `6053f9be`) ; `testerGaleries()` 58 sur 58,
+  `testerGaleries('parties')` 15 sur 15 ; environ 45 parties d'ordinateurs
+  sans erreur, contrôle anti-triche à 0. **Réglages encore à faire** (constats
+  des relecteurs) : mise au plan dès l'aéroport, la galerie fait mettre son
+  prix de côté vers 6 minutes, au détriment des unités (une partie presque
+  gagnée peut ne plus se terminer) ; Normale Halden en construit rarement ;
+  Ultra gagne souvent avant d'avoir tiré ; la Frappe de riposte rend la galerie
+  de Karsk coûteuse à ouvrir face à Halden ; la galerie de l'ordinateur est
+  toujours posée au même endroit, près du bord de la carte. Écarts au cahier
+  des charges choisis par les agents, à valider : galerie juste après
+  l'aéroport (et non en fin de plan), l'attente du premier avion ne la bloque
+  plus (ni la batterie qui la précède), le missile passe avant le prochain
+  bâtiment, le petit pouvoir de riposte part même quand il garde ses points
+  pour la super-arme.
 - **Code** : `jeu.js` (tables `BATIMENTS.aiguille` / `terrier`, `CYCLE_GALERIE`,
   `galeriesActives`, `galerieFermee`, `majGalerie`, ordres `fabriquerMissile` et
   `tirGalerie`, restés locaux), `r3d-batiments.js` (bloc « GALERIES DE TIR » :

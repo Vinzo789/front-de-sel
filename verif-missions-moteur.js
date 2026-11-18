@@ -789,8 +789,17 @@ function partieOrdinateurs(liste, duree, opts){
   const ids = campsEnJeu();
   const compta = Object.fromEntries(ids.map(id => [id, {depart:camps[id].reserves, collecte:0, charge:0, dechargements:0, secours:0, depenses:0, unites:0, commandes:0, renforts:0}]));
   // Instruments (remis en place à la fin).
-  const orig = {majCollecteur:window.majCollecteur, commander:window.commander, construireBatiment:window.construireBatiment, revenuSecours:window.revenuSecours, creerUnite:window.creerUnite, activerPouvoir:window.activerPouvoir};
+  const orig = {majCollecteur:window.majCollecteur, commander:window.commander, construireBatiment:window.construireBatiment, revenuSecours:window.revenuSecours, creerUnite:window.creerUnite, activerPouvoir:window.activerPouvoir,
+    commanderMissile:window.commanderMissile};
   let enProduction = 0;
+  // Galeries de tir (novembre 2026) : le prix des missiles compte dans les dépenses (contrôle anti-triche).
+  // Option décochée, commanderMissile n'est jamais appelée : rien ne change.
+  window.commanderMissile = function(b){
+    const C = b && camps[b.camp], r0 = C ? C.reserves : 0;
+    const ok = orig.commanderMissile.apply(this, arguments);
+    if(C && compta[b.camp]) compta[b.camp].depenses += r0 - C.reserves;
+    return ok;
+  };
   window.majCollecteur = function(u, dt){
     const C = camps[u.camp], r0 = C ? C.reserves : 0, ch = u.charge || 0;
     const res = orig.majCollecteur.apply(this, arguments);
@@ -995,6 +1004,128 @@ function duelUltra(niveauAdv, ultraEnJ, factionUltra, duree){
     triche:[r.camps.J.inexplique, r.camps.I.inexplique, r.camps.J.unitesSansCommande, r.camps.I.unitesSansCommande, r.camps[u].parCharge].join(' / ')};
 }
 window.duelUltra = duelUltra;
+// Galeries de tir, lot 2 (novembre 2026) : partie d'ordinateurs avec l'option cochée (remise ensuite dans son
+// état d'avant), et relevé par camp de ce que fait sa galerie (journal de l'ordinateur : chantier, commandes,
+// tirs datés), des unités produites avant et après la fin du chantier, et du résultat habituel (triche).
+// Ex. : avecGraine(3, () => partieGaleries([{id:'J', faction:'halden', equipe:'A', niveau:'difficile'},
+//        {id:'I', faction:'karsk', equipe:'B', niveau:'normal'}], 900)).
+function partieGaleries(liste, duree, opts){
+  const avant = optionGaleries, cu = window.creerUnite, prod = {};
+  optionGaleries = true;
+  window.creerUnite = function(type, camp){
+    const e = cu.apply(this, arguments);
+    if(temps > 0 && UNITES[type] && !UNITES[type].ouvrier){
+      const p = prod[camp] || (prod[camp] = {avant:0, apres:0});
+      const g = ents.find(b => b.camp === camp && estGalerie(b) && !b.enCours);
+      if(g) p.apres++; else p.avant++;
+    }
+    return e;
+  };
+  let r;
+  try { r = partieOrdinateurs(liste, duree, opts); }
+  finally { window.creerUnite = cu; optionGaleries = avant; }
+  const galeries = {};
+  for(const id of Object.keys(r.camps)){
+    const E = etatsIA[id], J = E && E.galerie ? E.galerie.journal : [];
+    const b = ents.find(e => e.camp === id && estGalerie(e));
+    galeries[id] = {niveau:r.camps[id].niveau, faction:r.camps[id].faction,
+      chantier:(J.find(l => l.quoi === 'chantier') || {}).t, commandes:J.filter(l => l.quoi === 'commande').map(l => l.t),
+      tirs:J.filter(l => l.quoi === 'tir').map(l => l.t + ' s → ' + l.cible + ' ' + l.camp + ' (valeur ' + Math.round(l.valeur) + ', ' + l.n + ' missile' + (l.n > 1 ? 's' : '') + ')'),
+      etat:b ? (b.mort ? 'détruite' : b.enCours ? 'en chantier' : 'debout ' + Math.round(b.pv) + ' PV') : 'aucune',
+      unites:prod[id] || {avant:0, apres:0}};
+  }
+  const triche = Object.fromEntries(Object.entries(r.camps).map(([id, c]) => [id, c.inexplique + ' / ' + c.unitesSansCommande + ' / réserves ' + c.reserves]));
+  // Résumé d'une ligne (lecture rapide) ; triche : écart inexpliqué / unités sans commande / réserves finales.
+  const resume = r.temps + ' s, ' + r.issue + (r.erreur ? ', ERREUR ' + r.erreur : '') + ', ' + r.msParPas + ' ms par pas | ' +
+    Object.entries(galeries).map(([id, g]) => id + ' ' + g.niveau + ' ' + g.faction + ' : chantier ' + (g.chantier == null ? '—' : g.chantier + ' s') +
+      ', ' + g.commandes.length + ' commande(s)' + (g.commandes.length ? ' dès ' + g.commandes[0] + ' s' : '') + ', tirs [' + g.tirs.join(' ; ') + '], ' + g.etat +
+      ', unités ' + g.unites.avant + ' avant / ' + g.unites.apres + ' après, triche ' + triche[id]).join(' || ');
+  return {temps:r.temps, issue:r.issue, erreur:r.erreur, msParPas:r.msParPas, galeries, triche, resume};
+}
+window.partieGaleries = partieGaleries;
+// Galeries de tir, lot 2 (19 novembre 2026) : partieGaleries surveillée à chaque pas, pour les verdicts
+// « ordinateur » du cahier (§ 9.7). Relève, en plus de partieGaleries :
+//  - fautes : une unité qui garde pour cible ou pour ordre une galerie fermée depuis au moins un pas ; une
+//    galerie fermée qui perd des PV ; un tir, un contre-tir ou une riposte par pouvoir de l'ordinateur dont la
+//    cible était une galerie fermée ; une riposte (contre-tir ou pouvoir) arrivée après la fermeture de sa cible ;
+//  - occasions de riposte, notées à chaque ouverture d'une galerie : pour chaque ordinateur hostile de niveau
+//    Normale et au-dessus, contre-tir possible (Difficile, Ultra : sa galerie fermée, un missile prêt, aucune
+//    retenue) et petit pouvoir à cible prêt (Frappe de Halden) ; puis ce qu'il en a fait (journal) ;
+//  - réserves minimales de chaque camp.
+// La graine est fixée ici (avecGraine), pour qu'une partie se rejoue seule à l'identique.
+function partieGaleriesSurveillee(liste, duree, graine){
+  const mj = window.miseAJour, S = {fautes:[], occasions:[], reservesMin:{}, arrivees:[]};
+  const prec = new Map();   // galerie → {fermee, ouverte, pv} au pas précédent
+  const vus = {};           // camp → nombre de lignes de journal déjà lues
+  const faute = texte => { if(S.fautes.length < 12) S.fautes.push('t=' + temps.toFixed(1) + ' ' + texte); else S.fautes.length++; };
+  window.miseAJour = function(dt){
+    const r = mj.apply(this, arguments);
+    for(const id of campsEnJeu()){ const v = camps[id].reserves; if(!(id in S.reservesMin) || v < S.reservesMin[id]) S.reservesMin[id] = v; }
+    const gals = ents.filter(e => estGalerie(e) && !e.mort);
+    for(const g of gals){
+      const p = prec.get(g), f = galerieFermee(g);
+      if(p && p.fermee && f){
+        if(g.pv < p.pv) faute('galerie fermée ' + g.camp + ' touchée (' + Math.round(p.pv - g.pv) + ' PV)');
+        for(const e of ents) if(!e.mort && hostile(e.camp, g.camp) && (e.cible === g || (e.ordre && (e.ordre.cible === g || e.ordre.bat === g)))) faute(e.type + ' ' + e.camp + ' vise la galerie fermée de ' + g.camp);
+      }
+      // Ouverture : occasions de riposte de chaque ordinateur hostile.
+      if(p && !p.ouverte && g.galT != null){
+        for(const id of campsEnJeu()){
+          const R = camps[id].ia && !camps[id].elimine && hostile(id, g.camp) ? reglagesGalerieIA(id) : null;
+          if(!R) continue;
+          const b = ents.find(e => e.camp === id && estGalerie(e) && !e.enCours && !e.mort);
+          const contre = !!(R.contreTir && b && b.gal.t0 === null && b.gal.stock >= 1 && !retenueGalerieIA(id, b, R));
+          const C = camps[id], petit = (POUVOIRS[C.faction] || []).find(P => P.cible && !P.super);
+          const pouvoir = !!(petit && pouvoirsActifs[id] && C.points >= petit.cout && !((C.recharges[petit.cle] || 0) > 0));
+          S.occasions.push({t:temps, camp:id, niveau:niveauIA(id), cibleId:g.id, cibleCamp:g.camp, contre, pouvoir});
+        }
+      }
+      prec.set(g, {fermee:f, ouverte:g.galT != null, pv:g.pv});
+    }
+    // Décisions de l'ordinateur depuis le pas précédent : la cible n'était jamais une galerie fermée ; une
+    // riposte doit arriver avant la fermeture (vérifié à sa date d'arrivée).
+    for(const id of campsEnJeu()){
+      const E = etatsIA[id], J = E && E.galerie ? E.galerie.journal : null;
+      if(!J) continue;
+      for(let k = vus[id] || 0; k < J.length; k++){
+        const l = J[k];
+        if(!['tir', 'contreTir', 'ripostePouvoir'].includes(l.quoi)) continue;
+        const c = l.cibleId != null ? ents.find(e => e.id === l.cibleId) : null;
+        if(c && estGalerie(c) && galerieFermee(c) && prec.get(c) && prec.get(c).fermee) faute(id + ' ' + l.quoi + ' sur une galerie fermée');
+        if(c && l.quoi !== 'tir'){
+          const d = l.quoi === 'contreTir' ? delaiTirGalerie(l.n) : delaiPouvoir(POUVOIRS[camps[id].faction].find(P => P.cle === l.pouvoir));
+          S.arrivees.push({camp:id, quoi:l.quoi, c, t:temps + d, ok:null});
+        }
+      }
+      vus[id] = J.length;
+    }
+    for(const a of S.arrivees) if(a.ok === null && temps >= a.t - 1e-6){
+      a.ok = a.c.mort || a.c.galT != null;
+      if(!a.ok) faute(a.camp + ' ' + a.quoi + ' arrivé après la fermeture de sa cible');
+    }
+    return r;
+  };
+  let res;
+  try { res = avecGraine(graine, () => partieGaleries(liste, duree)); }
+  finally { window.miseAJour = mj; }
+  // Ce que chaque ordinateur a fait de ses occasions (journal daté) : contre-tir dans les 3 s, pouvoir dans
+  // les 16 s, ou retenue notée dans les 3 s (le contre-tir est alors refusé par la règle du tir ordinaire).
+  for(const o of S.occasions){
+    const J = (etatsIA[o.camp] && etatsIA[o.camp].galerie || {journal:[]}).journal;
+    const dans = (quoi, s) => J.some(l => l.quoi === quoi && l.cibleId === o.cibleId && l.t >= o.t - 0.1 && l.t <= o.t + s);
+    o.contreFait = dans('contreTir', 3); o.retenue = dans('retenue', 3); o.pouvoirFait = dans('ripostePouvoir', 16);
+  }
+  const ripostes = {};
+  for(const id of Object.keys(res.galeries)){
+    const J = (etatsIA[id] && etatsIA[id].galerie || {journal:[]}).journal;
+    ripostes[id] = J.filter(l => l.quoi === 'contreTir' || l.quoi === 'ripostePouvoir').map(l => l.t + ' s ' + l.quoi + (l.pouvoir ? ' ' + l.pouvoir : '') + ' → ' + l.cible + ' ' + l.camp + ' (ouverte depuis ' + l.galT + ' s)');
+    res.galeries[id].contreTirs = J.filter(l => l.quoi === 'contreTir').length;
+    res.galeries[id].tirsTotal = J.filter(l => l.quoi === 'tir' || l.quoi === 'contreTir').length;
+  }
+  return Object.assign(res, {graine, fautes:S.fautes, occasions:S.occasions, ripostes, reservesMin:Object.fromEntries(Object.entries(S.reservesMin).map(([k, v]) => [k, Math.round(v)])),
+    arrivees:S.arrivees.map(a => ({camp:a.camp, quoi:a.quoi, ok:a.ok}))});
+}
+window.partieGaleriesSurveillee = partieGaleriesSurveillee;
 // Hasard fixé pour rejouer une partie à l'identique : avecGraine(5, () => duelUltra('difficile', false, 'halden')).
 function avecGraine(graine, fn){
   let s = graine; const r0 = Math.random;
@@ -1341,6 +1472,9 @@ window.essaiEcho = essaiEcho;
 //    avecGraine(7, () => testerGaleries())               → règles (construction … ordres refusés en ligne)
 //    avecGraine(7, () => testerGaleries('ordinateur', 0))   → partie d'ordinateurs n° 0, 1 ou 2 avec galeries
 //                                                              (sans numéro : les trois, plus long)
+//    testerGaleries('parties', 0)   → lot 2 (19 novembre 2026) : partie n° 0, 1 ou 2 de 900 s où l'ordinateur
+//                                     gère seul sa galerie (graine fixée par partie ; sans numéro : les trois,
+//                                     environ 15 s de calcul ; par tache('p', () => testerGaleries('parties')))
 //  Renvoie une liste de verdicts {nom, ok, detail}. L'option « Galeries de tir » est cochée pendant l'essai puis
 //  remise dans son état d'avant ; chaque scène repart d'une partie neuve (reinitialiserPartie). Rien n'est
 //  changé aux outils existants : cette fonction n'est appelée par aucun d'eux.
@@ -1386,6 +1520,7 @@ function testerGaleries(quoi, numero){
   try {
     optionGaleries = true;
     if(quoi === 'ordinateur') essaisOrdinateur();
+    else if(quoi === 'parties') essaisParties();
     else essaisRegles();
   } catch(err){
     V('exécution de l’essai', false, 'ERREUR t=' + (typeof temps === 'number' ? temps.toFixed(2) : '?') + ' ' + err.message + ' | ' + String(err.stack || '').split('\n').slice(1, 3).join(' | '));
@@ -1731,6 +1866,225 @@ function testerGaleries(quoi, numero){
       V('en ligne (hôte, invité, écho) : fabriquer, tirer et construire refusés, galerie absente de la liste ; aucun code réseau ; état inchangé',
         res.every(r => !r.actif && r.fab !== 'ACCEPTÉ' && r.tir !== 'ACCEPTÉ' && r.construire !== 'ACCEPTÉ' && !r.liste && r.fab === MOTIF_SANS_GALERIES)
         && sansCode && photoEtat() === photo0, {res, sansCode});
+    }
+    essaisRiposte();
+  }
+
+  // ----------------------------------------------------------------- riposte et esquive (lot 2, 19 novembre 2026)
+  // Scènes courtes (cahier § 9.4 et 9.5) : règle du temps restant pour les pouvoirs (Facile et Ultra), petit
+  // pouvoir et super-arme sur une galerie ouverte selon le niveau, contre-tir décidé par l'ordinateur lui-même
+  // (sa boucle de réflexion tourne), limite des 2,5 s, tir ordinaire jamais gaspillé sur une galerie qui se
+  // refermera, esquive de Difficile (et pas de Normale).
+  function essaisRiposte(){
+    const bats = id => ents.filter(e => e.camp === id && e.est === 'batiment' && !e.mort);
+    // Niveau d'un camp sans faire tourner son ordinateur (appels directs) ; actif : il réfléchit aussi seul.
+    const niveau = (id, n, actif) => { confierAOrdinateur(id, n); if(!actif) etatIA(id).active = false; };
+    const journalIA = id => (etatIA(id).galerie || {journal:[]}).journal;
+    const poserLoin = (id, d) => { const t = typeGal(id), p = trouverEmplacement(t, versCentre(id, d)); return p ? creerBatiment(t, id, p.c, p.r, true) : null; };
+    // Ouvre la galerie g (stock rempli) sur un point vide du centre de la carte, puis avance jusqu'à galT ≈ a.
+    const ouvrirJusqua = (g, a) => {
+      g.gal.stock = g.def.galerie.lanceurs; g.gal.fab = 0;
+      const ok = executerOrdre(g.camp, {type:'tirGalerie', id:g.id, x:LARG/2, y:HAUT/2}).ok;
+      while(ok && g.galT !== null && g.galT < a - 1e-6) miseAJour(DT);
+      return ok;
+    };
+    const pouvoirsPrets = (id, pts, rech) => { camps[id].points = pts; camps[id].recharges = Object.assign({}, rech); };
+
+    // 1. Temps restant (tous niveaux) : Facile (pouvoirsIA, meilleurGroupe) et Ultra (meilleureZoneUltra).
+    //    Galerie de I loin de sa base, un conscrit à côté : densité 3 (seuil du petit pouvoir) avec la galerie,
+    //    1 sans elle. À galT ≈ 3, la Frappe (impact à 1,2 s) peut la toucher ; à galT ≈ 14,5 (1,5 s restantes,
+    //    moins que 1,2 + 1), non.
+    {
+      scene();
+      const gI = poserLoin('I', 650);
+      niveau('K', 'facile');
+      const conscrit = () => unite('conscrit', 'I', gI.x + 70, gI.y + 70);
+      let u = conscrit();
+      ouvrirJusqua(gI, 3);
+      pouvoirsPrets('K', 10, {essaim:100});
+      // Ultra (petit pouvoir) : la galerie, ramenée sous 400 PV le temps du calcul, vaut 720 ≥ 500.
+      const pv = gI.pv; gI.pv = 300;
+      etatIA('K').niveau = 'ultra';
+      const ctxK = {uns:ents.filter(e => e.camp === 'K' && e.est === 'unite' && !e.mort), bats:bats('K')};
+      const A3 = analyserUltra('K', etatUltra('K'), ctxK.bats, ctxK.uns);
+      const zU3 = meilleureZoneUltra('K', A3, POUVOIRS.halden[0].rayon, ctxK, false, SEUIL_ZONE_ULTRA.petit, delaiPouvoir(POUVOIRS.halden[0]));
+      gI.pv = pv; etatIA('K').niveau = 'facile';
+      const g3 = meilleurGroupe('I', 1.2);
+      pouvoirsIA(camps.K, [], []);
+      const lance3 = (camps.K.recharges.frappe || 0) > 0;
+      while(gI.galT !== null && gI.galT < 14.5 - 1e-6) miseAJour(DT);
+      if(u.mort) u = conscrit();
+      const reste = r2(resteOuvertureGalerie(gI));
+      const g14ancien = meilleurGroupe('I'), g14 = meilleurGroupe('I', 1.2);
+      pouvoirsPrets('K', 10, {essaim:100});
+      pouvoirsIA(camps.K, [], []);
+      const lance14 = (camps.K.recharges.frappe || 0) > 0;
+      gI.pv = 300; etatIA('K').niveau = 'ultra';
+      const ctx14 = {uns:ents.filter(e => e.camp === 'K' && e.est === 'unite' && !e.mort), bats:bats('K')};
+      const A14 = analyserUltra('K', etatUltra('K'), ctx14.bats, ctx14.uns);
+      const zU14 = meilleureZoneUltra('K', A14, POUVOIRS.halden[0].rayon, ctx14, false, SEUIL_ZONE_ULTRA.petit, delaiPouvoir(POUVOIRS.halden[0]));
+      const zU14ancien = meilleureZoneUltra('K', A14, POUVOIRS.halden[0].rayon, ctx14, false, SEUIL_ZONE_ULTRA.petit);
+      gI.pv = pv;
+      V('riposte : temps restant (tous niveaux) — Facile lance la Frappe sur la galerie ouverte depuis 3 s, pas à 1,5 s de la fermeture ; Ultra de même',
+        g3 && g3.score >= 3 && lance3 && g14ancien && g14ancien.score >= 3 && g14 && g14.score < 3 && !lance14 && zU3 && Math.hypot(zU3.x - gI.x, zU3.y - gI.y) < 1 && !zU14 && zU14ancien,
+        {densite3:g3 && g3.score, lance3, reste14:reste, densite14SansRegle:g14ancien && g14ancien.score, densite14:g14 && g14.score, lance14,
+         ultra3:zU3 && Math.round(zU3.valeur), ultra14:zU14 && Math.round(zU14.valeur), ultra14SansRegle:zU14ancien && Math.round(zU14ancien.valeur)});
+    }
+
+    // 2. Petit pouvoir (Normale, Halden K) sur la galerie ouverte de I, même quand la super-arme est prête
+    //    (3 points seulement : la règle habituelle garderait ces points) ; il touche la galerie avant sa
+    //    fermeture. Normale ne contre-tire pas (sa galerie est prête) et ne lance pas la super-arme.
+    {
+      scene();
+      const gI = poserLoin('I', 650), gK = poserGalerie('K');
+      gK.gal.stock = 1;
+      niveau('K', 'normal');
+      ouvrirJusqua(gI, 0.5);
+      pouvoirsPrets('K', 3, {});
+      ecouter();
+      riposteGalerieIA('K', camps.K, bats('K'));
+      const jK = journalIA('K').slice(), prise = jK.find(l => l.quoi === 'ripostePouvoir');
+      pas(2);
+      const deg = subi(gI, d => d.auteur && d.auteur.pouvoir);
+      // Super-arme prête, 10 points, Frappe en recharge, cinq unités autour de la galerie (densité 7) : rien.
+      for(let k = 0; k < 5; k++) unite('conscrit', 'I', gI.x + 60*Math.cos(k), gI.y + 60*Math.sin(k));
+      pouvoirsPrets('K', 10, {frappe:30});
+      riposteGalerieIA('K', camps.K, bats('K'));
+      const superNormale = (camps.K.recharges.essaim || 0) > 0;
+      // Même situation pour Difficile : la super-arme part sur la galerie.
+      etatIA('K').niveau = 'difficile';
+      const densite = scoreGroupe(listeGroupe('I', delaiPouvoir(POUVOIRS.halden[1])), gI.x, gI.y);
+      gK.gal.stock = 0;   // (pas de contre-tir ici : seule la super-arme est jugée)
+      riposteGalerieIA('K', camps.K, bats('K'));
+      const superDifficile = (camps.K.recharges.essaim || 0) > 0;
+      V('riposte : Normale lance la Frappe sur une galerie ouverte (points gardés d’habitude pour la super-arme), elle la touche ; ni contre-tir ni super-arme',
+        prise && prise.pouvoir === 'frappe' && prise.cibleId === gI.id && deg > 0 && !jK.some(l => l.quoi === 'contreTir') && gK.gal.t0 === null && !superNormale,
+        {riposte:prise, degatsFrappe:Math.round(deg), superNormale});
+      V('riposte : Difficile lance la super-arme sur une galerie ouverte dont le voisinage vaut le seuil (densité ≥ 6)',
+        densite >= SEUIL_GROUPE_IA.super && superDifficile, {densite, superDifficile});
+      journal = null;
+    }
+
+    // 3. Contre-tir décidé par l'ordinateur lui-même (Difficile, I Karsk, sa boucle de réflexion tourne) :
+    //    J ouvre sa galerie ; I tire dans la seconde, ses deux missiles touchent la galerie de J encore ouverte.
+    {
+      scene();
+      const gJ = poserGalerie('J'), gI = poserGalerie('I');
+      niveau('I', 'difficile', true);
+      pas(1);
+      gI.gal.stock = 2; gI.gal.fab = 0; gJ.gal.stock = 1; gJ.gal.fab = 0;
+      ecouter();
+      const ok = executerOrdre('J', {type:'tirGalerie', id:gJ.id, x:qg('I').x, y:qg('I').y}).ok, t0 = temps;
+      let fermeT = null;
+      while(temps - t0 < 20){ miseAJour(DT); if(fermeT === null && gJ.galT === null) fermeT = temps; }
+      const ct = journalIA('I').find(l => l.quoi === 'contreTir');
+      const coups = (journal.degats.get(gJ.id) || []).filter(parGalerie);
+      V('contre-tir : Difficile (Karsk) voit l’ouverture adverse et tire dans la seconde ; ses missiles frappent la galerie de J avant sa fermeture',
+        ok && ct && ct.cibleId === gJ.id && ct.t - t0 <= 0.9 && ct.n === 2 && coups.length > 0 && coups.every(c => c.t < fermeT),
+        {ordreJ:ok, contreTir:ct, delaiReaction:ct && r2(ct.t - t0), impacts:coups.map(c => r2(c.t - t0) + ' s : ' + Math.round(c.deg)), fermetureJ:fermeT && r2(fermeT - t0)});
+      journal = null;
+    }
+
+    // 4. Limite du contre-tir : Halden Difficile (K, un missile) contre la galerie de I ouverte depuis 2,3 s
+    //    (13 + 0,5 < 13,7 restantes) : tir ; depuis 2,7 s : pas de tir. Karsk (deux missiles) : 1,9 s au plus.
+    {
+      const essai = (camp, a) => {
+        scene();
+        const cible = poserLoin(camp === 'K' ? 'I' : 'J', 650), g = poserGalerie(camp);
+        niveau(camp, 'difficile');
+        g.gal.stock = g.def.galerie.lanceurs;
+        ouvrirJusqua(cible, a);
+        const galT = r2(cible.galT);
+        riposteGalerieIA(camp, camps[camp], bats(camp));
+        return {galT, tir:g.gal.t0 !== null};
+      };
+      const h23 = essai('K', 2.3), h27 = essai('K', 2.7), k18 = essai('I', 1.8), k22 = essai('I', 2.2);
+      V('contre-tir : seulement si le dernier missile arrive avant la fermeture adverse (Halden : avant 2,5 s d’ouverture ; Karsk, deux missiles : avant 1,9 s)',
+        h23.tir && !h27.tir && k18.tir && !k22.tir, {halden:[h23, h27], karsk:[k18, k22]});
+    }
+
+    // 5. Tir ordinaire (§ 9.3, correction de l'étape 1) : une galerie ouverte depuis 5 s n'est plus une cible
+    //    (refermée avant l'impact, 13 s plus tard) ; ouverte depuis 1 s, elle l'est.
+    {
+      scene();
+      const gI = poserLoin('I', 650);
+      ouvrirJusqua(gI, 1);
+      const a1 = ciblesGalerieIA('K', delaiTirGalerie(1)).cibles.includes(gI);
+      while(gI.galT !== null && gI.galT < 5) miseAJour(DT);
+      const a5 = ciblesGalerieIA('K', delaiTirGalerie(1)).cibles.includes(gI), sans = ciblesGalerieIA('K').cibles.includes(gI);
+      V('tir ordinaire : une galerie ouverte qui se refermera avant l’impact n’est ni visée ni comptée', a1 && !a5 && sans, {ouverte1s:a1, ouverte5s:a5, sansDelai:sans});
+    }
+
+    // 6. Esquive (§ 9.5) : un conscrit de I au point de rassemblement de son ordinateur (rien d'autre ne le
+    //    déplace) ; J tire dessus. Difficile : il reçoit l'ordre de sortir du cercle et n'est pas touché.
+    //    Normale : il ne bouge pas et il est touché.
+    {
+      const essai = n => {
+        scene();
+        const gJ = poserGalerie('J');
+        niveau('I', n, true);
+        const c = qg('I'), dx = LARG/2 - c.x, dy = HAUT/2 - c.y, d = Math.hypot(dx, dy) || 1;
+        const p = pointLibre(c.x + dx/d*280, c.y + dy/d*280), u = unite('conscrit', 'I', p.x, p.y);
+        pas(1);
+        gJ.gal.stock = 1; gJ.gal.fab = 0;
+        ecouter();
+        executerOrdre('J', {type:'tirGalerie', id:gJ.id, x:u.x, y:u.y});
+        const t0 = temps; let esquiveT = null;
+        while(temps - t0 < 14.5){ miseAJour(DT); if(esquiveT === null && u.ultraEsquive) esquiveT = r2(temps - t0); }
+        const r = {niveau:n, esquive:esquiveT, touche:Math.round(subi(u, parGalerie)), mort:u.mort};
+        journal = null;
+        return r;
+      };
+      const dif = essai('difficile'), nor = essai('normal');
+      V('esquive : Difficile sort ses unités du cercle annoncé d’un missile de galerie (Normale non)',
+        dif.esquive !== null && dif.esquive >= CYCLE_GALERIE.departs[0] && dif.touche === 0 && !dif.mort && nor.esquive === null && nor.touche > 0, {difficile:dif, normale:nor});
+    }
+  }
+
+  // ----------------------------------------------------------------- parties (lot 2, 19 novembre 2026)
+  // Cahier § 9.7 : parties d'ordinateurs de 900 s, option cochée, où personne ne pose de galerie à leur place.
+  // Graines choisies le 19 novembre 2026 parmi les premières essayées, pour que chaque partie montre ce qu'elle
+  // doit montrer (sujets : le ou les camps qui doivent bâtir, fabriquer et tirer ; riposte : la riposte attendue).
+  // Ultra gagne souvent contre Difficile avant que sa galerie ait tiré : sur 12 graines essayées (1 à 6, Ultra
+  // Karsk puis Ultra Halden), seule la graine 6, Ultra Halden, le voit tirer ; Difficile n'y bâtit pas de galerie.
+  // Graine 43 : la partie de l'étape 1 où les deux camps Difficile bâtissent ; on y voit un contre-tir.
+  function essaisParties(){
+    const parties = [
+      {nom:'Difficile (J, Karsk) contre Normale (I, Halden)', graine:2, sujets:['J'], riposte:'ripostePouvoir',
+       liste:[{id:'J', faction:'karsk', equipe:'A', niveau:'difficile'}, {id:'I', faction:'halden', equipe:'B', niveau:'normal'}]},
+      {nom:'Ultra (J, Halden) contre Difficile (I, Karsk)', graine:6, sujets:['J'], riposte:null,
+       liste:[{id:'J', faction:'halden', equipe:'A', niveau:'ultra'}, {id:'I', faction:'karsk', equipe:'B', niveau:'difficile'}]},
+      {nom:'Difficile (J, Halden) contre Difficile (I, Karsk)', graine:43, sujets:['J', 'I'], riposte:'contreTir',
+       liste:[{id:'J', faction:'halden', equipe:'A', niveau:'difficile'}, {id:'I', faction:'karsk', equipe:'B', niveau:'difficile'}]},
+    ];
+    const DUREE = 900;
+    for(const P of parties){
+      if(typeof numero === 'number' && parties.indexOf(P) !== numero) continue;
+      const t0 = performance.now();
+      const r = partieGaleriesSurveillee(P.liste, DUREE, P.graine);
+      const calcul = Math.round(performance.now() - t0);
+      // Même partie, option décochée : temps de calcul par pas (comparaison seulement).
+      optionGaleries = false;
+      let sans;
+      try { sans = avecGraine(P.graine, () => partieOrdinateurs(P.liste, DUREE)); } finally { optionGaleries = true; }
+      const nom = P.nom + ' (graine ' + P.graine + ', ' + DUREE + ' s)';
+      const bilan = P.sujets.map(id => { const g = r.galeries[id]; return {camp:id, chantier:g.chantier, commandes:g.commandes.length, tirs:g.tirsTotal, contreTirs:g.contreTirs, etat:g.etat}; });
+      V('partie ' + nom + ' : ' + P.sujets.join(' et ') + (P.sujets.length > 1 ? ' bâtissent leur galerie, fabriquent et tirent' : ' bâtit sa galerie, fabrique et tire') + ' au moins une fois',
+        !r.erreur && bilan.every(b => b.chantier != null && b.commandes >= 1 && b.tirs >= 1), {bilan, fin:r.temps + ' s, ' + r.issue});
+      V('partie ' + nom + ' : jamais une galerie fermée visée ni touchée ; chaque riposte arrive avant la fermeture de sa cible',
+        !r.erreur && r.fautes.length === 0 && r.arrivees.every(a => a.ok === true), {fautes:r.fautes, arrivees:r.arrivees});
+      const manquees = r.occasions.filter(o => (o.contre && !o.contreFait && !o.retenue) || (o.pouvoir && !o.pouvoirFait));
+      const vues = Object.values(r.ripostes).flat();
+      V('partie ' + nom + ' : riposte à chaque occasion (contre-tir ou petit pouvoir prêts à l’ouverture adverse)' + (P.riposte ? ', ' + P.riposte + ' vu' : ''),
+        !r.erreur && manquees.length === 0 && (!P.riposte || vues.some(l => l.includes(P.riposte))),
+        {occasions:r.occasions.map(o => ({t:r1(o.t), camp:o.camp, niveau:o.niveau, contrePossible:o.contre, contreFait:o.contreFait, retenue:o.retenue, pouvoirPret:o.pouvoir, pouvoirFait:o.pouvoirFait})), ripostes:r.ripostes});
+      const camps0 = Object.keys(r.triche);
+      V('partie ' + nom + ' : aucune triche (écart inexpliqué 0, aucune unité sans commande, réserves jamais négatives), aucune erreur',
+        !r.erreur && camps0.every(id => /^0 \/ 0 \//.test(r.triche[id]) && r.reservesMin[id] >= 0), {triche:r.triche, reservesMin:r.reservesMin, erreur:r.erreur});
+      // Mesure (volet du navigateur masqué : indicatif) : au plus deux fois le temps par pas option décochée.
+      V('partie ' + nom + ' : temps de calcul par pas, option cochée contre décochée (au plus le double + 0,05 ms)',
+        r.msParPas <= 2*sans.msParPas + 0.05, {cochee:r.msParPas + ' ms (partie finie à ' + r.temps + ' s)', decochee:sans.msParPas + ' ms (partie finie à ' + sans.temps + ' s)',
+          calculPartieCochee:calcul + ' ms', resume:r.resume});
     }
   }
 
