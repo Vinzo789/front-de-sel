@@ -155,6 +155,9 @@
     return {id:idFictif++, est:'batiment', type, def:D, camp, c:0, r:0, x:0, y:0, rayon:t*16,
       pvMax:D.pv || 100, pv:D.pv || 100, enCours:false, progres:1, file:[], prodT:0, rally:null, mort:false,
       angleT:Math.PI*0.75, tirT:-99, recharge:0, scan:0, cible:null, rang:0, kills:0,
+      // Galerie de tir (novembre 2026) : photographiée ouverte, lanceurs sortis et missiles dressés
+      // (fermée, ce n'est qu'une butte : le bouton ne dirait rien).
+      galT:D.galerie ? 7.9 : null,
       dansAura:false, auraT:0, toucheT:-99, nom:null, selectionne:false};
   }
 
@@ -534,7 +537,11 @@
         for(const t of types) if(typeof UNITES !== 'undefined' && UNITES[t]) demander(cleDe('unite', t, fac), false);
       }
       if(typeof BATIMENTS !== 'undefined')
-        for(const fac of FACS) for(const t in BATIMENTS) demander(cleDe('batiment', t, fac), false);
+        for(const fac of FACS) for(const t in BATIMENTS){
+          // Galerie de tir : seulement celle de la faction (l'autre ne s'affiche jamais dans sa barre)
+          if(BATIMENTS[t].galerie && !(typeof FACTIONS !== 'undefined' && FACTIONS[fac] && FACTIONS[fac].galerie === t)) continue;
+          demander(cleDe('batiment', t, fac), false);
+        }
     } catch(e){ /* rien */ }
   }
 

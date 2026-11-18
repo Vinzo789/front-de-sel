@@ -64,6 +64,9 @@ const EFFICACITE = {
   // Armes des envahisseurs : tir de plasma (dards, rôdeurs, défense du vaisseau) et rayon principal
   plasma:    {infanterie:1,    leger:1,    lourd:0.8,  air:1.2, avion:1.1, batiment:0.18, vaisseau:0},
   rayon:     {infanterie:1,    leger:1,    lourd:1,    air:0,   avion:0,   batiment:1,   vaisseau:0},
+  // Missile des galeries de tir (novembre 2026, option « Galeries de tir » de l'escarmouche) : 0,5 sur les
+  // véhicules légers pour qu'une salve ne tue pas un collecteur (520 PV), abus relevé par les critiques.
+  missileGalerie:{infanterie:1, leger:0.5,  lourd:1,    air:0.8, avion:0,   batiment:1,   vaisseau:0.5},
 };
 // Blindage « helico » (novembre 2026) : hélicoptères en vol bas, mieux protégés qu'un drone. Réglé par
 // duels (voir NOTES-CONCEPTION.md) : avec la colonne « air » des drones, 3 hélicoptères tombaient en
@@ -72,7 +75,7 @@ const EFFICACITE = {
 // hélicoptères ; à budget égal la DCA détruisait les hélicoptères en 3 à 4 s sans aucune perte. Elle
 // gagne toujours, en perdant 30 à 50 % de sa valeur. La batterie mixte garde son effet : bonusHelico.)
 (function(){
-  const HELICO = {balle:0.7, aa:0.55, frappe:0.8, roquetteAT:0.8, missileAir:1.2, canonAir:0.8, plasma:1.1};
+  const HELICO = {balle:0.7, aa:0.55, frappe:0.8, roquetteAT:0.8, missileAir:1.2, canonAir:0.8, plasma:1.1, missileGalerie:0.8};
   for(const k in EFFICACITE) EFFICACITE[k].helico = HELICO[k] || 0;
 })();
 
@@ -242,7 +245,30 @@ const BATIMENTS = {
     desc:'Pompe l’eau de la nappe pour les villages de la côte.'},
   entrepot:{nom:'Entrepôt de la Régie', taille:2, pv:1600, cout:0, temps:0, neutre:true,
     desc:'Vivres et réserves d’eau des habitants.'},
+  // Galeries de tir (novembre 2026, escarmouche seulement, option « Galeries de tir » cochée : voir
+  // galeriesActives). Une par faction (FACTIONS[...].galerie), une seule par camp, chantier compris.
+  // Placées en fin de table : l'ordre des bâtiments existants ne change pas. Sous-objet galerie :
+  //   lanceurs : missiles tirés par cycle (et stock maximal) ; coutMissile, tempsMissile : prix et durée (s)
+  //   de fabrication d'un missile ; degats, rayon : explosion de zone à l'impact (arme 'missileGalerie') ;
+  //   dispersion : écart maximal (px) de chaque missile autour du point visé.
+  // Pas de champ « arme » sur le bâtiment : il ne tire pas comme une tourelle (et les tables du réseau,
+  // construites à partir des armes des bâtiments, ne changent pas).
+  aiguille:{nom:'Galerie Aiguille', taille:3, pv:1500, cout:1200, temps:40, requiert:'usine',
+    galerie:{lanceurs:1, coutMissile:400, tempsMissile:120, degats:600, rayon:70, dispersion:0},
+    // (Descriptions courtes : au-delà d'environ 170 signes, la fiche de 1280 × 720 n'affiche plus la ligne d'état.)
+    desc:'Propre à Halden. Galerie enterrée : un missile lourd et précis, n’importe où sur la carte. Une fois bâtie et fermée, elle est intouchable ; vulnérable 16 s à chaque tir. Jamais réparée.'},
+  terrier:{nom:'Terrier des Brisants', taille:3, pv:1900, cout:1000, temps:45, requiert:'usine',
+    galerie:{lanceurs:2, coutMissile:220, tempsMissile:60, degats:330, rayon:95, dispersion:45},
+    desc:'Propre à Karsk. Galerie enterrée : une salve de deux missiles moins précis, n’importe où sur la carte. Une fois bâtie et fermée, elle est intouchable ; vulnérable 16 s à chaque tir. Jamais réparée.'},
 };
+// Une entité est-elle une galerie de tir ? (fonction pure ; faux pour tout ce qui n'est pas un bâtiment galerie)
+function estGalerie(e){ return !!(e && e.def && e.def.galerie); }
+// Galerie fermée (novembre 2026) : terminée et hors cycle de tir. Règle « porte close, rien ne passe » :
+// elle ne reçoit alors aucun dégât et n'est jamais prise pour cible (peutCibler, explosionZone,
+// impactProjectile, infliger, fonctions de cible de l'ordinateur), jugé au moment du coup. En chantier ou
+// ouverte (cycle de 16 s), c'est un bâtiment ordinaire. Fonction pure ; toujours fausse sans galerie, ce qui
+// laisse tous ces filtres sans effet quand aucune galerie n'existe.
+function galerieFermee(e){ return estGalerie(e) && !e.enCours && !!e.gal && e.gal.t0 === null; }
 
 // ---------- Factions ----------
 const FACTIONS = {
@@ -253,6 +279,7 @@ const FACTIONS = {
     // sans l'aura de ravitaillement, propre à Karsk (voir auraActive). En mission : seulement si la
     // mission le nomme dans ses bâtiments autorisés (voir batimentsConstructibles).
     extras:['depot'], antiair:'rempart', reparateurs:['mecano', 'atelier'], helicos:['frelon', 'busard'],
+    galerie:'aiguille',   // galerie de tir (novembre 2026), seulement si galeriesActives()
     production:{qg:['technicien','collecteur'], depot:['collecteur'], caserne:['operateur','javelot','traqueur','mecano'],
       usine:['lynx','faucheur','bastion','rempart','atelier'], aeroport:['f15','f35','rafale','frelon','busard']},
     iaVehicules:['lynx','bastion','faucheur','bastion','lynx','faucheur'],
@@ -263,6 +290,7 @@ const FACTIONS = {
     ouvrier:'sapeur', special:'depot', defense:'bunker', rayonAura:330,
     auraTexte:'Ravitaillé : tir plus rapide et réparation lente.',
     antiair:'sentinelle', reparateurs:['infirmier', 'depanneuse'], helicos:['taon', 'vautour'],
+    galerie:'terrier',    // galerie de tir (novembre 2026), seulement si galeriesActives()
     production:{qg:['sapeur','collecteur'], depot:['collecteur'], caserne:['conscrit','grenadier','guetteur','infirmier'],
       usine:['ours','grele','sentinelle','depanneuse'], aeroport:['f15','f35','rafale','taon','vautour']},
     iaVehicules:['ours','grele','ours','sentinelle'],
@@ -348,6 +376,9 @@ let RELATIONS = {};            // {I_attaque_N: true, ...} : par défaut personn
 let issuePartie = null;        // escarmouche terminée : {victoire, alliance, t, camps} (outils de test)
 let alliance = false;          // mode Surprises : trêve générale de tous les camps (J, I, K, L) contre les envahisseurs (X)
 let pouvoirsActifs = {J:true, I:true, K:true, L:true};
+// Option « Galeries de tir » de l'écran d'escarmouche (novembre 2026), décochée par défaut. Seule la case
+// (ou le paramètre d'adresse ?galeries=1) la change ; la lire par galeriesActives(), jamais directement.
+let optionGaleries = false;
 // ---------- Camps ----------
 // Deux notions distinctes, à ne pas confondre :
 //  - le camp du JOUEUR LOCAL (campJoueur / campLocal()) : celui que l'interface montre et commande
@@ -661,6 +692,12 @@ function creerBatiment(type, camp, c, r, fini){
     // armement éventuel (tourelle, bunker) : mêmes champs qu'une unité
     angleT:Math.PI/2, tirT:-99, recharge:0, scan:Math.random()*0.3, cible:null, rang:0, kills:0,
     dansAura:false, auraT:0, toucheT:-99, nom:null};
+  // Galerie de tir (novembre 2026) : état propre du cycle de tir et de la fabrication des missiles (aucun
+  // tirage au hasard : l'ordre des calculs des autres bâtiments est inchangé). t0 : heure de l'ordre de tir
+  // (null : fermée) ; cx, cy : point visé ; n : missiles engagés ; tires : départs faits ; stock : missiles
+  // prêts ; fab : missiles commandés non terminés ; fabT : secondes restantes du missile en cours.
+  // galT, galN : champs lus par le rendu (secondes dans le cycle, null si fermée ; lanceurs engagés).
+  if(D.galerie) Object.assign(b, {gal:{t0:null, cx:0, cy:0, n:0, tires:0, stock:0, fab:0, fabT:0}, galT:null, galN:0});
   for(let rr=Math.max(0,r); rr<Math.min(LIGNES,r+t); rr++) for(let cc=Math.max(0,c); cc<Math.min(COLS,c+t); cc++) grille[rr*COLS+cc] = 3;
   ents.push(b);
   return b;
@@ -751,7 +788,8 @@ function allies(a, b){
 // Même règle pour l'infanterie spécialisée (bazooka, sniper) ajoutée en novembre 2026 : les huit missions
 // gardent leur équilibre. Le collecteur, lui, est toujours autorisé (c'est la seule source de revenu).
 // Novembre 2026 (second lot) : DCA Rempart, hélicoptères, réparateurs et batterie mixte, de même.
-const RESERVES_ESCARMOUCHE = {batiments:new Set(['aeroport', 'batterie']),
+// Galeries de tir (novembre 2026) : réservées elles aussi, et de plus soumises à l'option (galeriesActives).
+const RESERVES_ESCARMOUCHE = {batiments:new Set(['aeroport', 'batterie', 'aiguille', 'terrier']),
   unites:new Set(['f15', 'f35', 'rafale', 'javelot', 'traqueur', 'grenadier', 'guetteur',
     'rempart', 'frelon', 'busard', 'taon', 'vautour', 'mecano', 'atelier', 'infirmier', 'depanneuse'])};
 function autorise(genre, type){
@@ -771,7 +809,24 @@ function auraActive(b){ return !!b.def.aura && (b.type !== 'depot' || faction(b.
 // hors des missions, sauf mission qui les nomme dans ses bâtiments autorisés.
 function batimentsConstructibles(F){
   const extras = (F.extras || []).filter(t => !MISSION || (MS.autorises && MS.autorises.batiments && MS.autorises.batiments.has(t)));
-  return ['caserne', 'usine', F.special, ...extras, F.defense, 'batterie', 'aeroport'];
+  const liste = ['caserne', 'usine', F.special, ...extras, F.defense, 'batterie', 'aeroport'];
+  // Galerie de tir (novembre 2026) : ajoutée seulement option cochée, en escarmouche solo. Option décochée,
+  // la liste est exactement celle d'avant. L'ordinateur n'utilise pas cette liste (plans fixes, section 7).
+  if(F.galerie && galeriesActives()) liste.push(F.galerie);
+  return liste;
+}
+// Option « Galeries de tir » en vigueur ? Escarmouche solo seulement : jamais en mission, jamais en ligne
+// (hôte, invité ni écho : la case est alors tenue pour décochée), jamais dans la vitrine ?demo.
+function galeriesActives(){
+  return optionGaleries === true && !MISSION && modeReseau === null && !window.MODE_DEMO;
+}
+// Règle « une seule galerie par camp, chantier compris » (lecture seule, sans effet) : raison du refus, ou null.
+// Ne dit rien pour un bâtiment qui n'est pas une galerie : aucun effet sans galerie.
+const MOTIF_UNE_GALERIE = 'Une seule galerie par camp.';
+function empechementGalerie(camp, type){
+  const D = BATIMENTS[type];
+  if(!D || !D.galerie) return null;
+  return ents.some(b => b.est === 'batiment' && b.camp === camp && !b.mort && estGalerie(b)) ? MOTIF_UNE_GALERIE : null;
 }
 function dansAura(u){
   const r2 = (faction(u.camp).rayonAura || 0) ** 2;
@@ -783,7 +838,8 @@ function dansAura(u){
   return false;
 }
 function peutCibler(u, e){
-  if(e.mort || e.demo || !hostile(u.camp, e.camp)) return false;   // e.demo : figurant de la vitrine
+  // e.demo : figurant de la vitrine ; galerie de tir fermée : intouchable (novembre 2026, galerieFermee).
+  if(e.mort || e.demo || galerieFermee(e) || !hostile(u.camp, e.camp)) return false;
   if(e.est === 'batiment') return !!u.def.sol;
   if(!enVol(e)) return !!u.def.sol;       // unité terrestre, ou avion posé
   // Appareil furtif : en vol, il n'est repéré (donc visé) qu'à courte distance.
@@ -973,6 +1029,7 @@ function batimentAReparer(u, rayon){
   let best = null, bd = rayon || REPARATION_RAYON;
   for(const b of ents){
     if(b.est !== 'batiment' || b.mort || b.enCours || b.camp !== u.camp || b.pv >= b.pvMax*0.9) continue;
+    if(b.def.galerie) continue;   // galerie de tir (novembre 2026) : jamais réparée
     const d = dist(u, b); if(d < bd){ bd = d; best = b; }
   }
   return best;
@@ -1010,7 +1067,8 @@ function majOuvrier(u, dt){
   if(o.type === 'reparer'){
     // Réparation gratuite : la moitié des PV du bâtiment en un temps de construction (au moins 20 s).
     const b = o.bat;
-    if(!b || b.mort || b.enCours || b.pv >= b.pvMax){ u.ordre = null; return; }
+    // Galerie de tir (novembre 2026) : jamais réparée, ordre manuel compris (l'ordre tombe).
+    if(!b || b.mort || b.enCours || b.pv >= b.pvMax || estGalerie(b)){ u.ordre = null; return; }
     if(distBord(u,b) > 30){ allerVers(u, b.x, b.y, dt); return; }
     u.chemin = null; u.travaille = true;
     u.angle = Math.atan2(b.y-u.y, b.x-u.x);
@@ -1032,7 +1090,7 @@ const SOIN_CONTACT = 40, SOIN_AUTO = 320, SOIN_EN_ROUTE = 200;
 function peutSoigner(u, e){
   if(!e || e === u || e.mort || e.demo || e.pv >= e.pvMax - 0.5) return false;
   if(e.camp !== u.camp && !allies(u.camp, e.camp)) return false;
-  if(e.est === 'batiment') return !e.enCours && !e.def.neutre;
+  if(e.est === 'batiment') return !e.enCours && !e.def.neutre && !e.def.galerie;   // galerie de tir : jamais réparée
   const D = e.def;
   if(D.avion || D.forme === 'vaisseauMere') return false;
   const fantassin = D.blindage === 'infanterie';
@@ -1190,6 +1248,7 @@ function majCollecteur(u, dt){
 }
 function majBatiment(b, dt){
   if(b.enCours) return;
+  if(b.gal) majGalerie(b, dt);   // galerie de tir (novembre 2026) : fabrication et cycle de tir
   if(b.def.arme) majDefense(b, dt);
   if(!b.file.length) return;
   const type = b.file[0], D = UNITES[type];
@@ -1667,7 +1726,8 @@ function tirer(u, c){
   if(A.arme === 'obus' || A.arme === 'drone') effet('explosion', {x:c.x, y:c.y, h:h2, r:A.arme === 'obus' ? 16 : 11, duree:0.35});
 }
 function infliger(c, deg, auteur){
-  if(c.mort || deg <= 0) return;
+  // Galerie de tir fermée (novembre 2026) : aucun dégât, quel que soit le chemin du coup (filet de sécurité).
+  if(c.mort || deg <= 0 || galerieFermee(c)) return;
   if(c.def.bouclier && c.bouclier > 0){ deg = absorberBouclier(c, deg, auteur); if(deg <= 0) return; }   // section 14 bis
   c.pv -= deg; c.toucheT = temps;
   noterCombat(c, auteur, deg);
@@ -1701,7 +1761,9 @@ function tuer(c, auteur){
     }
   }
   if(auteur && auteur.camp && auteur.camp !== c.camp && camps[auteur.camp]){
-    camps[auteur.camp].points += (c.def.cout || 800) / (c.est === 'batiment' ? 180 : 220);
+    // Galerie de tir (novembre 2026) : une destruction due à son missile ne rapporte aucun point de
+    // commandement (pas de boule de neige avec la super-arme). Détruire une galerie rapporte les points habituels.
+    if(!auteur.galerie) camps[auteur.camp].points += (c.def.cout || 800) / (c.est === 'batiment' ? 180 : 220);
     if(auteur.est === 'unite' && !auteur.mort){
       auteur.kills++;
       const r = auteur.kills >= 6 ? 2 : auteur.kills >= 2 ? 1 : 0;
@@ -1750,9 +1812,11 @@ function explosionZone(x, y, r, deg, arme, auteur, bord){
   for(const e of ents){
     // Un allié n'est jamais touché ; les envahisseurs épargnent le camp neutre.
     if(e.mort || e.camp === auteur.camp || allies(e.camp, auteur.camp) || (auteur.camp === 'X' && e.camp === 'N')) continue;
+    if(galerieFermee(e)) continue;   // galerie de tir fermée (novembre 2026) : rien ne passe
     const d = Math.max(0, Math.hypot(e.x-x, e.y-y) - e.rayon*0.5);
     if(d > r) continue;
     // Le vaisseau-mère ne craint, parmi les explosions, que celles des pouvoirs (efficacité « frappe »).
+    // Missile de galerie (auteur.galerie, sans auteur.pouvoir) : sa propre ligne d'EFFICACITE (vaisseau 0,5).
     const a = e.def.blindage === 'vaisseau' && auteur.pouvoir ? 'frappe' : arme;
     infliger(e, deg * (1 - perte*d/r) * efficacite(a, e), auteur);
   }
@@ -1768,8 +1832,9 @@ function brulure(x, y, r){
 function planifier(delai, fn){ evenements.push({t:delai, fn}); }
 // Bâtiment où arrivent les renforts : le QG, sinon n'importe quel bâtiment du camp (null si aucun).
 function batimentRenforts(campId){
+  // Galerie de tir (novembre 2026) : pas un lieu d'arrivée (elle ne compte pas pour rester en vie).
   return ents.find(b => b.est === 'batiment' && b.camp === campId && b.type === 'qg' && !b.mort)
-      || ents.find(b => b.est === 'batiment' && b.camp === campId && !b.mort) || null;
+      || ents.find(b => b.est === 'batiment' && b.camp === campId && !b.mort && !estGalerie(b)) || null;
 }
 // Le pouvoir peut-il produire son effet ? Renvoie null si oui, sinon la raison (texte pour le joueur).
 // Vérifié AVANT de prélever points et recharge : un pouvoir sans effet ne coûte rien.
@@ -1840,6 +1905,133 @@ function activerPouvoir(campId, cle, x, y, gratuit){
     }
   }
   return true;
+}
+
+// ---------- Galeries de tir (novembre 2026, option « Galeries de tir » de l'escarmouche) ----------
+// Cycle de tir, le même pour les deux camps (cahier des charges § 3). Toutes les dates sont en secondes
+// depuis l'ordre de tir accepté (b.gal.t0). De 0 à duree, la galerie est ouverte, donc vulnérable
+// (galerieFermee faux). Le rendu déduit toutes les poses de b.galT ; seules les dates qui changent la règle
+// (departs, vol, duree) sont lues par le moteur, les autres servent au rendu et à la fiche de l'interface.
+const CYCLE_GALERIE = {
+  ouverture:3,        // 0 → 3 : les rideaux blindés s'ouvrent
+  sortie:6,           // 3 → 6 : le ou les lanceurs sortent (autant que de missiles engagés)
+  levee:8,            // 6 → 8 : les missiles se dressent
+  departs:[8, 8.6],   // départ du 1er missile, puis du 2e (Karsk, s'il y en a deux)
+  vol:5,              // durée du vol, quelle que soit la distance : tout tir est annoncé 5 s avant l'impact
+  rabat:10.5,         // 8,6 → 10,5 : les berceaux se rabattent
+  rentree:13.5,       // 10,5 → 13,5 : les lanceurs rentrent
+  duree:16,           // 13,5 → 16 : les rideaux se ferment ; à 16, la galerie est fermée, de nouveau intouchable
+};
+const MOTIF_SANS_GALERIES = 'Galeries de tir désactivées dans cette partie.';
+// Raison pour laquelle cette galerie ne peut pas commander un missile maintenant, ou null (fonction pure :
+// lit l'état, n'écrit rien). Un missile à la fois en fabrication ; stock + commandes ≤ nombre de lanceurs.
+// On peut commander pendant un cycle de tir : la fabrication attendra la fermeture.
+function empechementFabrication(b){
+  if(!estGalerie(b) || b.mort) return 'Ce bâtiment ne fabrique pas de missile.';
+  if(!galeriesActives()) return MOTIF_SANS_GALERIES;
+  if(b.enCours) return 'La galerie est encore en construction.';
+  const g = b.gal, G = b.def.galerie;
+  if(g.stock + g.fab >= G.lanceurs) return G.lanceurs > 1 ? 'Les deux lanceurs ont déjà leur missile (prêt ou en fabrication).'
+    : 'Le lanceur a déjà son missile (prêt ou en fabrication).';
+  const C = camps[b.camp];
+  if(!C || C.reserves < G.coutMissile) return MOTIF_RESERVES;
+  return null;
+}
+// Commande d'un missile : payé tout de suite, sans annulation ni remboursement. Faux (rien de prélevé) si
+// empechementFabrication refuse ; sur le modèle de commander, le motif est alors dit au camp.
+function commanderMissile(b){
+  const motif = empechementFabrication(b);
+  if(motif){ if(b && b.camp) notifier(b.camp, motif, motif === MOTIF_RESERVES ? 'alerte' : undefined); return false; }
+  const g = b.gal, G = b.def.galerie;
+  camps[b.camp].reserves -= G.coutMissile;
+  if(g.fab === 0) g.fabT = G.tempsMissile;
+  g.fab++;
+  return true;
+}
+// Raison pour laquelle cette galerie ne peut pas tirer sur (x, y) maintenant, ou null (fonction pure).
+// Conditions de l'ordre : galerie fermée et terminée, au moins un missile prêt, point dans la carte.
+function empechementTirGalerie(b, x, y){
+  if(!estGalerie(b) || b.mort) return 'Ce bâtiment ne tire pas.';
+  if(!galeriesActives()) return MOTIF_SANS_GALERIES;
+  if(b.enCours) return 'La galerie est encore en construction.';
+  if(b.gal.t0 !== null) return 'Tir déjà en cours.';
+  if(b.gal.stock < 1) return b.gal.fab > 0 ? 'Aucun missile prêt : fabrication en cours.' : 'Aucun missile prêt : fabriquez-en un d’abord.';
+  if(!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > LARG || y > HAUT) return 'Cible hors de la carte.';
+  return null;
+}
+// Ordre de tir : démarre le cycle (la galerie devient vulnérable dès maintenant). Tous les missiles prêts
+// sont engagés ; l'ordre ne s'annule pas. Alerte aux adversaires, sur la galerie (alerte Espace) : le point
+// visé n'est pas révélé avant le départ. Faux (rien de changé) si empechementTirGalerie refuse.
+function ouvrirGalerie(b, x, y){
+  const motif = empechementTirGalerie(b, x, y);
+  if(motif){ if(b && b.camp) notifier(b.camp, motif, 'alerte'); return false; }
+  const g = b.gal, camp = b.camp;
+  g.n = Math.min(g.stock, b.def.galerie.lanceurs); g.stock -= g.n;
+  g.t0 = temps; g.cx = x; g.cy = y; g.tires = 0;
+  b.galT = 0; b.galN = g.n;
+  for(const v of campsEnJeu()) if(hostile(camp, v)) alertes[v] = {t:temps, x:b.x, y:b.y};
+  const depart = CYCLE_GALERIE.departs[0];
+  notifier('tous', v => v === camp ? {texte:b.def.nom + ' : ouverture, départ dans ' + depart + ' s.', genre:'succes'}
+    : allies(camp, v) ? {texte:'Notre allié ouvre sa galerie de tir.', genre:'info'}
+    : {texte:'Galerie ennemie en ouverture ! (Espace)', genre:'alerte'});
+  return true;
+}
+// Départ d'un missile (rang 0 ou 1) : point d'impact tiré autour du point visé (dispersion de Karsk, même
+// générateur et même tirage que les impacts des pouvoirs ; aucun tirage sans dispersion), marqueur au sol
+// visible de tous (pouvoir:'galerie' : l'ordinateur Ultra esquive), impact planifié 5 s plus tard. Un
+// missile parti frappe quoi qu'il arrive à sa galerie : l'impact ne la consulte plus.
+// dt : pas en cours. Le départ a lieu pendant la mise à jour des bâtiments, avant le décompte des événements
+// du même pas : le demi-pas ajouté fait tomber l'impact au pas qui suit le départ de 5 s, sans dépendre
+// des arrondis.
+function departMissileGalerie(b, rang, dt){
+  const g = b.gal, G = b.def.galerie, camp = b.camp, vol = CYCLE_GALERIE.vol;
+  let x = g.cx, y = g.cy;
+  if(G.dispersion > 0){
+    const a = Math.random()*Math.PI*2, d = Math.sqrt(Math.random())*G.dispersion;
+    x = Math.max(0, Math.min(LARG, x + Math.cos(a)*d)); y = Math.max(0, Math.min(HAUT, y + Math.sin(a)*d));
+  }
+  effet('missile', {x, y, duree:vol, camp, galerie:rang + 1, x0:b.x, y0:b.y});
+  effet('marqueur', {x, y, camp, r:G.rayon, duree:vol, couleur:faction(camp).couleur, pouvoir:'galerie'});
+  if(rang === 0){
+    // La touche Espace mène maintenant au point d'impact (elle menait à la galerie depuis l'ouverture) :
+    // l'adversaire a 5 s pour écarter ses unités, encore faut-il qu'il sache où regarder.
+    for(const v of campsEnJeu()) if(hostile(camp, v)) alertes[v] = {t:temps, x, y};
+    notifier('tous', v => v === camp ? {texte:(g.n > 1 ? 'Salve partie' : 'Missile parti') + ' : impact dans ' + vol + ' s.', genre:'succes'}
+      : allies(camp, v) ? {texte:'Notre allié a lancé un missile.', genre:'info'}
+      : {texte:'Missile ennemi en approche ! (Espace)', genre:'alerte'});
+  }
+  const auteur = {camp, est:'galerie', galerie:true};
+  planifier(vol + dt*0.5, () => {
+    explosionZone(x, y, G.rayon, G.degats, 'missileGalerie', auteur, 0.5);
+    effet('explosion', {x, y, h:0, r:G.rayon, duree:0.9, grande:true});
+    brulure(x, y, G.rayon*0.8);
+  });
+}
+// Mise à jour d'une galerie terminée et vivante (appelée par majBatiment ; une galerie détruite n'est plus
+// mise à jour : ses missiles pas encore partis sont perdus, sans remboursement). Fermée : la fabrication
+// avance. Ouverte : départs aux dates du cycle, puis fermeture. Tient b.galT et b.galN pour le rendu.
+function majGalerie(b, dt){
+  const g = b.gal, G = b.def.galerie, C = CYCLE_GALERIE;
+  if(g.t0 === null){
+    b.galT = null; b.galN = 0;
+    if(g.fab > 0){
+      g.fabT -= dt;
+      if(g.fabT <= 0){
+        g.fab--; g.stock++;
+        g.fabT = g.fab > 0 ? g.fabT + G.tempsMissile : 0;
+        notifier(b.camp, b.def.nom + ' : missile prêt' + (G.lanceurs > 1 ? ' (' + g.stock + ' sur ' + G.lanceurs + ').' : '.'), 'succes');
+      }
+    }
+    return;
+  }
+  const t = temps - g.t0, eps = 1e-6;   // eps : un pas qui tombe pile sur une date ne la manque pas par arrondi
+  while(g.tires < g.n && t >= C.departs[g.tires] - eps){ departMissileGalerie(b, g.tires, dt); g.tires++; }
+  if(t >= C.duree - eps){
+    g.t0 = null; g.n = 0; g.tires = 0; b.galT = null; b.galN = 0;
+    notifier(b.camp, b.def.nom + ' : fermeture terminée, de nouveau intouchable.');
+    return;
+  }
+  b.galT = t; b.galN = g.n;
 }
 
 // =====================================================================
@@ -2115,7 +2307,7 @@ function cibleFrappe(camp, depuis, risqueMax, aa){
   aa = aa || defensesAA(camp);
   let best = null, bs = -Infinity;
   for(const e of ents){
-    if(e.mort || e.est !== 'batiment' || !hostile(camp, e.camp)) continue;
+    if(e.mort || e.est !== 'batiment' || !hostile(camp, e.camp) || galerieFermee(e)) continue;   // galerie fermée : intouchable
     const risque = risqueFrappe(camp, depuis, e, aa);
     if(risqueMax != null && risque > risqueMax) continue;
     const valeur = e.def.aeroport ? 5 : (e.def.arme || e.type === 'usine') ? 4 : e.type === 'qg' ? 2 : 3;
@@ -2230,11 +2422,12 @@ function choisirCampCible(id, centre){
     for(const e of ents){
       if(e.mort) continue;
       if(e.camp === c){
-        if(e.est === 'batiment') d = Math.min(d, dist(e, centre));
+        // Galerie de tir fermée (novembre 2026) : ni visée ni comptée (elle n'est pas une base à attaquer).
+        if(e.est === 'batiment'){ if(!galerieFermee(e)) d = Math.min(d, dist(e, centre)); }
         else if(e.def.arme && !e.def.ouvrier) force += e.def.cout || 0;
       } else if(e.est === 'unite' && e.enVague && e.camp !== id && allies(id, e.camp) && e.ordre && e.ordre.type === 'attaqueDeplacement'){
         // Vague alliée en route vers une base de c ?
-        if(ents.some(b => b.camp === c && b.est === 'batiment' && Math.hypot(b.x - e.ordre.x, b.y - e.ordre.y) < 500)) pression++;
+        if(ents.some(b => b.camp === c && b.est === 'batiment' && !galerieFermee(b) && Math.hypot(b.x - e.ordre.x, b.y - e.ordre.y) < 500)) pression++;
       }
     }
     // Riposte (novembre 2026) : un camp qui l'a frappé dans les 90 dernières secondes est préféré, d'autant
@@ -2613,6 +2806,7 @@ function cibleVague(centre, camp, seul){
   let best = null, bd = Infinity;
   for(const e of ents){
     if(e.mort || (e.def.avion && enVol(e))) continue;   // une vague ne court pas après un avion en vol
+    if(galerieFermee(e)) continue;                       // ni après une galerie de tir fermée (novembre 2026)
     if(seul ? e.camp !== seul : camp ? !hostile(camp, e.camp) : e.camp !== campJoueur) continue;
     const d = dist(e, centre) + (e.est === 'batiment' ? 0 : 400);
     if(d < bd){ bd = d; best = e; }
@@ -2620,7 +2814,8 @@ function cibleVague(centre, camp, seul){
   return best;
 }
 function meilleurGroupe(camp){
-  const liste = ents.filter(e => e.camp === camp && !e.mort && !(e.def.avion && enVol(e)));
+  // Galerie de tir fermée (novembre 2026) : ni visée ni comptée dans la densité d'un groupe.
+  const liste = ents.filter(e => e.camp === camp && !e.mort && !(e.def.avion && enVol(e)) && !galerieFermee(e));
   let best = null;
   for(const e of liste){
     let s = 0;
@@ -2758,7 +2953,9 @@ function barycentre(liste){
 function analyserUltra(id, S, bats, uns){
   const A = {ennemis:{}, grille:new Map(), zones:[], cibles:new Map(), appareils:0, aaEnnemie:0, dcaEnnemie:0, mesAppareils:0};
   for(const e of ents){
-    if(e.mort || e.demo || e.camp === 'N' || !hostile(id, e.camp)) continue;
+    // Galerie de tir fermée (novembre 2026) : absente de l'analyse, donc de toutes les recherches qui en
+    // découlent (objectif d'assaut, harcèlement, zones des pouvoirs, grille de voisinage).
+    if(e.mort || e.demo || galerieFermee(e) || e.camp === 'N' || !hostile(id, e.camp)) continue;
     const K = A.ennemis[e.camp] || (A.ennemis[e.camp] = {camp:e.camp, armee:[], bats:[], eco:[], valeur:0});
     if(e.est === 'batiment') K.bats.push(e);
     else if(e.def.collecteur || e.def.ouvrier) K.eco.push(e);
@@ -3334,7 +3531,7 @@ function harcelerUltra(id, S, A, ctx, libres){
         for(const u of membres){ u.ultra = null; u.cible = null; u.ordre = {type:'aller', x:ctx.rassemblement.x, y:ctx.rassemblement.y}; u.chemin = null; }
         S.harcelement = null; S.harceleT = temps + ULTRA.HARCELEMENT_REPOS;
       } else {
-        if(!H.cible || H.cible.mort){ H.cible = cibleHarcelement(id, A, c, mien); H.wp = null; if(!H.cible){ for(const u of membres) u.ultra = null; S.harcelement = null; S.harceleT = temps + 10; return libres; } }
+        if(!H.cible || H.cible.mort || galerieFermee(H.cible)){ H.cible = cibleHarcelement(id, A, c, mien); H.wp = null; if(!H.cible){ for(const u of membres) u.ultra = null; S.harcelement = null; S.harceleT = temps + 10; return libres; } }
         if(H.wp && Math.hypot(c.x - H.wp.x, c.y - H.wp.y) < 150) H.wp = null;
         for(const u of membres){
           if(u.cible && !u.cible.mort) continue;
@@ -3478,7 +3675,7 @@ function attaquerUltra(id, S, A, ctx, libres){
   // Assaut en cours.
   auRassemblement();
   if(!enAssaut.length){ S.phase = 'regroupe'; return; }
-  if(!S.cible || S.cible.mort){
+  if(!S.cible || S.cible.mort || galerieFermee(S.cible)){   // galerie refermée : objectif suivant
     const c0 = barycentre(enAssaut);
     S.cible = enVie(S.campCible) ? cibleVague(c0, id, S.campCible) : null;
     if(!S.cible){ const o = choisirObjectifUltra(id, S, A, c0); S.cible = o && o.b; S.campCible = o && o.camp; }
@@ -3812,6 +4009,17 @@ function dessinerCalque(){
     const P = POUVOIRS[camps[campJoueur].faction].find(p => p.cle === mode.cle);
     g.strokeStyle = '#ffd27a'; g.lineWidth = 2; g.setLineDash([8,6]); cercleSol(g, souris.mx, souris.my, P.rayon, 48); g.stroke(); g.setLineDash([]);
   }
+  // Visée d'une galerie de tir (novembre 2026) : même cercle que les pouvoirs, au rayon du missile ; pour
+  // une galerie à dispersion (Karsk), un second cercle plus pâle montre jusqu'où la salve peut s'étaler.
+  if(mode && mode.type === 'galerie'){
+    const b = entiteParId(mode.id);
+    if(b && estGalerie(b)){
+      const G = b.def.galerie;
+      g.strokeStyle = '#ffd27a'; g.lineWidth = 2; g.setLineDash([8,6]); cercleSol(g, souris.mx, souris.my, G.rayon, 48); g.stroke();
+      if(G.dispersion > 0){ g.globalAlpha = 0.45; g.lineWidth = 1.5; cercleSol(g, souris.mx, souris.my, G.rayon + G.dispersion, 56); g.stroke(); g.globalAlpha = 1; }
+      g.setLineDash([]);
+    }
+  }
   // Barres de vie et galons
   // Au dézoom, seules les unités sélectionnées ou sérieusement blessées gardent leur barre,
   // pour ne pas couvrir le champ de bataille d'un tapis de barres.
@@ -3924,6 +4132,14 @@ function dessinerMinicarte(){
     else g.fillRect(e.x*ECH-1, e.y*ECH-1, 2.5, 2.5);
   }
   for(const e of effets) if(e.type === 'marqueur'){ g.strokeStyle = COULEUR_ALERTE_MINI; rond(g, e.x*ECH, e.y*ECH, e.r*ECH); g.stroke(); }
+  // Galerie adverse en cycle de tir (novembre 2026) : marque clignotante à son emplacement, tant qu'elle est
+  // ouverte (b.galT non nul). Le point visé n'est pas montré. Sans galerie, rien n'est dessiné.
+  for(const e of ents) if(e.galT != null && !e.mort && estGalerie(e) && hostile(campJoueur, e.camp)){
+    const x = e.x*ECH, y = e.y*ECH, r = 5 + 2*Math.abs(Math.sin(performance.now()/180));
+    g.strokeStyle = COULEUR_ALERTE_MINI; g.lineWidth = 1.5; rond(g, x, y, r); g.stroke();
+    g.beginPath(); g.moveTo(x - r - 3, y); g.lineTo(x + r + 3, y); g.moveTo(x, y - r - 3); g.lineTo(x, y + r + 3); g.stroke();
+    g.lineWidth = 1;
+  }
   const coins = R3D.empriseVue();
   if(coins){
     g.strokeStyle = '#fff'; g.lineWidth = 1; g.beginPath();
@@ -4062,6 +4278,12 @@ function construirePanneau(){
     infos.innerHTML = `${htmlVignette('unite', e.type, factionVignette(e), 'vign')}<h3>${e.def.nom}${suffixeCamp(e)}</h3><div class="desc">${e.def.desc}</div>
       <div class="barrePv"><i id="ipv"></i></div><div class="ligne" id="ipvt"></div>
       <div class="ligne" id="ietat"></div><div class="ligne" id="iaura"></div>`;
+  } else if(estGalerie(e)){
+    // Galerie de tir (novembre 2026) : points de vie et ligne d'état AVANT la description. En 1280 × 720, la
+    // description poussait la ligne d'état (« Fabrication 34 s », « Tir dans 2 s ») sous le bord de la fiche.
+    infos.innerHTML = `${htmlVignette('batiment', e.type, factionVignette(e), 'vign')}<h3>${e.def.nom}${suffixeCamp(e)}</h3>
+      <div class="barrePv"><i id="ipv"></i></div><div class="ligne" id="ipvt"></div><div class="ligne" id="ietat"></div>
+      <div class="desc">${e.def.desc}</div>`;
   } else {
     infos.innerHTML = `${htmlVignette('batiment', e.type, factionVignette(e), 'vign')}<h3>${e.def.nom}${suffixeCamp(e)}</h3><div class="desc">${e.def.desc}</div>
       <div class="barrePv"><i id="ipv"></i></div><div class="ligne" id="ipvt"></div><div class="ligne" id="ietat"></div>`;
@@ -4079,7 +4301,8 @@ function construirePanneau(){
       const D = BATIMENTS[t];
       ajouter(`${D.nom}<span class="c">${D.cout} réserves</span>`, D.desc + (D.requiert ? ' Nécessite : ' + BATIMENTS[D.requiert].nom + '.' : ''),
         () => { mode = {type:'placer', bat:t}; },
-        b => { b.dataset.cout = D.cout; if(D.requiert) b.dataset.requiert = D.requiert; });
+        b => { b.dataset.cout = D.cout; if(D.requiert) b.dataset.requiert = D.requiert;
+          if(D.galerie){ b.dataset.galerie = t; b.dataset.titre = b.title; } });   // galerie de tir : une par camp
     }
   }
   if(unites.length && unites.some(u => (u.def.arme || u.def.repare) && !u.def.ouvrier)){
@@ -4101,7 +4324,75 @@ function construirePanneau(){
     if(prod.length){
       const f = document.createElement('div'); f.className = 'file'; f.id = 'ifile'; actions.appendChild(f);
     }
+    // Galerie de tir terminée (novembre 2026) : deux boutons, grisés avec leur raison en tête de l'infobulle
+    // (rafraichirPanneau). Le panneau n'est reconstruit qu'au changement de sélection ou à la fin du
+    // chantier : l'état des boutons et la ligne d'état suivent le cycle dans rafraichirPanneau.
+    if(estGalerie(e) && galeriesActives()){
+      const G = e.def.galerie, id = e.id;
+      ajouter(`Fabriquer un missile<span class="c">${G.coutMissile} réserves</span>`,
+        'Fabrique un missile (' + G.tempsMissile + ' s, payé à la commande, sans remboursement). ' +
+        (G.lanceurs > 1 ? 'Deux lanceurs : deux missiles au plus, prêts ou en fabrication.' : 'Un seul lanceur : un missile au plus, prêt ou en fabrication.') +
+        ' La fabrication n’avance que galerie fermée.',
+        () => ordonner({type:'fabriquerMissile', id}),
+        b => { b.dataset.galFab = '1'; b.dataset.titre = b.title; });
+      ajouter(`Tirer<span class="c">${G.lanceurs > 1 ? G.lanceurs + ' × ' : ''}${G.degats} dégâts</span>`,
+        'Choisir un point de la carte (vue ou minicarte). La galerie s’ouvre et devient vulnérable pendant ' + CYCLE_GALERIE.duree +
+        ' s ; départ à ' + CYCLE_GALERIE.departs[0] + ' s, impact ' + CYCLE_GALERIE.vol + ' s plus tard. Tous les missiles prêts partent. L’ordre ne s’annule pas.',
+        () => commencerViseeGalerie(id),
+        b => { b.dataset.galTir = '1'; b.dataset.titre = b.title; });
+    }
   }
+}
+// ---------- Galerie de tir : fiche et visée (novembre 2026) ----------
+// Ligne d'état de la fiche (fonction pure). proprietaire : le camp qui regarde est celui de la galerie ;
+// sinon, seul ce qui se voit de l'extérieur (fermée ou ouverte), sans les missiles en stock.
+function ligneEtatGalerie(b, proprietaire){
+  const g = b.gal, G = b.def.galerie, C = CYCLE_GALERIE;
+  if(!g) return '';
+  if(g.t0 === null){
+    if(!proprietaire) return 'Fermée — intouchable';
+    if(g.stock === 0 && g.fab === 0) return 'Fermée — aucun missile (à fabriquer)';
+    const s = g.stock > 1 ? 's' : '';
+    const parts = [];
+    if(g.stock > 0) parts.push(g.stock + ' missile' + s + ' prêt' + s + (G.lanceurs > 1 ? ' sur ' + G.lanceurs : ''));
+    // (1e-6 : la somme des pas de 1/30 s laisse un reste d'arrondi qui ferait afficher une seconde de trop)
+    if(g.fab > 0) parts.push('Fabrication ' + Math.max(1, Math.ceil(g.fabT - 1e-6)) + ' s' + (g.fab > 1 ? ' (+' + (g.fab - 1) + ' en attente)' : ''));
+    return 'Fermée — ' + parts.join(' · ');
+  }
+  if(!proprietaire) return 'Ouverte — vulnérable !';
+  const t = b.galT !== null && b.galT !== undefined ? b.galT : temps - g.t0;
+  const impact = g.n > 0 ? C.departs[g.n - 1] + C.vol : 0;   // dernier impact du cycle
+  let phase;
+  if(t < C.ouverture) phase = 'Ouverture…';
+  else if(g.tires < g.n) phase = 'Tir dans ' + Math.max(1, Math.ceil(C.departs[g.tires] - t - 1e-6)) + ' s';
+  else if(t < impact) phase = 'Impact dans ' + Math.max(1, Math.ceil(impact - t - 1e-6)) + ' s';
+  else if(t < C.rentree) phase = 'Repli…';
+  else phase = 'Fermeture…';
+  return phase + ' (vulnérable)';
+}
+// Bouton « Tirer » : passe en visée (curseur en croix, cercle au sol, clic gauche sur la vue ou la minicarte).
+// Rien n'est payé ni engagé avant le clic qui valide ; clic droit ou Échap : annuler.
+function commencerViseeGalerie(id){
+  const b = entiteParId(id);
+  const motif = b ? empechementTirGalerie(b, b.x, b.y) : 'Galerie introuvable.';
+  if(motif){ message(motif, 'alerte'); return; }
+  mode = {type:'galerie', id};
+  message('Choisissez la cible (clic gauche, sur la vue ou la minicarte). Clic droit ou Échap pour annuler.');
+}
+// Clic qui valide la visée (vue 3D ou minicarte) : un ordre tirGalerie. Visée terminée si l'ordre passe, ou
+// s'il est refusé pour une autre raison que le point visé (galerie détruite, tir déjà en cours…).
+function tirerGalerieVers(x, y){
+  const p = pointOrdre(x, y);
+  if(!p || !mode || mode.type !== 'galerie') return;
+  const res = ordonner({type:'tirGalerie', id:mode.id, x:p.x, y:p.y});
+  if(res.ok || res.code !== 'coordonnees') mode = null;
+}
+// Galerie visée encore utilisable par le joueur local ? Sinon la visée s'arrête d'elle-même : galerie
+// détruite, ou qui n'est plus sélectionnée (le bouton « Tirer » n'est plus à l'écran : un clic destiné à
+// d'autres unités ne doit pas déclencher un tir payé et irréversible).
+function galerieViseeValide(){
+  const b = mode && mode.type === 'galerie' ? entiteParId(mode.id) : null;
+  return !!(b && !b.mort && estGalerie(b) && b.camp === campLocal() && selection.includes(b));
 }
 function rafraichirPanneau(){
   const e = selection[0];
@@ -4117,6 +4408,7 @@ function rafraichirPanneau(){
     if(s){
       if(e.est === 'unite') ecrireTexte(s, 'État : ' + etatUnite(e));
       else if(e.enCours) ecrireTexte(s, 'En construction : ' + Math.floor(e.progres*100) + ' %');
+      else if(estGalerie(e)) ecrireTexte(s, 'État : ' + ligneEtatGalerie(e, e.camp === campJoueur));   // galerie de tir (novembre 2026)
       else if(e.def.arme) ecrireTexte(s, (e.cible ? 'Engage une cible' : 'En veille') + ' · portée ' + e.def.portee);
       else if(e.file.length) ecrireTexte(s, e.bloque ? (e.blocage === 'places' ? 'Production suspendue : aucune place libre' : 'Production suspendue : effectif maximal atteint')
         : 'Production : ' + UNITES[e.file[0]].nom + ' (' + Math.floor(e.prodT/UNITES[e.file[0]].temps*100) + ' %)');
@@ -4132,12 +4424,23 @@ function rafraichirPanneau(){
   for(const b of el('actions').querySelectorAll('button.act')){
     if(b.dataset.cout){
       const manque = b.dataset.requiert && !ents.some(x => x.camp === campJoueur && x.type === b.dataset.requiert && !x.enCours);
-      const off = camps[campJoueur].reserves < +b.dataset.cout || !!manque;
+      // Galerie de tir (novembre 2026) : grisée s'il en existe déjà une (chantier compris), raison en tête de l'infobulle.
+      const uneGalerie = b.dataset.galerie ? empechementGalerie(campJoueur, b.dataset.galerie) : null;
+      const off = camps[campJoueur].reserves < +b.dataset.cout || !!manque || !!uneGalerie;
       if(b.disabled !== off) b.disabled = off;
+      if(b.dataset.galerie){ const titre = uneGalerie ? uneGalerie + ' ' + b.dataset.titre : b.dataset.titre; if(b.title !== titre) b.title = titre; }
       // Avion : grisé quand les trois places de l'aéroport sont prises (avions + file). Classe plutôt
       // que « disabled » : le clic droit doit rester possible pour retirer un avion de la file.
       if(b.dataset.avion && e && e.def.aeroport) b.classList.toggle('grise', aeroportPlein(e));
       if(b.dataset.helico && e && e.def.aeroport) b.classList.toggle('grise', helicosPlein(e));
+    }
+    // Galerie de tir (novembre 2026) : boutons « Fabriquer un missile » et « Tirer », grisés avec leur raison.
+    if((b.dataset.galFab || b.dataset.galTir) && e && estGalerie(e)){
+      const raison = b.dataset.galFab ? empechementFabrication(e) : empechementTirGalerie(e, e.x, e.y);
+      if(b.disabled !== !!raison) b.disabled = !!raison;
+      const titre = raison ? raison + ' ' + b.dataset.titre : b.dataset.titre;
+      if(b.title !== titre) b.title = titre;
+      if(b.dataset.galTir) b.classList.toggle('actif', !!(mode && mode.type === 'galerie' && mode.id === e.id));
     }
     const n = b.querySelector('.n');
     if(n && e) { let k = 0; for(const t of e.file) if(t === n.dataset.type) k++; ecrireTexte(n, k ? k : ''); }
@@ -4146,6 +4449,9 @@ function rafraichirPanneau(){
 function majPanneau(){
   const sig = selection.map(e => e.id + (e.enCours ? 'c' : '')).join(',');
   if(sig !== signaturePanneau){ signaturePanneau = sig; construirePanneau(); }
+  if(mode && mode.type === 'galerie' && !galerieViseeValide()) mode = null;   // galerie détruite pendant la visée
+  const curseurMini = mode && mode.type === 'galerie' ? 'crosshair' : '';      // la minicarte vise aussi
+  if(miniCv.style.cursor !== curseurMini) miniCv.style.cursor = curseurMini;
   rafraichirPanneau();
 }
 // ---------- Barre de construction (en bas à droite, toujours visible en jeu) ----------
@@ -4213,6 +4519,7 @@ function etatFab(it){
     const progres = chantiers.reduce((m, b) => Math.max(m, b.progres), 0);
     let raison = null;
     if(D.requiert && !ents.some(b => b.camp === campJoueur && b.type === D.requiert && !b.enCours && !b.mort)) raison = 'Nécessite : ' + BATIMENTS[D.requiert].nom + '.';
+    else if(empechementGalerie(campJoueur, it.type)) raison = MOTIF_UNE_GALERIE;   // galerie de tir (novembre 2026)
     else if(C.reserves < D.cout) raison = 'Réserves insuffisantes (' + D.cout + ' nécessaires).';
     return {raison, n:chantiers.length, progres: chantiers.length ? progres : 0};
   }
@@ -4316,7 +4623,13 @@ function contenuInfobulle(it, raison){
   const lignes = [['Durée', D.temps + ' s'], [bat ? 'Requiert' : 'Produit par', requis], ['Points de vie', D.pv]];
   if(bat) lignes.push(['Taille', D.taille + ' × ' + D.taille + ' cases']);
   if(D.arme || D.repare) lignes.push(['Portée', D.arme ? D.portee + (D.porteeMin ? ' (pas sous ' + D.porteeMin + ')' : '') : 'contact']);
-  lignes.push(['Cibles', ciblesTexte(D)]);
+  if(bat && D.galerie){
+    // Galerie de tir (novembre 2026) : l'arme est le missile, fabriqué à part (pas de champ « arme »).
+    const G = D.galerie;
+    lignes.push(['Portée', 'toute la carte'], ['Missile', G.coutMissile + ' réserves, ' + G.tempsMissile + ' s' + (G.lanceurs > 1 ? ' (chacun)' : '')],
+      ['Salve', (G.lanceurs > 1 ? G.lanceurs + ' × ' : '') + G.degats + ' dégâts, rayon ' + G.rayon + (G.dispersion ? ', dispersion ' + G.dispersion : '')],
+      ['Fermée', 'intouchable'], ['Limite', '1 par camp']);
+  } else lignes.push(['Cibles', ciblesTexte(D)]);
   if(D.forme === 'helico') lignes.push(['Limite', HELICOS_PAR_AEROPORT + ' par aéroport']);
   if(D.avion) lignes.push(['Limite', PLACES_AEROPORT.length + ' avions par aéroport']);
   return htmlVignette(it.genre, it.type, camps[campJoueur].faction) +
@@ -4475,7 +4788,10 @@ function ordonner(ordre){
 //  Formats : voir travaux/multijoueur (compte rendu des étapes 1 et 2) et la liste ci-dessous.
 // =====================================================================
 const TYPES_ORDRES = ['droit', 'attaqueDeplacement', 'arret', 'ralliement', 'construire', 'produire', 'retirer',
-  'pouvoir', 'pause', 'abandon', 'alliance', 'proposerTreve'];
+  'pouvoir', 'pause', 'abandon', 'alliance', 'proposerTreve', 'fabriquerMissile', 'tirGalerie'];
+// Galeries de tir (novembre 2026) : 'fabriquerMissile' {id} et 'tirGalerie' {id, x, y} restent des ordres de
+// la partie locale. Ils n'ont pas de code réseau (CODES_ORDRES inchangé : ordreVersReseau ne sait pas les
+// émettre) et sont refusés en ligne par galeriesActives(), chez l'hôte comme chez l'invité.
 // Réservés au joueur local (en ligne : l'hôte) : pause, abandon de sa propre partie, décisions du mode
 // Surprises (désactivé en ligne).
 const ORDRES_LOCAUX = ['pause', 'abandon', 'alliance', 'proposerTreve'];
@@ -4552,6 +4868,14 @@ function validerOrdre(camp, o){
       if(typeof l === 'string') return non(l, 'entites');
       if(!dansCarte(o.x, o.y)) return non('Coordonnées hors de la carte.', 'coordonnees');
       const c = cibleDe(); if(c.motif) return non(c.motif, 'cible');
+      // Galerie de tir (novembre 2026) : on ne peut pas attaquer une galerie adverse fermée. L'ordre n'est pas
+      // refusé (les unités resteraient sur place, alors que la parade est justement de l'attendre devant) :
+      // il devient un déplacement, ou une attaque-déplacement, vers le point, sans cible, avec un mot au
+      // joueur. Les unités tireront d'elles-mêmes à l'ouverture. Seulement si l'ordre est bien une attaque
+      // (au moins une unité armée) ; sans galerie, ne change rien.
+      const vise = !galeriesActives() ? null : c.cible !== undefined ? c.cible : entiteSous(o.x, o.y);
+      if(vise && galerieFermee(vise) && hostile(camp, vise.camp) && l.some(e => e.est === 'unite' && e.def.arme && !e.def.ouvrier))
+        return {entites:l, cible:null, avis:'Galerie fermée : intouchable. Vos unités l’attendront devant.'};
       return {entites:l, cible:c.cible};
     }
     case 'arret': {
@@ -4572,6 +4896,9 @@ function validerOrdre(camp, o){
       if(C.reserves < D.cout) return non('Réserves insuffisantes.', 'reserves', 'alerte');
       if(D.requiert && !ents.some(b => b.camp === camp && b.type === D.requiert && !b.enCours && !b.mort))
         return non('Nécessite : ' + BATIMENTS[D.requiert].nom + '.', 'requis', 'alerte');
+      // Galerie de tir (novembre 2026) : une seule par camp, chantier compris (code 'requis' : fin du placement).
+      const uneGalerie = empechementGalerie(camp, o.bat);
+      if(uneGalerie) return non(uneGalerie, 'requis', 'alerte');
       let ouvriers;
       if(o.ouvrierIds === undefined || (Array.isArray(o.ouvrierIds) && !o.ouvrierIds.length)){
         const u = ouvrierPour((o.c + D.taille/2)*TUILE, (o.r + D.taille/2)*TUILE, camp);
@@ -4631,6 +4958,22 @@ function validerOrdre(camp, o){
       if((C.recharges[o.cle] || 0) > 0) return non('Pouvoir en recharge.', 'recharge');
       return {P};
     }
+    // Galeries de tir (novembre 2026) : mêmes contrôles que le moteur (empechementFabrication,
+    // empechementTirGalerie), faits ici avant tout prélèvement ; refus dit au joueur (genre 'alerte').
+    case 'fabriquerMissile': case 'tirGalerie': {
+      if(!galeriesActives()) return non(MOTIF_SANS_GALERIES, 'galerie', 'alerte');
+      const l = entitesDeLOrdre(camp, [o.id], 'batiment');
+      if(typeof l === 'string') return non(l, 'entites');
+      const b = l[0];
+      if(!estGalerie(b)) return non('Ce bâtiment n’est pas une galerie de tir.', 'type', 'alerte');
+      if(t === 'fabriquerMissile'){
+        const m = empechementFabrication(b);
+        return m ? non(m, m === MOTIF_RESERVES ? 'reserves' : 'galerie', 'alerte') : {bat:b};
+      }
+      if(!estNombre(o.x) || !estNombre(o.y)) return non('Cible du tir manquante.', 'coordonnees', 'alerte');
+      const m = empechementTirGalerie(b, o.x, o.y);
+      return m ? non(m, dansCarte(o.x, o.y) ? 'galerie' : 'coordonnees', 'alerte') : {bat:b};
+    }
   }
   return non('Type d’ordre inconnu.');
 }
@@ -4646,6 +4989,7 @@ function executerOrdre(camp, ordre){
 // Application d'un ordre déjà validé (v : données de validerOrdre).
 function appliquerOrdre(camp, o, v){
   const fait = (retour, plus) => Object.assign({ok:true}, retour ? {retour} : null, plus || null);
+  if(v.avis) notifier(camp, v.avis);   // ordre accepté mais transformé (galerie adverse fermée) : on le dit
   switch(o.type){
     case 'droit': return fait(appliquerOrdreDroit(camp, v.entites, o.x, o.y, v.cible));
     case 'attaqueDeplacement': {
@@ -4683,6 +5027,8 @@ function appliquerOrdre(camp, o, v){
       return fait();
     case 'alliance': repondreAlliance(o.oui); return fait();
     case 'proposerTreve': proposerAlliance(); return fait();
+    case 'fabriquerMissile': return commanderMissile(v.bat) ? fait(null, {id:v.bat.id}) : {ok:false, motif:'Commande refusée.', code:'galerie'};
+    case 'tirGalerie': return ouvrirGalerie(v.bat, o.x, o.y) ? fait(null, {id:v.bat.id}) : {ok:false, motif:'Tir refusé.', code:'galerie'};
   }
   return {ok:false, motif:'Type d’ordre inconnu.', code:'invalide'};
 }
@@ -4735,7 +5081,8 @@ function appliquerOrdreDroit(camp, mes, x, y, cibleForcee){
   } else if(cible && cible.camp === camp && cible.est === 'batiment' && cible.enCours && ouvriers.length){
     for(const u of ouvriers){ u.ordre = {type:'construire', bat:cible}; u.chemin = null; }
     reste = unites.filter(u => !u.def.ouvrier);
-  } else if(cible && cible.camp === camp && cible.est === 'batiment' && !cible.enCours && cible.pv < cible.pvMax && ouvriers.length){
+  } else if(cible && cible.camp === camp && cible.est === 'batiment' && !cible.enCours && cible.pv < cible.pvMax && !estGalerie(cible) && ouvriers.length){
+    // (Galerie de tir, novembre 2026 : jamais réparée ; les ouvriers s'y rendent simplement.)
     for(const u of ouvriers){ u.ordre = {type:'reparer', bat:cible}; u.chemin = null; }
     reste = unites.filter(u => !u.def.ouvrier);
     retour.push({x:cible.x, y:cible.y, couleur:'#7dff8a'});
@@ -4760,6 +5107,7 @@ cv.addEventListener('mousedown', e => {
   if(e.button === 0){
     if(mode && mode.type === 'placer'){ tenterPlacement(); return; }
     if(mode && mode.type === 'pouvoir'){ if(ordonner({type:'pouvoir', cle:mode.cle, x:m.x, y:m.y}).ok) mode = null; return; }
+    if(mode && mode.type === 'galerie'){ tirerGalerieVers(m.x, m.y); return; }   // galerie de tir (novembre 2026)
     if(mode && mode.type === 'attaque'){ ordreAttaqueDeplacement(m.x, m.y, entiteSousEcran(e.clientX, e.clientY)); mode = null; return; }
     souris.bas = true; souris.dx = e.clientX; souris.dy = e.clientY;
   } else if(e.button === 2){
@@ -4816,7 +5164,8 @@ cv.addEventListener('mousemove', e => {
   if(!enJeu) return;
   const t = performance.now(); if(t - survolT < 80) return; survolT = t;
   const c = entiteSousEcran(e.clientX, e.clientY);
-  cv.style.cursor = mode ? 'crosshair' : (c && hostile(campJoueur,c.camp) && selection.some(s => s.camp === campJoueur && s.est === 'unite')) ? 'crosshair' : (c ? 'pointer' : 'default');
+  // (galerie adverse fermée : pas de croix d'attaque, elle est intouchable)
+  cv.style.cursor = mode ? 'crosshair' : (c && !galerieFermee(c) && hostile(campJoueur,c.camp) && selection.some(s => s.camp === campJoueur && s.est === 'unite')) ? 'crosshair' : (c ? 'pointer' : 'default');
 });
 // Zoom : multiplie la distance de la caméra, entre les bornes de la vue (les mêmes pour la molette et le clavier).
 function zoomer(facteur){
@@ -4855,6 +5204,14 @@ function deplacerCameraMini(e){
 miniCv.addEventListener('contextmenu', e => e.preventDefault());
 miniCv.addEventListener('mousedown', e => {
   const r = miniCv.getBoundingClientRect();
+  // Visée d'une galerie de tir (novembre 2026) : la minicarte désigne la cible (clic gauche) ou annule
+  // (clic droit), au lieu de déplacer la vue ou la sélection. Les autres modes gardent leur comportement.
+  if(mode && mode.type === 'galerie'){
+    if(!enJeu || partieFinie || surprise.gel) return;
+    if(e.button === 0) tirerGalerieVers((e.clientX - r.left)/ECH, (e.clientY - r.top)/ECH);
+    else if(e.button === 2) mode = null;
+    return;
+  }
   if(e.button === 0){ souris.miniBas = true; deplacerCameraMini(e); }
   else if(e.button === 2) ordreDroit((e.clientX - r.left)/ECH, (e.clientY - r.top)/ECH);
 });
@@ -5734,9 +6091,10 @@ function memoriserCarte(id){ try { localStorage.setItem(CLE_CARTE, id); } catch(
 // Recharge la page sur l'écran de l'escarmouche, avec la carte demandée (réglages du menu conservés).
 function rechargerAvecCarte(id){
   const p = new URLSearchParams(location.search);
-  for(const k of ['mission', 'campagne', 'demo', 'surprises']) p.delete(k);
+  for(const k of ['mission', 'campagne', 'demo', 'surprises', 'galeries']) p.delete(k);
   p.set('carte', id); p.set('diff', difficulte);
   const c = el('modeSurprises'); if(c && c.checked && !p.has('surprise')) p.set('surprises', '1');
+  const g = el('modeGaleries'); if(g && g.checked) p.set('galeries', '1');   // galeries de tir (novembre 2026)
   location.href = location.pathname + '?' + p.toString();
 }
 function construireChoixCarte(){
@@ -6167,6 +6525,14 @@ function initInterfaceSurprises(params){
   const o = el('bFaireAlliance'); if(o) o.onclick = () => ordonner({type:'alliance', oui:true});
   const n = el('bRefuserAlliance'); if(n) n.onclick = () => ordonner({type:'alliance', oui:false});
 }
+// Option « Galeries de tir » (novembre 2026) : case à cocher de l'écran d'escarmouche, sur le modèle de
+// « Mode Surprises » (aucune mémorisation dans le navigateur ; gardée d'une carte à l'autre par le
+// paramètre d'adresse ?galeries=1, qui sert aussi aux essais automatiques). Appelé une fois, au lancement.
+function initInterfaceGaleries(params){
+  if(params.get('galeries') === '1') optionGaleries = true;
+  const c = el('modeGaleries');
+  if(c){ c.checked = optionGaleries; c.onchange = () => { optionGaleries = c.checked; }; }
+}
 // Début d'une escarmouche (appelé par demarrer) : tirage de la surprise et de son instant.
 function preparerSurprises(){
   alliance = false;
@@ -6201,7 +6567,7 @@ function majSurprise(dt){
     if(S.etat === 'signes' && S.def.signes) S.def.signes(reste);
     if(reste <= 0){
       // Partie déjà jouée (un camp n'a plus de bâtiment) : la fin normale passe avant l'événement.
-      const aBat = c => ents.some(e => e.camp === c && e.est === 'batiment' && !e.mort);
+      const aBat = c => ents.some(e => e.camp === c && e.est === 'batiment' && !e.mort && !estGalerie(e));   // galerie : ne compte pas
       if(aBat(campJoueur) && campsEnJeu().some(c => hostile(campJoueur, c) && aBat(c))) S.def.declencher(); else S.instant = temps + 1;
     }
   } else if(S.etat === 'combat') majEnvahisseurs(dt);
@@ -6413,7 +6779,8 @@ function absorberBouclier(c, deg, auteur){
 // lui fait viser l'autre. (Avant novembre 2026 : il restait sur la première base jusqu'à la raser, et la
 // préférence pour le joueur le faisait viser le camp J toute la partie.)
 function baseVisee(u){
-  const aDesBats = camp => ents.some(b => b.camp === camp && b.est === 'batiment' && !b.mort);
+  // Galerie de tir (novembre 2026) : ne compte pas pour une base encore debout, et n'est pas visée fermée.
+  const aDesBats = camp => ents.some(b => b.camp === camp && b.est === 'batiment' && !b.mort && !estGalerie(b));
   const sante = (u.pv || 0) + (u.bouclier || 0);
   let changer = !u.campVise || !aDesBats(u.campVise);
   if(!changer && (temps >= (u.alterneT || 0) || (u.santeVisee || 0) - sante >= ALTERNANCE_DEGATS*((u.pvMax || 0) + (u.bouclierMax || 0)))){
@@ -6428,7 +6795,7 @@ function baseVisee(u){
     // À plus de deux camps : la base visitée il y a le plus longtemps (jamais visitée d'abord), puis la plus
     // proche, pour faire le tour de toutes les bases.
     u.vises = u.vises || {};
-    for(const b of ents) if(b.est === 'batiment' && !b.mort && hostile('X', b.camp) && b.camp !== exclu){
+    for(const b of ents) if(b.est === 'batiment' && !b.mort && !galerieFermee(b) && hostile('X', b.camp) && b.camp !== exclu){
       const d = dist(u, b) - (b.camp === campJoueur ? PREFERENCE_JOUEUR : 0) + (u.vises[b.camp] != null ? 1e6 + u.vises[b.camp]*1e3 : 0);
       if(d < bd){ bd = d; best = b.camp; }
     }
@@ -6443,10 +6810,10 @@ function baseVisee(u){
     u.campVise = best; u.batVise = null;
   }
   if(!u.campVise) return null;
-  if(!u.batVise || u.batVise.mort || temps >= u.viseT){
+  if(!u.batVise || u.batVise.mort || galerieFermee(u.batVise) || temps >= u.viseT){
     u.viseT = temps + 2;
     let best = null, bd = Infinity;
-    for(const b of ents) if(b.est === 'batiment' && !b.mort && b.camp === u.campVise){ const d = dist(u, b); if(d < bd){ bd = d; best = b; } }
+    for(const b of ents) if(b.est === 'batiment' && !b.mort && !galerieFermee(b) && b.camp === u.campVise){ const d = dist(u, b); if(d < bd){ bd = d; best = b; } }
     u.batVise = best;
   }
   return u.batVise;
@@ -6456,10 +6823,11 @@ function baseVisee(u){
 function cibleDuRayon(u, P){
   let best = null, bs = 0;
   for(const c of ents){
-    if(c.mort || !hostile('X', c.camp) || enVol(c) || dist(u, c) > PORTEE_RAYON) continue;
+    // Galerie de tir fermée (novembre 2026) : ni visée ni comptée.
+    if(c.mort || galerieFermee(c) || !hostile('X', c.camp) || enVol(c) || dist(u, c) > PORTEE_RAYON) continue;
     let s = 0;
     for(const e of ents){
-      if(e.mort || !hostile('X', e.camp) || enVol(e)) continue;
+      if(e.mort || galerieFermee(e) || !hostile('X', e.camp) || enVol(e)) continue;
       if(Math.hypot(e.x - c.x, e.y - c.y) - (e.rayon || 0)*0.5 <= P.rayonZone) s += e.est === 'batiment' ? 3 : 1;
     }
     if(c.est === 'batiment' && c === u.batVise) s += 2;
@@ -6756,7 +7124,8 @@ function impactProjectile(p){
   const auteur = p.auteur && !p.auteur.mort ? p.auteur : {camp:p.camp, est:'pouvoir'};
   if(!(p.zone > 0)){
     const c = p.cible;
-    if(c && !c.mort) infliger(c, p.degats * efficacite(p.arme, c), auteur);
+    // Galerie de tir refermée pendant le vol (novembre 2026) : le coup se perd (jugé à l'impact).
+    if(c && !c.mort && !galerieFermee(c)) infliger(c, p.degats * efficacite(p.arme, c), auteur);
     effetsImpact(p);
     return;
   }
@@ -6821,11 +7190,15 @@ function separer(dt){
 }
 // Éliminations : un camp sans bâtiment est éliminé (message à tous) ; son ordinateur s'arrête, ses
 // unités restantes combattent encore. Appelé chaque seconde par verifierFin.
+// Galerie de tir (novembre 2026) : elle ne compte pas pour rester en vie (presque toujours intouchable,
+// elle rendrait sinon un camp impossible à éliminer) ; à l'élimination, les galeries du camp, chantiers
+// compris, s'effondrent (détruites, décombres, sans auteur : aucun point de commandement).
 function verifierEliminations(){
   for(const id of campsEnJeu()){
     const C = camps[id];
-    if(C.elimine || ents.some(e => e.camp === id && e.est === 'batiment' && !e.mort)) continue;
+    if(C.elimine || ents.some(e => e.camp === id && e.est === 'batiment' && !e.mort && !estGalerie(e))) continue;
     C.elimine = true; C.elimineT = temps;
+    for(const g of ents) if(g.camp === id && !g.mort && estGalerie(g)) tuer(g, null);
     notifier('tous', v => ({texte:(id === v ? 'Votre camp' : 'Le camp ' + nomCamp(id).toLowerCase() + ' (' + faction(id).nom + (camps[id].equipe ? ', équipe ' + camps[id].equipe : '') + ')') + ' est éliminé.',
       genre:id === v || allies(id, v) ? 'alerte' : 'succes'}));
   }
@@ -7338,6 +7711,7 @@ function lancement(){
   el('difficulte').onchange = () => { difficulte = el('difficulte').value; noteUltra(); };
   noteUltra();
   initInterfaceSurprises(params);
+  initInterfaceGaleries(params);
   if(QUALITES.includes(params.get('qualite'))) qualiteGraphique = params.get('qualite');
   const listeQualite = el('qualite');
   if(listeQualite){ listeQualite.value = qualiteGraphique; listeQualite.onchange = () => changerQualiteMenu(listeQualite.value); }
@@ -7496,7 +7870,9 @@ function tablesReseau(){
   }
   const pouvoirs = new Set();
   for(const f of Object.keys(POUVOIRS)) for(const P of POUVOIRS[f] || []) if(P && P.cle) pouvoirs.add(P.cle);
-  const t = {unites:Object.keys(UNITES), batiments:Object.keys(BATIMENTS), camps:['J', 'I', 'K', 'L', 'N', 'X'],
+  // Galeries de tir (novembre 2026) : exclues des tables du réseau, qui restent celles du multijoueur publié
+  // (les galeries n'existent jamais en ligne dans ce lot : voir galeriesActives).
+  const t = {unites:Object.keys(UNITES), batiments:Object.keys(BATIMENTS).filter(k => !BATIMENTS[k].galerie), camps:['J', 'I', 'K', 'L', 'N', 'X'],
     pouvoirs:[...pouvoirs].sort(), projectiles:PROJECTILES_RESEAU, armes:[...armes].sort(), effets:EFFETS_RESEAU};
   t.armesEffet = [null].concat(t.armes); t.roles = [null].concat([...roles].sort());
   t.ensembleArmes = new Set(t.armes);
@@ -8039,6 +8415,8 @@ function envoyerOrdreInvite(camp, ordre){
     : {ok:false, motif:'Pause réservée à l’hôte.', code:'reserve'};
   if(ordre.type === 'abandon'){ try { if(salonInvite) salonInvite.quitter(); } catch(err){} oublierSiegeInvite(); location.href = location.pathname + adresseSansSalon(); return {ok:true}; }
   if(ordre.type === 'alliance' || ordre.type === 'proposerTreve') return {ok:false, motif:'Réservé à l’hôte.', code:'reserve'};
+  // Galeries de tir (novembre 2026) : absentes en ligne ; ces ordres n'ont pas de code réseau, refus dit ici.
+  if(ordre.type === 'fabriquerMissile' || ordre.type === 'tirGalerie') return {ok:false, motif:MOTIF_SANS_GALERIES, code:'galerie', genre:'info'};
   // Refus que l'hôte rendrait sans genre (muets) mais lisibles dans l'état reçu (défaut 5 du troisième tour) : rendus
   // ici, comme en solo (ok:false, mêmes motifs), au lieu d'un « ok » sans effet. Le camp éliminé est dit au joueur.
   const C = camps[camp];

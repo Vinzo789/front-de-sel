@@ -15,6 +15,10 @@ la bibliothèque 3D three.js est chargée au démarrage.
 - Escarmouche contre un à trois ordinateurs, sur cinq cartes, avec des équipes
   libres et quatre niveaux de difficulté.
 - Mode « Surprises », à cocher sur l'écran de l'escarmouche.
+- « Galeries de tir », à cocher sur le même écran (escarmouche contre
+  l'ordinateur seulement) : un abri enterré d'où sortent des lanceurs de
+  missiles. Fermé, il est intouchable ; on ne peut le détruire que pendant les
+  16 secondes où il tire.
 - Escarmouche en ligne, de 2 à 4 joueurs (voir plus bas).
 
 Le bouton « Commandes », en jeu, donne la liste des touches. La touche F11 du
@@ -45,7 +49,7 @@ compte : seul un pseudonyme est demandé.
   sa place s'il revient en moins de 2 minutes (en rouvrant le lien dans le même
   navigateur) ; ensuite, l'ordinateur prend son camp. Si l'hôte part, la partie
   s'arrête pour tous.
-- Les campagnes et le mode « Surprises » restent en solo.
+- Les campagnes, le mode « Surprises » et les galeries de tir restent en solo.
 
 Le détail, les limites connues et ce qui a été vérifié sont dans
 `NOTES-CONCEPTION.md`, section « Multijoueur ».

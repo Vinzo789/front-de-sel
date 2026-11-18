@@ -51,6 +51,7 @@
   const MAX_MISSILES_AIR = 48;
   const MAX_BOMBES = 24;
   const MAX_MISSILES = 4;      // missiles de frappe de précision
+  const MAX_MISSILES_GAL = 8;  // missiles des galeries de tir en vol, par modèle (novembre 2026)
   const MAX_ONDES = 14;        // ondes de choc au sol
   const MAX_ORDRES = 8;        // retours d'ordre
   const MAX_MARQUEURS = 4;     // zones de pouvoir
@@ -1176,7 +1177,7 @@
   // =====================================================================
   const ROQ = 0, AIR = 1, BOM = 2, PLA = 3;
   const DEPART_SOL = [0, 9, 9, 13];           // hauteur de départ par défaut d'un tireur terrestre, par genre
-  let meshRoquettes = null, meshMissilesAir = null, meshBombes = null, meshMissiles = null;
+  let meshRoquettes = null, meshMissilesAir = null, meshBombes = null, meshMissiles = null, meshAiguilles = null, meshBrisants = null;
   const etats = new Map();            // objet projectile du moteur -> état visuel
   const libres = [];                  // états recyclés (pas d'objet créé par tir une fois la réserve constituée)
   const missiles = new Map();         // objet effet 'missile' -> état visuel
@@ -1238,6 +1239,10 @@
     meshBombes = instances(geoBombe(), mat, MAX_BOMBES, true);       // l'ombre qui converge vers le point d'impact annonce la chute
     // Missile de frappe de précision
     meshMissiles = instances(geoProjectile(24, 2.0, {corps:'#e6eaee', nez:'#bfc8d0', bande:'#3fa7ff', ailettes:'#56636e'}), mat, MAX_MISSILES, true);
+    // Missiles des galeries de tir (novembre 2026) : l'« Aiguille » de Halden, longue et claire ; le « Brisant »
+    // de Karsk, plus court et trapu. Mêmes proportions que les missiles posés sur les lanceurs (r3d-batiments.js).
+    meshAiguilles = instances(geoProjectile(30, 2.1, {corps:'#e6eaee', nez:'#2f353b', bande:'#3fa7ff', ailettes:'#2f353b'}), mat, MAX_MISSILES_GAL, true);
+    meshBrisants = instances(geoProjectile(24, 2.6, {corps:'#6f6d49', nez:'#9c2f24', bande:'#e2533f', ailettes:'#4a4930'}), mat, MAX_MISSILES_GAL, true);
   }
   function finInstances(m, n){ m.count = n; m.visible = n > 0; if(n > 0) m.instanceMatrix.needsUpdate = true; }
 
@@ -1536,28 +1541,60 @@
     }
   }
 
-  // Missile : descend du ciel en diagonale (venant du nord-ouest : il entre par le haut de l'écran) et touche à la fin.
-  // Parcours par forEach + rappel fixe (état de l'image dans nMis / dtMis) : aucune allocation par image.
-  let nMis = 0, dtMis = 0;
+  // Missile de frappe : descend du ciel en diagonale (venant du nord-ouest : il entre par le haut de l'écran) et
+  // touche à la fin. Missile de galerie de tir (champ galerie de l'effet, novembre 2026) : il part du lanceur
+  // dressé devant la galerie de son camp et retombe en cloche sur le point visé.
+  // Parcours par forEach + rappel fixe (état de l'image dans nMis… / dtMis) : aucune allocation par image.
+  let nMis = 0, nAig = 0, nBri = 0, dtMis = 0;
   function majMissiles(dt){
-    nMis = 0; dtMis = dt;
+    nMis = nAig = nBri = 0; dtMis = dt;
     if(missiles.size) missiles.forEach(majUnMissile);
-    finInstances(meshMissiles, nMis);
+    finInstances(meshMissiles, nMis); finInstances(meshAiguilles, nAig); finInstances(meshBrisants, nBri);
+  }
+  // Position à la fraction k du vol. Galerie (st.modele) : il quitte le lanceur lentement puis file, sur une longue cloche.
+  function posMissile(st, k, out){
+    if(st.modele){
+      const kh = 0.65*k + 0.35*k*k*(3 - 2*k);
+      return out.set(st.sx + (st.ex - st.sx)*kh, st.sy + (st.ey - st.sy)*k + st.apex*4*k*(1 - k), st.sz + (st.ez - st.sz)*kh);
+    }
+    const ke = Math.pow(k, 1.7);       // accélération en piqué
+    return out.set(st.sx + (st.ex - st.sx)*ke, st.sy + (st.ey - st.sy)*ke, st.sz + (st.ez - st.sz)*ke);
   }
   function majUnMissile(st, e){
     const dt = dtMis;
     st.t += dt;
     const k = Math.min(1, st.t / st.duree);
-    if(k >= 1 || nMis >= MAX_MISSILES){ if(k >= 1) missiles.delete(e); return; }
-    const ke = Math.pow(k, 1.7);       // accélération en piqué
-    vTmp.set(st.sx + (st.ex - st.sx)*ke, st.sy + (st.ey - st.sy)*ke, st.sz + (st.ez - st.sz)*ke);
-    vDir.set(st.ex - st.sx, st.ey - st.sy, st.ez - st.sz).normalize();
+    const plein = st.modele === 1 ? nAig >= MAX_MISSILES_GAL : st.modele === 2 ? nBri >= MAX_MISSILES_GAL : nMis >= MAX_MISSILES;
+    if(k >= 1 || plein){ if(k >= 1) missiles.delete(e); return; }
+    if(st.modele){
+      // Direction : celle du déplacement (la cloche tourne le nez vers le haut, puis vers le sol)
+      posMissile(st, Math.min(1, k + 0.012), vDir); posMissile(st, k, vTmp);
+      vDir.sub(vTmp); if(vDir.lengthSq() < 1e-8) vDir.set(0, 1, 0);
+      vDir.normalize();
+    } else {
+      posMissile(st, k, vTmp);
+      vDir.set(st.ex - st.sx, st.ey - st.sy, st.ez - st.sz).normalize();
+    }
     qTmp.setFromUnitVectors(axeX, vDir);
     mTmp.compose(vTmp, qTmp, unite);
-    meshMissiles.setMatrixAt(nMis++, mTmp);
+    if(st.modele === 1) meshAiguilles.setMatrixAt(nAig++, mTmp);
+    else if(st.modele === 2) meshBrisants.setMatrixAt(nBri++, mTmp);
+    else meshMissiles.setMatrixAt(nMis++, mTmp);
     if(dt > 0){
-      const qx = vTmp.x - vDir.x*14, qy = vTmp.y - vDir.y*14, qz = vTmp.z - vDir.z*14;
+      const rec = st.modele ? 17 : 14;
+      const qx = vTmp.x - vDir.x*rec, qy = vTmp.y - vDir.y*rec, qz = vTmp.z - vDir.z*rec;
       solCourant = st.ey;
+      if(st.modele && !st.parti){
+        // Départ : éclair, souffle de poussière autour du lanceur, panache de fumée
+        st.parti = true;
+        const S = st.sy - st.hLanceur;
+        solCourant = S;
+        emettre(G.flash, st.sx, st.sy, st.sz, 0, 0, 0, 26);
+        flashLumiere(st.sx, st.sy, st.sz, COUL_TIR, 2.2, 260, 0.5, 2);   // (une couleur THREE.Color, jamais un texte : sinon tout l'éclairage s'éteint)
+        for(let j=nb(9);j>0;j--) emettre(G.poussiere, st.sx + alea(-14, 14), S + 4, st.sz + alea(-14, 14), alea(-46, 46), alea(6, 22), alea(-46, 46), alea(16, 26));
+        for(let j=nb(6);j>0;j--) emettre(G.fumeeGrise, st.sx + alea(-6, 6), S + 8, st.sz + alea(-6, 6), alea(-16, 16), alea(8, 22), alea(-16, 16), alea(18, 28));
+        solCourant = st.ey;
+      }
       emettre(G.propulseur, qx, qy, qz, -vDir.x*30, -vDir.y*30, -vDir.z*30, alea(16, 22));
       emettre(G.halo, qx, qy, qz, 0, 0, 0, 22, 0.35);
       // Traînée : espacement régulier quel que soit le débit d'images
@@ -1573,10 +1610,40 @@
       st.px = vTmp.x; st.py = vTmp.y; st.pz = vTmp.z;
     }
   }
+  // Galerie de tir du camp (une seule par camp) : pour retrouver le lanceur sans dépendre de ce que
+  // le moteur transmet (chez un invité, l'effet peut arriver sans point de départ).
+  function galerieDuCamp(camp){
+    if(typeof ents === 'undefined' || !ents) return null;
+    for(const b of ents) if(b && b.est === 'batiment' && b.camp === camp && !b.mort && b.def && b.def.galerie && !b.enCours) return b;
+    return null;
+  }
   function nouveauMissile(e){
     if(!(nombre(e.x) && nombre(e.y))) return;
-    const H = sol(e.x, e.y);
-    const st = {t:0, duree:e.max > 0 ? e.max : e.duree > 0 ? e.duree : 1.2, sx:e.x - 320, sy:H + 680, sz:e.y - 220, ex:e.x, ey:H, ez:e.y, acc:0};
+    const H = sol(e.x, e.y), duree = e.max > 0 ? e.max : e.duree > 0 ? e.duree : 1.2;
+    let st = null;
+    if(e.galerie){
+      // Nombre de lanceurs : celui de la galerie de la faction du camp (et non de la galerie trouvée, qui
+      // peut avoir été détruite entre le départ et cette image).
+      const b = galerieDuCamp(e.camp);
+      let n = b ? (b.def.galerie.lanceurs || 1) : 1;
+      try {
+        if(!b && typeof camps !== 'undefined' && camps[e.camp]){
+          const D = BATIMENTS[FACTIONS[camps[e.camp].faction].galerie];
+          if(D && D.galerie) n = D.galerie.lanceurs || 1;
+        }
+      } catch(err){ /* tables absentes : un lanceur */ }
+      let x0 = b ? b.x : e.x0, y0 = b ? b.y : e.y0;
+      if(nombre(x0) && nombre(y0)){
+        // Lanceur dressé sur le tablier, au sud de la galerie (voir le modèle : r3d-batiments.js, galerie) ;
+        // deux voies chez Karsk. Hauteur : le milieu du missile dressé (modèle réduit de 10 %).
+        const rang = e.galerie > 1 ? 1 : 0, hL = n > 1 ? 21 : 25;
+        y0 += 34; if(n > 1) x0 += rang ? 10.8 : -10.8;
+        const d = Math.hypot(e.x - x0, e.y - y0);
+        st = {t:0, duree, modele:n > 1 ? 2 : 1, hLanceur:hL, sx:x0, sy:sol(x0, y0) + hL, sz:y0, ex:e.x, ey:H, ez:e.y,
+          apex:Math.max(200, Math.min(560, d*0.3)), acc:0, parti:false};
+      }
+    }
+    if(!st) st = {t:0, duree, modele:0, sx:e.x - 320, sy:H + 680, sz:e.y - 220, ex:e.x, ey:H, ez:e.y, acc:0};
     st.px = st.sx; st.py = st.sy; st.pz = st.sz;
     missiles.set(e, st);
   }

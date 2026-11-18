@@ -2266,7 +2266,177 @@
     }
   }
 
+  // --------------------------------------------------- GALERIES DE TIR (novembre 2026, escarmouche)
+  // « Galerie Aiguille » (Halden, type aiguille : un lanceur) et « Terrier des Brisants » (Karsk, type
+  // terrier : deux lanceurs). Abri enterré, fixe : butte de terre sous filet de camouflage, avant-corps
+  // de béton au sud, un rideau blindé et une voie ferrée par lanceur, tablier. Chaque chariot lanceur
+  // sort sur ses rails, dresse son missile, tire, puis rentre. Emprise 120 × 120 (3 × 3 cases) ; le
+  // modèle est réduit de 10 % (reduireModele), à la demande du propriétaire.
+  // Rien d'un silo ni d'un toit ouvrant : l'entrée est horizontale, dans le flanc de la butte.
+  // Animation « galerie » (voir majBatiment), pilotée par deux champs que le moteur pose à chaque pas :
+  //   b.galT : secondes écoulées depuis l'ordre de tir (0 à 16), null ou absent quand elle est fermée ;
+  //   b.galN : nombre de lanceurs engagés dans le cycle (absent : tous).
+  // Rôles : 'rideau' (s'enroule dans le linteau) et 'chariot' (coulisse vers le sud ; enfant : berceau
+  // qui se dresse ; son « eclair » : le missile, escamoté une fois parti). Les instants du cycle
+  // (CYCLE_GALERIE) doivent rester ceux du moteur (jeu.js).
+  const CYCLE_GALERIE = {ouvert:3, sorti:6, dresse:8, ecart:0.6, rabattu:10.5, rentre:13.5, ferme:16};
+  function galerie(m, P, K){
+    const B = m.statique, n = K ? 2 : 1, voies = n === 2 ? [-12, 12] : [0];
+    const L = n === 2 ? 29 : 17.5;            // demi-largeur de l'avant-corps et du tablier
+    const w = n === 2 ? 1 : 0.86;             // butte un peu plus étroite pour un seul lanceur
+    const terre = K ? '#857752' : '#8a7c58', terre2 = K ? '#786b4a' : '#7d7151';
+    const beton = K ? P.beton : '#b4b0a4', beton2 = K ? P.beton2 : '#98958a';
+    const coque = K ? P.olive : P.panneau, coque2 = K ? P.oliveF : P.panneau2, sombre = K ? '#3a3a30' : P.acierF;
+    // Butte : trois assises de terre en gradins adoucis, au nord de l'emprise ; l'avant-corps de béton
+    // sort de son flanc sud.
+    B.piece('opaque', gPyr(0.7), terre, 0, 4.5, -22, 116*w, 9, 76, 0, 0, 0, {ao:0.4, varia:0.05});
+    B.piece('opaque', gPyr(0.72), terre2, 0, 12.5, -21, 82*w, 7, 54, 0, 0, 0, {ao:0.2});
+    B.piece('opaque', gPyr(0.62), terre, 0, 18, -21, 58*w, 4, 38, 0, 0, 0, {ao:0.15});
+    const assise = (x, z, cz, dx, dz, k) => { const u = Math.max(Math.abs(x)/dx, Math.abs(z - cz)/dz); return Math.max(0, Math.min(1, (1 - u)/(1 - k))); };
+    const hButte = (x, z) => {
+      let h = 9*assise(x, z, -22, 58*w, 38, 0.7);
+      const a2 = assise(x, z, -21, 41*w, 27, 0.72); if(a2 > 0) h = Math.max(h, 9 + 7*a2);
+      const a3 = assise(x, z, -21, 29*w, 19, 0.62); if(a3 > 0) h = Math.max(h, 16 + 4*a3);
+      return h;
+    };
+    // Filet de camouflage drapé sur le sommet ; cailloux au pied ; touffes sur les pentes
+    B.nappe('filet', -33*w, -45, 33*w, -3, 14, 9, (x, z) => hButte(x, z) + 1.1 + Math.sin(x*0.45)*0.5 + Math.cos(z*0.6)*0.45, FILET);
+    for(let i = 0; i < 16; i++){
+      const a = Math.PI*(0.5 + i/15) + (B.h() - 0.5)*0.15, s = 2.4 + B.h()*3.6;   // arc nord (ouest, nord, est)
+      B.piece('opaque', gCaillou(), i % 3 ? '#8d8876' : '#746f5e', -Math.sin(a)*(57*w + B.h()*3), s*0.3, -22 + Math.cos(a)*(37 + B.h()*3), s, s*0.7, s, B.h(), B.h()*3, 0, {ao:0.2});
+    }
+    for(let i = 0; i < 26; i++){
+      const x = (B.h() - 0.5)*108*w, z = -57 + B.h()*68, s = 2.2 + B.h()*2.2;
+      if((Math.abs(x) < 36*w && z > -47 && z < 0) || (Math.abs(x) < L + 5 && z >= 0)) continue;   // ni sous le filet, ni sur l'avant-corps
+      if(hButte(x, z) < 0.6) continue;
+      B.piece('opaque', gPyr(0.12), i % 2 ? '#4f5b36' : '#5d6340', x, hButte(x, z) + s*0.35, z, s, s*0.9, s, 0, B.h()*3, 0, {ao:0.3});
+    }
+    // Bouches d'aération et mât
+    for(const [x, z] of [[-12*w, -24], [10*w, -31]]){
+      B.cyl('metal', sombre, x, hButte(x, z) - 0.4, z, 1.5, 3.4, 8, {ao:0.2});
+      B.cyl('metal', K ? '#4a4a3a' : P.acier, x, hButte(x, z) + 3, z, 2.2, 0.7, 8, {ao:0});
+    }
+    B.cyl('metal', sombre, 31*w, hButte(31*w, -34) - 0.5, -34, 0.45, 15, 6, {ao:0});
+    B.boiteC('feux', '#ff3626', 31*w, hButte(31*w, -34) + 15, -34, 1.2, 1.2, 1.2);
+    // Avant-corps de béton encastré dans le flanc sud : corniche, garde-corps, trappes de visite
+    B.boite('opaque', beton, -L, 0, -8, L, 17, 16, {ao:0.35});
+    B.boite('opaque', beton2, -L - 1.5, 17, -9, L + 1.5, 18.6, 17.6, {ao:0});
+    B.boite('opaque', beton2, -L - 1.5, 18.6, 16.4, L + 1.5, 19.9, 17.6, {ao:0});
+    B.boite(K ? 'opaque' : 'emis', P.accent, -L - 1.6, 16.1, 17.2, L + 1.6, 16.9, 17.7, {ao:0});     // liseré de camp
+    for(const x of (n === 2 ? [-2, 17] : [8])){ B.boite('metal', sombre, x - 3, 18.6, 7, x + 3, 19.1, 12, {ao:0}); B.boite('metal', K ? '#4a4a3a' : P.acier, x - 2.2, 19.1, 7.8, x + 2.2, 19.3, 11.2, {ao:0}); }
+    B.decal(-L + 9, 18.7, 8, 8, 8, R_EMBLEME);
+    // Murs en aile le long du tablier
+    for(const s of [-1, 1]){
+      B.boite('opaque', beton, s*L, 0, 16, s*(L + 4), 9, 38, {ao:0.3});
+      B.boite('opaque', beton2, s*L, 0, 38, s*(L + 4), 4.6, 57, {ao:0.3});
+      B.boite('opaque', P.accent, s*(L - 0.1), 8.2, 16, s*(L + 4.1), 9.1, 38.1, {ao:0});
+      B.boiteC('feux', '#ffb02e', s*(L + 2), 9.9, 37, 1.3, 1.3, 1.3);
+    }
+    // Baies du portail (fond sombre), pilier central, linteau qui loge les rideaux blindés
+    B.boite('opaque', '#0b0c0d', voies[0] - 11.5, 1, 16, voies[n - 1] + 11.5, 15, 16.25, {ao:0});
+    if(n === 2) B.boite('opaque', beton2, -0.6, 1, 16, 0.6, 15, 17.3, {ao:0.2});
+    B.boite('metal', sombre, -L, 15, 16, L, 16.1, 18, {ao:0});
+    // Tablier, voies, traverses, plaques de tir noircies, butoirs
+    B.boite('opaque', P.dalle, -L, 0, 16, L, 1, 57, {ao:0.1});
+    for(const xc of voies){
+      for(let z = 19; z <= 54; z += 4.4) B.boite('opaque', '#544c40', xc - 6.6, 1, z - 0.7, xc + 6.6, 1.22, z + 0.7, {ao:0});
+      for(const dx of [-5, 5]) B.boite('metal', '#2a2d30', xc + dx - 0.45, 1, 16.3, xc + dx + 0.45, 1.5, 55.5, {ao:0});
+      B.boite('opaque', '#46423c', xc - 8.5, 1, 29, xc + 8.5, 1.1, 49, {ao:0});
+      B.boite('opaque', '#e8c23a', xc - 6, 1, 55.5, xc + 6, 3.2, 56.6, {ao:0});
+      B.boite('opaque', '#2a2d30', xc - 2, 1, 55.4, xc + 2, 3.3, 56.7, {ao:0});
+    }
+    for(const z of [18.4, 54.6]) B.boite('opaque', '#e8c23a', -L + 5, 1, z - 0.5, L - 5, 1.07, z + 0.5, {ao:0});
+    // Abords, selon le camp
+    if(K){
+      for(const s of [-1, 1]){
+        const cx = L + 17;
+        for(let i = 0; i < 5; i++){ const a0 = 0.25 + i*0.5, a1 = a0 + 0.5; sacs(B, s*(cx - Math.cos(a0)*9), 42 + Math.sin(a0)*9, s*(cx - Math.cos(a1)*9), 42 + Math.sin(a1)*9, 2, 0); }
+        caisse(B, s*(L + 15), 0, 30, 3, P.olive, 0.15*s); caisse(B, s*(L + 11), 0, 33, 2.6, P.olive, -0.2);
+        fut(B, s*(L + 20), 0, 31, s > 0 ? P.rouille : P.olive);
+      }
+    } else {
+      for(const s of [-1, 1]){
+        const cx = L + 17;
+        B.cyl('metal', P.acierC, s*cx, 0, 50, 0.45, 15, 6, {ao:0}); B.boite('emis', P.lumiere, s*cx - 1.8, 14.6, 49.3, s*cx + 1.8, 15.3, 50.7, {ao:0});
+        B.boite('metal', P.acierF, s*(L + 11), 0, 26, s*(L + 17), 6, 33, {ao:0.25}); B.boite('emis', '#7dff9a', s*(L + 14) - 0.6, 3.8, 33, s*(L + 14) + 0.6, 4.6, 33.12, {ao:0});
+      }
+    }
+    m.corps = [-41*w, -48, 41*w, 16, 17];
+    m.points = [[0, 18, 6], [-20*w, 16, -22], [voies[0] + 2, 6, 30]];
+    // Rideaux blindés (un par voie) : ils s'enroulent dans le linteau
+    voies.forEach((xc, rang) => {
+      const D = new Bati(0, 'metal');
+      D.boite('metal', coque2, -11.5, -14, 0, 11.5, 0, 0.8, {ao:0.25});
+      for(let y = -13; y < 0; y += 2) D.boite('metal', sombre, -11.5, y, 0.8, 11.5, y + 0.35, 1.05, {ao:0});
+      D.boite('metal', P.accent, -11.5, -5.2, 0.8, 11.5, -3.6, 1.1, {ao:0});
+      D.boite('metal', '#e8c23a', -11.5, -14, 0.8, 11.5, -12.9, 1.1, {ao:0});
+      m.anims.push({type:'galerie', role:'rideau', rang, x:xc, y:15, z:16.45, bati:D});
+    });
+    // Chariots lanceurs, berceau et missile. Halden : l'« Aiguille », long et effilé, blanc à bande
+    // de camp ; Karsk : le « Brisant », plus court et plus trapu, olive à pointe rouge.
+    const corpsM = K ? '#6f6d49' : '#dfe2e4', pointe = K ? P.accentF : '#2f353b';
+    const rM = K ? 2.9 : 2.4, lM = K ? 25 : 31, lP = K ? 6.6 : 9.4;      // rayon, longueur du corps, longueur de la pointe
+    const z0 = 14 - (-4 + 2 + lM + lP);                                // au repos, la pointe reste derrière le rideau
+    voies.forEach((xc, rang) => {
+      const C = new Bati(0, 'metal');
+      C.boite('metal', coque2, -6.6, 1.4, -14, 6.6, 3.2, 14, {ao:0.2});
+      C.boite('metal', sombre, -5.6, 3.2, -13.4, 5.6, 3.9, 13.4, {ao:0});
+      C.boite('metal', P.accent, -6.7, 2, -14.05, 6.7, 2.6, 14.05, {ao:0});
+      for(const z of [-9.5, -5.5, 5.5, 9.5]) for(const x of [-5, 5]) C.cylH('metal', '#1c1e20', x, 1.25, z, 1.25, 1.1, 'x', 10);
+      C.boite('metal', coque, -4.4, 3.9, -13.4, 4.4, 6.4, -8.6, {ao:0.15});                            // armoire de commande (arrière)
+      for(const x of [-3.9, 3.9]) C.boite('metal', sombre, x - 0.7, 3.9, -5.8, x + 0.7, 6.6, -2.2, {ao:0});   // paliers du berceau
+      C.boite('metal', sombre, -2.6, 3.9, 10.4, 2.6, 5.4, 11.8, {ao:0});                               // appui avant du missile couché
+      for(const z of [-12.4, 12.4]) for(const x of [-7.6, 7.6]) C.boite('metal', sombre, x - 0.8, 0.4, z - 0.8, x + 0.8, 3, z + 0.8, {ao:0});   // vérins d'appui
+      const R = new Bati(0, 'metal');
+      R.boite('metal', sombre, -1.7, -0.5, -1, 1.7, 0.7, 18, {ao:0});
+      for(const z of [3.5, 13]){ R.boite('metal', coque, -3.9, 0.3, z, 3.9, 1.2, z + 1.4, {ao:0}); for(const x of [-3.9, 3.2]) R.boite('metal', coque, x, 1.2, z, x + 0.7, 4.8, z + 1.4, {ao:0}); }
+      R.boite('metal', sombre, -2.8, -0.6, -1.8, 2.8, 2.4, 1.4, {ao:0});
+      // Missile (canal « opaque » : peinture mate, claire, lisible de loin)
+      const M = new Bati(0, 'opaque');
+      M.cylH('opaque', corpsM, 0, 0, 2 + lM/2, rM, lM, 'z', 14);
+      M.piece('opaque', gCone(14), pointe, 0, 0, 2 + lM + lP/2, 2*rM, lP, 2*rM, Math.PI/2, 0, 0, {ao:0});
+      M.cylH('opaque', P.accent, 0, 0, 2 + lM*0.82, rM + 0.12, 2.6, 'z', 14);
+      if(!K) M.cylH('opaque', P.accent, 0, 0, 2 + lM*0.66, rM + 0.12, 1, 'z', 14);
+      M.cylH('opaque', '#2a2d30', 0, 0, 8, rM + 0.12, 1.4, 'z', 14);
+      M.cylH('opaque', '#18191a', 0, 0, 1.1, rM*0.72, 1.8, 'z', 10);
+      const e = rM + 1.1;
+      for(const [x, y, sx, sy] of [[e, 0, 3.4, 0.35], [-e, 0, 3.4, 0.35], [0, e, 0.35, 3.4], [0, -e, 0.35, 3.4]]) M.piece('opaque', gBoite(), pointe, x, y, 4.8, sx, sy, 5.4, 0, 0, 0, {ao:0});
+      m.anims.push({type:'galerie', role:'chariot', rang, x:xc, y:1.5, z:z0, course:42 - z0, levee:1.36, bati:C,
+        enfant:{x:0, y:4.9, z:-4, bati:R, eclair:{x:0, y:3.9, z:0, bati:M}}});
+    });
+    reduireModele(m, 0.9);
+  }
+  function galerieHalden(m, P){ galerie(m, P, false); }
+  function galerieKarsk(m, P){ galerie(m, P, true); }
+  // Réduit un modèle autour de son centre au sol : géométries, pièces animées et repères.
+  function reduireBati(B, k){ for(const c in B.canaux){ const p = B.canaux[c].p; for(let i = 0; i < p.length; i++) p[i] *= k; } }
+  function reduireModele(m, k){
+    reduireBati(m.statique, k);
+    m.corps = m.corps.map(v => v*k); m.points = m.points.map(p => p.map(v => v*k)); m.cheminees = m.cheminees.map(p => p.map(v => v*k));
+    for(const a of m.anims){
+      a.x *= k; a.y *= k; a.z *= k; if(a.course) a.course *= k; if(a.bati) reduireBati(a.bati, k);
+      const e = a.enfant;
+      if(!e) continue;
+      e.x *= k; e.y *= k; e.z *= k; if(e.bati) reduireBati(e.bati, k);
+      if(e.eclair){ e.eclair.x *= k; e.eclair.y *= k; e.eclair.z *= k; if(e.eclair.bati) reduireBati(e.eclair.bati, k); }
+    }
+  }
+  // Pose de la galerie à l'instant b.galT de son cycle (hors cycle : fermée).
+  const _poseG = {t:-1, n:0, porte:0, sortie:0, levee:0};
+  function lissG(a, b, t){ const k = Math.max(0, Math.min(1, (t - a)/(b - a))); return k*k*(3 - 2*k); }
+  function poseGalerie(b){
+    // (Number.isFinite : une valeur non numérique donnerait des matrices corrompues, donc une scène cassée)
+    const t = Number.isFinite(b.galT) ? b.galT : -1, g = _poseG, C = CYCLE_GALERIE;
+    g.t = t; g.n = typeof b.galN === 'number' ? b.galN : 9;
+    if(t < 0 || t >= C.ferme){ g.t = -1; g.porte = g.sortie = g.levee = 0; return g; }
+    g.porte = lissG(0, C.ouvert, t) - lissG(C.rentre, C.ferme, t);
+    g.sortie = lissG(C.ouvert, C.sorti, t) - lissG(C.rabattu, C.rentre, t);
+    g.levee = lissG(C.sorti, C.dresse, t) - lissG(C.dresse + C.ecart, C.rabattu, t);
+    return g;
+  }
+
   const FABRIQUES = {
+    aiguille:{halden:galerieHalden}, terrier:{karsk:galerieKarsk},
     qg:{halden:qgHalden, karsk:qgKarsk}, caserne:{halden:caserneHalden, karsk:caserneKarsk},
     usine:{halden:usineHalden, karsk:usineKarsk}, relais:{halden:relaisHalden, karsk:relaisHalden},
     depot:{halden:depotKarsk, karsk:depotKarsk},
@@ -2307,7 +2477,7 @@
       m.statique.boite('opaque', P.accent, -d*0.72, 10, -d*0.72, d*0.72, 11, d*0.72, {ao:0});
       m.corps = [-d*0.7, -d*0.7, d*0.7, d*0.7, 12]; m.points = [[0, 12, 0]];
     }
-    if(couleurVar(fac) && base === 'halden' && f && type !== 'aeroport') cadreCamp(m, palette(fac));
+    if(couleurVar(fac) && base === 'halden' && f && type !== 'aeroport' && !BATIMENTS[type].galerie) cadreCamp(m, palette(fac));
     m.geos = m.statique.construire();
     for(const a of m.anims){
       if(a.bati) a.geos = a.bati.construire();
@@ -2618,6 +2788,19 @@
       else if(d.type === 'balayage') a.pivot.rotation.y = d.base + Math.sin(temps*d.vitesse + phL*6.28)*d.amplitude;
       else if(d.type === 'porte') a.pivot.scale.y = Math.max(0.06, 1 - 0.94*s.activite);
       else if(d.type === 'pont') a.pivot.position.z = d.z + Math.sin(temps*0.45 + s.phase*6.28)*d.amplitude*s.activite;
+      else if(d.type === 'galerie'){
+        // Galeries de tir : rideaux, chariots, berceaux et missiles suivent le cycle (b.galT, b.galN).
+        const g = poseGalerie(b), actif = d.rang < g.n;   // lanceur engagé dans ce cycle
+        if(d.role === 'rideau') a.pivot.scale.y = Math.max(0.04, 1 - 0.96*(actif ? g.porte : 0));
+        else {
+          // Lanceur dessiné seulement quand il sort : fermé, il est enfoui dans la butte (12 appels de dessin
+          // gagnés par Terrier fermé) ; en chantier, la coupe le laisserait voir.
+          a.pivot.visible = actif && g.t >= 0 && !s.chantier;
+          a.pivot.position.z = d.z + d.course*(actif ? g.sortie : 0);
+          if(a.enfant) a.enfant.rotation.x = -d.levee*(actif ? g.levee : 0);
+          if(a.eclair) a.eclair.scale.setScalar(actif && g.t >= CYCLE_GALERIE.dresse + CYCLE_GALERIE.ecart*d.rang ? 0.001 : 1);
+        }
+      }
       else if(d.type === 'arme'){
         // Défense fixe : l'arme suit b.angleT (repère du jeu : 0 = est, π/2 = sud), recul au tir.
         const ang = typeof b.angleT === 'number' ? b.angleT : Math.PI/2;
@@ -2919,7 +3102,8 @@
     const out = [];
     if(typeof BATIMENTS === 'undefined') return out;
     const F = typeof FACTIONS !== 'undefined' ? FACTIONS : {};
-    const propres = f => { const x = F[f] || {}; return [x.special, x.defense].concat(x.extras || []).filter(Boolean); };
+    // (x.galerie : la galerie de tir est propre à sa faction, inutile de préparer celle de l'autre)
+    const propres = f => { const x = F[f] || {}; return [x.special, x.defense, x.galerie].concat(x.extras || []).filter(Boolean); };
     const miens = new Set(propres(base)), autres = new Set();
     for(const f in F) if(f !== base) for(const t of propres(f)) autres.add(t);
     for(const type in BATIMENTS){

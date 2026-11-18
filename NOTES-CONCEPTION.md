@@ -45,7 +45,7 @@ d'effets, et les modules 3D les mettent en scène à chaque image, à travers
 l'objet global `R3D`. On peut donc modifier les règles sans toucher au rendu,
 et inversement.
 
-Chaque balise `<script>` porte un numéro de version (`?v=33` au 16 novembre 2026 : délai de retour d'un joueur porté à 120 secondes ; `?v=32` : annonce du salon liée à son serveur, issue de la partie annoncée par l'hôte ; `?v=31` : écran de fin de l'invité seulement sur la fin confirmée par l'hôte, clés des joueurs partis jamais oubliées, voir « Multijoueur » ; `?v=30` : compteurs datés dans le futur et identifiant d'un joueur sorti du salon ; `?v=29` : retour d'un invité et fin de partie protégés ; `?v=28` : messages en ligne signés ; `?v=26` et `?v=27` : multijoueur corrigé et protégé ; `?v=25` : multijoueur en ligne ; `?v=24` : seconde passe de fluidité, voir « Fluidité » à la fin ; la version publiée sur GitHub Pages est encore la 24, solo seulement). **Il faut
+Chaque balise `<script>` porte un numéro de version (`?v=34` au 18 novembre 2026 : galeries de tir en escarmouche solo, voir « Galeries de tir » ; `?v=33` au 16 novembre 2026 : délai de retour d'un joueur porté à 120 secondes ; `?v=32` : annonce du salon liée à son serveur, issue de la partie annoncée par l'hôte ; `?v=31` : écran de fin de l'invité seulement sur la fin confirmée par l'hôte, clés des joueurs partis jamais oubliées, voir « Multijoueur » ; `?v=30` : compteurs datés dans le futur et identifiant d'un joueur sorti du salon ; `?v=29` : retour d'un invité et fin de partie protégés ; `?v=28` : messages en ligne signés ; `?v=26` et `?v=27` : multijoueur corrigé et protégé ; `?v=25` : multijoueur en ligne ; `?v=24` : seconde passe de fluidité, voir « Fluidité » à la fin ; la version publiée sur GitHub Pages est encore la 24, solo seulement). **Il faut
 l'augmenter à chaque modification d'un fichier**, sinon le navigateur garde
 l'ancienne version en mémoire.
 
@@ -752,6 +752,85 @@ adverse.
 nettement affaibli le 12 novembre 2026 : 7 000 points de vie et 2 000 de
 bouclier en difficulté Normale, contre 25 000 et 6 000 avant.
 
+### Galeries de tir (18 novembre 2026, `?v=34`, escarmouche solo seulement)
+
+Demande du propriétaire : un abri fixe d'où sortent un ou deux lanceurs de
+missiles, qui tirent n'importe où sur la carte puis rentrent ; on ne peut le
+détruire que pendant qu'il tire. Option C retenue : une version par camp.
+
+| | Halden : Galerie Aiguille (`aiguille`) | Karsk : Terrier des Brisants (`terrier`) |
+|---|---|---|
+| Lanceurs | 1 | 2 |
+| Prix, chantier, PV | 1 200, 40 s, 1 500 | 1 000, 45 s, 1 900 |
+| Missile : prix, fabrication | 400, 120 s | 220 pièce, 60 s pièce |
+| Missile : dégâts, rayon | 600, rayon 70 | 330 chacun, rayon 95, dispersion jusqu'à 45 |
+
+- **Activation** : case « Galeries de tir » de l'écran d'escarmouche, décochée
+  par défaut (`?galeries=1` la coche). Décochée, rien ne change : le bâtiment
+  n'existe dans aucune barre et les empreintes de référence du solo sont
+  identiques. Jamais en mission, jamais en ligne (lot à part), ni dans la
+  vitrine `?demo`. Une seule galerie par camp, après l'usine.
+- **Fabrication** : bouton « Fabriquer un missile » de la fiche de la galerie ;
+  payé à la commande, un missile à la fois, autant que de lanceurs ; elle
+  n'avance que galerie fermée.
+- **Tir** : bouton « Tirer », visée comme un pouvoir (clic sur la vue ou sur la
+  minicarte). Cycle de 16 s, le même pour les deux camps : rideaux ouverts à
+  3 s, lanceurs sortis à 6 s, missiles dressés à 8 s, départs à 8 s et 8,6 s,
+  vol de 5 s quelle que soit la distance, lanceurs rentrés à 13,5 s, fermée à
+  16 s. Les adversaires sont prévenus à l'ouverture (message, touche Espace,
+  marque sur la minicarte), puis voient le point d'impact marqué au sol au
+  départ du missile.
+- **Intouchable fermée** : hors de ces 16 s (et hors chantier), aucun tir,
+  aucune explosion de zone, aucun projectile ne l'entame, et rien ne la vise.
+  Règle jugée au moment de l'impact. Elle n'est jamais réparée : les dégâts
+  s'accumulent d'une ouverture à l'autre.
+- **Garde-fous d'équilibre** : arme propre `missileGalerie`, demi-dégâts sur
+  les véhicules légers (une salve ne tue pas un collecteur) ; aucune récompense
+  en points de commandement pour ses destructions ; un camp réduit à sa galerie
+  est éliminé et elle s'effondre (sinon il serait impossible à éliminer).
+- **Ordinateur** : dans ce lot, il ne construit pas de galerie et ne s'en sert
+  pas ; il sait seulement ne jamais viser une galerie fermée. À faire ensuite :
+  construction, tir, riposte pendant la fenêtre.
+- **Code** : `jeu.js` (tables `BATIMENTS.aiguille` / `terrier`, `CYCLE_GALERIE`,
+  `galeriesActives`, `galerieFermee`, `majGalerie`, ordres `fabriquerMissile` et
+  `tirGalerie`, restés locaux), `r3d-batiments.js` (bloc « GALERIES DE TIR » :
+  modèle par camp, réduit de 10 %, animation pilotée par `b.galT` et `b.galN`),
+  `r3d-effets.js` (missile en cloche depuis le lanceur),
+  `verif-missions-moteur.js` (`testerGaleries()`).
+- **Chiffres** : points de départ, pas encore réglés par des parties. L'option C
+  d'origine (un tir toutes les 72 s) a été jugée beaucoup trop forte par les
+  relecteurs : une super-arme ne revient en pratique que toutes les 450 s (10
+  points à 1 point par 45 s). La fabrication a donc été allongée (un tir
+  complet toutes les 136 s au plus vite).
+- **Vérifié le 18 novembre 2026** (volet du navigateur masqué, simulation
+  avancée à la main) : quatre étapes de développement puis cinq relecteurs
+  indépendants en lecture seule (règle « intouchable » et abus, solo inchangé,
+  multijoueur intact, interface, rendu) : aucun défaut bloquant ; leurs
+  constats importants (description trop longue qui cachait la ligne d'état,
+  clic droit sur une galerie fermée qui laissait les unités sur place) sont
+  corrigés. `avecGraine(7, () => testerGaleries())` : 51 verdicts sur 51, plus
+  trois parties d'ordinateurs sans galerie fermée visée ni touchée. Vraie
+  partie d'essai pour les deux camps : 597 points de dégâts sur le QG adverse
+  pour l'Aiguille, 648 pour une salve de Brisants. Règle d'or, pages neuves,
+  option décochée : duel `7d442efb`, mission `halden-1` `6053f9be` (victoire à
+  549 s), `karsk-4` `b81d2921` ; partie à quatre camps `8e338d28`, identique
+  à la référence v24 par le même appel :
+  `avecGraine(12, () => { partieOrdinateurs([{id:'J',faction:'halden',equipe:'A',niveau:'ultra'},{id:'I',faction:'karsk',equipe:'B',niveau:'difficile'},{id:'K',faction:'halden',equipe:'C',niveau:'facile'},{id:'L',faction:'karsk',equipe:'D',niveau:'normal'}], 480); return empreinteEtat(); })`
+  (l'ancienne valeur `22f9e99a` venait d'une composition qui n'a pas été
+  notée : elle n'est pas recalculable). `reseau.js` n'est pas modifié.
+- **Non vérifié** : le jeu à la souris ; l'image du bouton de construction
+  (elle ne se fabrique pas quand le volet est masqué) ; l'allure de nuit et
+  dans la brume.
+- **Limites connues** : l'ordinateur peut gaspiller un pouvoir sur une galerie
+  ouverte qui se referme avant l'impact ; l'effondrement d'une galerie à
+  l'élimination de son camp compte comme une destruction dans les statistiques
+  de fin ; les missiles en vol portent la couleur d'origine de leur faction
+  (bleu ou rouge), pas celle du camp dans une partie à 3 ou 4 camps ; la visée
+  d'une galerie s'annule si l'on sélectionne autre chose.
+- **Outils de travail** (non publiés) : `travaux/galerie/` — cahier des
+  charges, étude préalable, page d'aperçu `apercu.html` et son serveur
+  (`serveur_apercu.py`, port 8768 : enregistre des images du rendu).
+
 ### Commandes
 
 Souris pour sélectionner et ordonner, molette ou touches + et − (rangée
@@ -1302,6 +1381,12 @@ développement, le 11 novembre 2026 :
 
 ## Choix faits sans le propriétaire, à valider
 
+- (`?v=34`, galeries de tir) Noms « Galerie Aiguille » et « Terrier des Brisants » ; case décochée par défaut ;
+  missiles payés en minerai et fabriqués d'avance (400 en 120 s pour Halden, 220 en 60 s pièce pour Karsk) au lieu
+  des 60 s et 45 s de l'option C d'origine, jugée trop forte ; galerie jamais réparée ; demi-dégâts sur les
+  véhicules légers ; aucun point de commandement pour ses destructions ; une galerie ne compte pas pour rester en
+  vie (camp éliminé, galerie effondrée) ; fermée, elle reste visible (le jeu n'a pas de brouillard de guerre) ;
+  « escarmouche seulement » compris comme : ni campagne, ni partie en ligne pour l'instant.
 - (`?v=31`, `?v=32`) Chez un invité, l'écran de fin n'apparaît que sur la fin confirmée par l'hôte : il arrive
   environ 1,6 s après celui de l'hôte (l'attente de l'hôte avant l'annonce est passée de 3 s à 1,5 s en `?v=32`), et
   un invité dont toute l'équipe est éliminée dans une partie à 3 ou 4 équipes reste spectateur jusqu'à la fin
@@ -1345,6 +1430,10 @@ développement, le 11 novembre 2026 :
 4. Bruitages.
 5. Troisième camp jouable, le Réseau Mistral.
 6. Brouillard de guerre.
+7. Galeries de tir, suite : l'ordinateur qui en construit, s'en sert et riposte
+   pendant la fenêtre d'ouverture ; les galeries dans les parties en ligne
+   (instantanés, ordres validés par l'hôte, réglage du salon) ; réglage des
+   chiffres par des parties ; puis, si souhaité, un lanceur destructible à part.
 
 ## Réglages de rendu du 13 novembre 2026
 

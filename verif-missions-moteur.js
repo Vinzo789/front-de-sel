@@ -1333,3 +1333,468 @@ function essaiEcho(opts){
   });
 }
 window.essaiEcho = essaiEcho;
+
+// ---------------------------------------------------------------------
+//  Galeries de tir (novembre 2026) : essais automatiques des règles du cahier des charges
+//  (travaux/galerie/CAHIER-DES-CHARGES.md), pour les deux camps, par simulation sans rendu et sans attendre le
+//  temps réel. À lancer depuis front-de-sel.html?verif (escarmouche, pas de mission) :
+//    avecGraine(7, () => testerGaleries())               → règles (construction … ordres refusés en ligne)
+//    avecGraine(7, () => testerGaleries('ordinateur', 0))   → partie d'ordinateurs n° 0, 1 ou 2 avec galeries
+//                                                              (sans numéro : les trois, plus long)
+//  Renvoie une liste de verdicts {nom, ok, detail}. L'option « Galeries de tir » est cochée pendant l'essai puis
+//  remise dans son état d'avant ; chaque scène repart d'une partie neuve (reinitialiserPartie). Rien n'est
+//  changé aux outils existants : cette fonction n'est appelée par aucun d'eux.
+// ---------------------------------------------------------------------
+function testerGaleries(quoi, numero){
+  if(MISSION) return [{nom:'page', ok:false, detail:'testerGaleries se lance depuis la page d’escarmouche (?verif), pas depuis une mission'}];
+  window.enregistrerVictoire = () => {};
+  const verdicts = [];
+  const V = (nom, ok, detail) => { verdicts.push({nom, ok:!!ok, detail:typeof detail === 'string' ? detail : JSON.stringify(detail)}); };
+  const DT = 0.05, EPS = 0.11;   // EPS : un pas de simulation et un peu plus (dates relevées au pas près)
+  const pas = s => { for(let k = 0; k < Math.round(s/DT); k++) miseAJour(DT); };
+  // Avance jusqu'à ce que cond() soit vraie (au plus max s) ; renvoie le temps écoulé, ou null.
+  const jusqua = (cond, max) => { const t0 = temps; while(temps - t0 < max){ miseAJour(DT); if(cond()) return temps - t0; } return null; };
+  const r1 = v => Math.round(v*10)/10, r2 = v => Math.round(v*100)/100;
+  const qg = id => ents.find(e => e.camp === id && e.type === 'qg' && !e.mort);
+  const typeGal = id => faction(id).galerie;
+  // Scène : partie neuve à trois camps (J Halden et K Halden alliés, équipe A ; I Karsk, équipe B), ordinateurs
+  // arrêtés, seuls les QG restent (tableRase), réserves larges (au-dessus de 400 : pas de revenu de secours).
+  const scene = () => {
+    reinitialiserPartie();
+    demarrer('halden', configTest('halden', '2c1'));
+    tableRase();
+    for(const id of campsEnJeu()){ camps[id].reserves = 20000; camps[id].points = 0; camps[id].recharges = {}; }
+  };
+  const poserGalerie = id => { const t = typeGal(id), p = trouverEmplacement(t, qg(id)); return p ? creerBatiment(t, id, p.c, p.r, true) : null; };
+  const unite = (type, id, x, y) => { const p = pointLibre(x, y); return creerUnite(type, id, p.x, p.y); };
+  // Point dégagé à d px d'un QG, vers le centre de la carte (loin de tout bâtiment).
+  const versCentre = (id, d) => { const q = qg(id), a = Math.atan2(HAUT/2 - q.y, LARG/2 - q.x); return pointLibre(q.x + Math.cos(a)*d, q.y + Math.sin(a)*d); };
+  // Espions (remis en place à la fin) : effets créés, explosions de zone, dégâts réellement subis par cible.
+  const orig = {effet:window.effet, explosionZone:window.explosionZone, infliger:window.infliger, notifier:window.notifier};
+  let journal = null;   // {effets:[], zones:[], degats:Map(id → [{t, deg, auteur}])}
+  const ecouter = () => { journal = {effets:[], zones:[], degats:new Map()}; };
+  window.effet = function(type, p){ if(journal) journal.effets.push({type, t:temps, p}); return orig.effet.apply(this, arguments); };
+  window.explosionZone = function(x, y, r, deg, arme, auteur){ if(journal) journal.zones.push({t:temps, x, y, r, deg, arme, auteur}); return orig.explosionZone.apply(this, arguments); };
+  window.infliger = function(c, deg, auteur){
+    const p0 = c ? c.pv : 0, res = orig.infliger.apply(this, arguments);
+    if(journal && c && p0 - c.pv > 0){ const l = journal.degats.get(c.id) || []; l.push({t:temps, deg:p0 - c.pv, auteur}); journal.degats.set(c.id, l); }
+    return res;
+  };
+  const subi = (e, filtre) => (journal.degats.get(e.id) || []).filter(d => !filtre || filtre(d)).reduce((s, d) => s + d.deg, 0);
+  const parGalerie = d => d.auteur && d.auteur.galerie;
+  const optAvant = optionGaleries, reseauAvant = modeReseau, roleAvant = roleMonde;
+  try {
+    optionGaleries = true;
+    if(quoi === 'ordinateur') essaisOrdinateur();
+    else essaisRegles();
+  } catch(err){
+    V('exécution de l’essai', false, 'ERREUR t=' + (typeof temps === 'number' ? temps.toFixed(2) : '?') + ' ' + err.message + ' | ' + String(err.stack || '').split('\n').slice(1, 3).join(' | '));
+  } finally {
+    Object.assign(window, orig);
+    optionGaleries = optAvant; modeReseau = reseauAvant; roleMonde = roleAvant;
+  }
+  return verdicts;
+
+  // ----------------------------------------------------------------- règles
+  function essaisRegles(){
+    // 1. Construction (une seule par camp, prérequis, option décochée → refus) : J (Halden) et I (Karsk).
+    scene();
+    for(const id of ['J', 'I']){
+      const t = typeGal(id), D = BATIMENTS[t], q = qg(id);
+      const o = unite(faction(id).ouvrier, id, q.x, q.y + 110), p = trouverEmplacement(t, q);
+      const ordre = () => ({type:'construire', bat:t, c:p.c, r:p.r, ouvrierIds:[o.id]});
+      optionGaleries = false;
+      const rOff = executerOrdre(id, ordre());
+      const absente = !batimentsConstructibles(faction(id)).includes(t);
+      optionGaleries = true;
+      V('construction ' + id + ' : option décochée → refus', !rOff.ok && absente && !ents.some(e => e.camp === id && estGalerie(e)),
+        {motif:rOff.motif, absenteDeLaListe:absente});
+      const rSans = executerOrdre(id, ordre());
+      V('construction ' + id + ' : sans usine → refus', !rSans.ok && /Nécessite/.test(rSans.motif || ''), {motif:rSans.motif});
+      const pu = trouverEmplacement('usine', {x:q.x, y:q.y - 200}); creerBatiment('usine', id, pu.c, pu.r, true);
+      const p2 = trouverEmplacement(t, q);   // l'usine a pu prendre la place
+      p.c = p2.c; p.r = p2.r;
+      const autre = id === 'J' ? 'terrier' : 'aiguille';
+      const rAutre = executerOrdre(id, {type:'construire', bat:autre, c:p.c, r:p.r, ouvrierIds:[o.id]});
+      V('construction ' + id + ' : galerie de l’autre faction (' + autre + ') → refus', !rAutre.ok, {motif:rAutre.motif});
+      const r0 = camps[id].reserves, rOk = executerOrdre(id, ordre()), g = rOk.ok ? entiteParId(rOk.id) : null;
+      V('construction ' + id + ' : avec usine → acceptée, prix payé', rOk.ok && g && g.enCours && r0 - camps[id].reserves === D.cout,
+        {ok:rOk.ok, motif:rOk.motif, paye:r0 - camps[id].reserves, prix:D.cout});
+      const p3 = trouverEmplacement(t, {x:q.x, y:q.y + 300});
+      const rDeux = executerOrdre(id, {type:'construire', bat:t, c:p3.c, r:p3.r, ouvrierIds:[o.id]});
+      V('construction ' + id + ' : seconde galerie pendant le chantier → refus', !rDeux.ok && rDeux.motif === MOTIF_UNE_GALERIE, {motif:rDeux.motif});
+      if(g){
+        const duree = jusqua(() => !g.enCours, 200);
+        const rTrois = executerOrdre(id, {type:'construire', bat:t, c:p3.c, r:p3.r, ouvrierIds:[o.id]});
+        V('construction ' + id + ' : chantier terminé, seconde galerie toujours refusée', duree !== null && !rTrois.ok && rTrois.motif === MOTIF_UNE_GALERIE
+          && Math.abs(g.pv - D.pv) < 0.5 && g.gal && g.gal.t0 === null && g.galT === null && g.galN === 0,
+          {dureeChantier:duree === null ? 'non fini' : r1(duree), pv:g.pv, motif:rTrois.motif});
+      }
+    }
+
+    // 2. Fabrication (prix, durée, plafond, pas pendant un cycle) ; option décochée → refus.
+    scene();
+    for(const id of ['J', 'I']){
+      const g = poserGalerie(id), G = g.def.galerie;
+      optionGaleries = false;
+      const r0 = camps[id].reserves, rOff = executerOrdre(id, {type:'fabriquerMissile', id:g.id}), rOffTir = executerOrdre(id, {type:'tirGalerie', id:g.id, x:1600, y:1100});
+      optionGaleries = true;
+      V('fabrication ' + id + ' : option décochée → refus (fabriquer et tirer)', !rOff.ok && !rOffTir.ok && rOff.motif === MOTIF_SANS_GALERIES
+        && rOffTir.motif === MOTIF_SANS_GALERIES && camps[id].reserves === r0 && g.gal.fab === 0, {motifs:[rOff.motif, rOffTir.motif]});
+      const ra = camps[id].reserves, rA = executerOrdre(id, {type:'fabriquerMissile', id:g.id});
+      V('fabrication ' + id + ' : prix payé à l’ordre', rA.ok && ra - camps[id].reserves === G.coutMissile && g.gal.fab === 1 && g.gal.fabT === G.tempsMissile,
+        {paye:ra - camps[id].reserves, prix:G.coutMissile, fab:g.gal.fab, fabT:g.gal.fabT});
+      const rB = executerOrdre(id, {type:'fabriquerMissile', id:g.id}), rC = executerOrdre(id, {type:'fabriquerMissile', id:g.id});
+      const plafond = G.lanceurs === 1 ? !rB.ok : (rB.ok && !rC.ok);
+      V('fabrication ' + id + ' : plafond stock + commandes ≤ ' + G.lanceurs, plafond && g.gal.fab === G.lanceurs, {fab:g.gal.fab, refus:(G.lanceurs === 1 ? rB : rC).motif});
+      g._prets = [];
+    }
+    // Durées : un missile toutes les tempsMissile s (un à la fois).
+    const gJ = ents.find(e => e.camp === 'J' && estGalerie(e)), gI = ents.find(e => e.camp === 'I' && estGalerie(e));
+    const t0 = temps;
+    for(let k = 0; k < Math.round(125/DT); k++){
+      miseAJour(DT);
+      for(const g of [gJ, gI]) while(g._prets.length < g.gal.stock) g._prets.push(r1(temps - t0));
+    }
+    V('fabrication J : durée 120 s', gJ._prets.length === 1 && Math.abs(gJ._prets[0] - 120) <= EPS, {prets:gJ._prets, stock:gJ.gal.stock});
+    V('fabrication I : 60 s pièce, un à la fois', gI._prets.length === 2 && Math.abs(gI._prets[0] - 60) <= EPS && Math.abs(gI._prets[1] - 120) <= EPS,
+      {prets:gI._prets, stock:gI.gal.stock});
+    // Réserves insuffisantes → refus, rien de prélevé.
+    {
+      const rs = camps.I.reserves; gI.gal.stock = 0; camps.I.reserves = 100;
+      const r = executerOrdre('I', {type:'fabriquerMissile', id:gI.id});
+      V('fabrication I : réserves insuffisantes → refus', !r.ok && r.code === 'reserves' && camps.I.reserves === 100 && gI.gal.fab === 0, {motif:r.motif, code:r.code});
+      camps.I.reserves = rs; gI.gal.stock = 2;
+    }
+    // Pas pendant un cycle : J tire, commande un missile pendant le cycle (accepté), la fabrication attend la fermeture.
+    {
+      const cible = qg('I'), r = executerOrdre('J', {type:'tirGalerie', id:gJ.id, x:cible.x, y:cible.y});
+      const rc = executerOrdre('J', {type:'fabriquerMissile', id:gJ.id});
+      const f0 = gJ.gal.fabT;
+      pas(10); const f10 = gJ.gal.fabT;
+      pas(10); const f20 = gJ.gal.fabT;
+      V('fabrication J : commande acceptée pendant un cycle, mais à l’arrêt jusqu’à la fermeture', r.ok && rc.ok && f0 === 120 && f10 === 120 && f20 < 120 && f20 > 110,
+        {tir:r.ok, commande:rc.ok, fabT:[f0, r2(f10), r2(f20)]});
+    }
+
+    // 3. Cycle complet, deux camps en même temps ; dégâts au QG ; auteur et arme de l'impact.
+    scene();
+    {
+      const gJ = poserGalerie('J'), gI = poserGalerie('I'), qJ = qg('J'), qI = qg('I');
+      gJ.gal.stock = 1; gI.gal.stock = 2;
+      const pvJ = qJ.pv, pvI = qI.pv;
+      ecouter();
+      const rJ = executerOrdre('J', {type:'tirGalerie', id:gJ.id, x:qI.x, y:qI.y});
+      const rI = executerOrdre('I', {type:'tirGalerie', id:gI.id, x:qJ.x, y:qJ.y});
+      const t0 = temps;
+      const alerteI = alertes.I && alertes.I.x === gJ.x && alertes.I.y === gJ.y, alerteJ = alertes.J && alertes.J.x === gI.x && alertes.J.y === gI.y;
+      const debut = {J:[gJ.galT, gJ.galN, gJ.gal.stock], I:[gI.galT, gI.galN, gI.gal.stock]};
+      const fermeture = {J:null, I:null}, suiviOk = {J:true, I:true}, ecarts = [];
+      for(let k = 0; k < Math.round(20/DT); k++){
+        miseAJour(DT);
+        for(const [id, g] of [['J', gJ], ['I', gI]]){
+          if(fermeture[id] !== null) continue;
+          if(g.gal.t0 === null){ fermeture[id] = r2(temps - t0); if(g.galT !== null || g.galN !== 0) suiviOk[id] = false; continue; }
+          if(Math.abs(g.galT - (temps - t0)) > 1e-6 || g.galN !== g.gal.n || galerieFermee(g)){ suiviOk[id] = false; ecarts.push([id, r2(temps - t0), g.galT, g.galN]); }
+        }
+      }
+      const departs = id => journal.effets.filter(e => e.type === 'missile' && e.p.galerie && e.p.camp === id).map(e => r2(e.t - t0));
+      const marqueurs = id => journal.effets.filter(e => e.type === 'marqueur' && e.p.pouvoir === 'galerie' && e.p.camp === id);
+      const impacts = id => journal.zones.filter(z => z.arme === 'missileGalerie' && z.auteur && z.auteur.camp === id);
+      const iJ = impacts('J'), iI = impacts('I');
+      const pret = (l, attendu) => l.length === attendu.length && l.every((v, i) => Math.abs(v - attendu[i]) <= EPS);
+      V('cycle : ordres de tir acceptés, stock engagé en entier, galerie ouverte dès t = 0', rJ.ok && rI.ok && debut.J[0] === 0 && debut.J[1] === 1 && debut.J[2] === 0
+        && debut.I[0] === 0 && debut.I[1] === 2 && debut.I[2] === 0, debut);
+      V('cycle : alerte Espace posée chez l’adversaire sur la galerie qui s’ouvre', alerteI && alerteJ, {alerteI:alertes.I, alerteJ:alertes.J});
+      V('cycle J : départ à 8 s, impact à 13 s', pret(departs('J'), [8]) && pret(iJ.map(z => r2(z.t - t0)), [13]), {departs:departs('J'), impacts:iJ.map(z => r2(z.t - t0))});
+      V('cycle I : départs à 8 et 8,6 s, impacts à 13 et 13,6 s', pret(departs('I'), [8, 8.6]) && pret(iI.map(z => r2(z.t - t0)), [13, 13.6]),
+        {departs:departs('I'), impacts:iI.map(z => r2(z.t - t0))});
+      const effOk = id => journal.effets.filter(e => e.type === 'missile' && e.p.galerie && e.p.camp === id).every(e => e.p.duree === 5 && e.p.x0 === (id === 'J' ? gJ : gI).x && e.p.y0 === (id === 'J' ? gJ : gI).y)
+        && marqueurs(id).length === departs(id).length && marqueurs(id).every(m => m.p.duree === 5 && m.p.r === (id === 'J' ? gJ : gI).def.galerie.rayon);
+      V('cycle : effets « missile » (vol de 5 s depuis la galerie) et « marqueur » pouvoir:galerie', effOk('J') && effOk('I'),
+        {marqueursJ:marqueurs('J').length, marqueursI:marqueurs('I').length});
+      V('cycle : impact = explosionZone missileGalerie, auteur {camp, est:galerie, galerie:true}, bord 0,5',
+        iJ.concat(iI).every(z => z.auteur.est === 'galerie' && z.auteur.galerie === true) && iJ.every(z => z.r === 70 && z.deg === 600) && iI.every(z => z.r === 95 && z.deg === 330),
+        iJ.concat(iI).map(z => [z.auteur.camp, z.r, z.deg]));
+      V('cycle : fermeture à 16 s, b.galT suit le temps du cycle puis null, b.galN = n puis 0', Math.abs(fermeture.J - 16) <= EPS && Math.abs(fermeture.I - 16) <= EPS && suiviOk.J && suiviOk.I
+        && gJ.galT === null && gI.galT === null && gJ.galN === 0 && gI.galN === 0 && galerieFermee(gJ) && galerieFermee(gI),
+        {fermeture, suiviOk, ecarts:ecarts.slice(0, 4)});
+      const dI = pvI - qI.pv, dJ = pvJ - qJ.pv;
+      V('dégâts : QG au centre, Aiguille 600, salve du Terrier entre 600 et 660 (dispersion)', Math.abs(dI - 600) < 0.01 && dJ >= 600 && dJ <= 660.01,
+        {qgI:r1(dI), qgJ:r1(dJ), pointsImpactI:iI.map(z => [Math.round(z.x - qJ.x), Math.round(z.y - qJ.y)])});
+      V('dispersion : Aiguille au point visé, Terrier à 45 px au plus', iJ.every(z => z.x === qI.x && z.y === qI.y) && iI.every(z => Math.hypot(z.x - qJ.x, z.y - qJ.y) <= 45.001),
+        iI.map(z => r1(Math.hypot(z.x - qJ.x, z.y - qJ.y))));
+    }
+
+    // 4. Dégâts : collecteur de 520 PV au centre d'une salve du Terrier (survit) ; son camp et ses alliés épargnés.
+    scene();
+    {
+      const gJ = poserGalerie('J'), gI = poserGalerie('I');
+      gJ.gal.stock = 1; gI.gal.stock = 2;
+      const P1 = versCentre('J', 520), P2 = versCentre('I', 520);
+      const col = unite('collecteur', 'J', P1.x, P1.y); col.gare = true;
+      // Voisins à 30 px (au-delà des rayons cumulés : la séparation ne les pousse pas), bien dans la zone.
+      const propreI = unite('sapeur', 'I', P1.x + 30, P1.y);
+      const ennemi = unite('collecteur', 'I', P2.x, P2.y); ennemi.gare = true;
+      const propreJ = unite('technicien', 'J', P2.x + 30, P2.y), allieK = unite('technicien', 'K', P2.x - 30, P2.y);
+      ecouter();
+      executerOrdre('I', {type:'tirGalerie', id:gI.id, x:col.x, y:col.y});
+      executerOrdre('J', {type:'tirGalerie', id:gJ.id, x:ennemi.x, y:ennemi.y});
+      pas(17);
+      const dCol = subi(col, parGalerie);
+      V('dégâts : collecteur (520 PV) touché par la salve du Terrier, il survit', !col.mort && dCol > 0 && dCol <= 330.01,
+        {degats:r1(dCol), pv:r1(col.pv), touches:(journal.degats.get(col.id) || []).filter(parGalerie).length});
+      V('dégâts : unité du camp tireur épargnée (I sous sa propre salve)', subi(propreI) === 0 && !propreI.mort, {pv:propreI.pv});
+      V('dégâts : Aiguille sur un collecteur adverse (léger 0,5 → 300), son camp (J) et son allié (K) épargnés',
+        subi(ennemi, parGalerie) > 280 && subi(ennemi, parGalerie) <= 300.01 && subi(propreJ) === 0 && subi(allieK) === 0 && !propreJ.mort && !allieK.mort,
+        {ennemi:r1(subi(ennemi, parGalerie)), J:subi(propreJ), K:subi(allieK)});
+    }
+
+    // 5. Intouchable fermée : tir direct d'un char, Frappe de précision, Marteau ; vulnérable ouverte ; roquette de
+    //    Grêle en vol qui arrive après la fermeture.
+    scene();
+    {
+      const gJ = poserGalerie('J'), gI = poserGalerie('I');
+      const pvJ = gJ.pv, pvI = gI.pv;
+      // Char de I posé à 150 px de l'Aiguille fermée : il ne la prend pas pour cible.
+      const ours = unite('ours', 'I', gJ.x + 150, gJ.y);
+      // Ordre d'attaque sur une galerie fermée : soit refusé (« Galerie fermée : intouchable. »), soit accepté mais
+      // transformé en déplacement vers le point, sans cible, avec un mot au joueur (règle de jeu.js depuis le
+      // 18 novembre 2026). Dans les deux cas, l'unité ne doit ni viser la galerie ni en avoir l'ordre.
+      const mots = [], notifierOrig = window.notifier;   // (remis aussi en place à la fin, avec les autres espions)
+      window.notifier = function(camp, texte){ if(camp === 'I' && typeof texte === 'string') mots.push(texte); return notifierOrig.apply(this, arguments); };
+      const essaiAttaque = type => {
+        const r = executerOrdre('I', {type, ids:[ours.id], x:gJ.x, y:gJ.y, cibleId:gJ.id});
+        const sansCible = ours.cible !== gJ && !(ours.ordre && ours.ordre.cible === gJ);
+        const ok = r.ok ? sansCible && mots.some(m => /Galerie fermée/.test(m)) : /Galerie fermée : intouchable/.test(r.motif || '') && sansCible;
+        return {ok, accepte:r.ok, motif:r.motif || null, ordre:ours.ordre ? ours.ordre.type : null, cibleGalerie:!sansCible};
+      };
+      const aDroit = essaiAttaque('droit'), aAD = essaiAttaque('attaqueDeplacement');
+      window.notifier = notifierOrig;
+      ours.ordre = null; ours.chemin = null; ours.cible = null;
+      V('fermée : ordre d’attaque sur une galerie fermée refusé, ou changé en déplacement sans cible avec un mot au joueur', aDroit.ok && aAD.ok,
+        {droit:aDroit, attaqueDeplacement:aAD, mot:mots[0] || null});
+      ecouter();
+      let vise = 0;
+      for(let k = 0; k < Math.round(6/DT); k++){ miseAJour(DT); if(ours.cible === gJ) vise++; }
+      // Ordre forcé (contourne la validation) : il tombe de lui-même, aucun dégât.
+      ours.ordre = {type:'attaquer', cible:gJ}; ours.cible = gJ;
+      for(let k = 0; k < Math.round(6/DT); k++){ miseAJour(DT); if(k > 0 && ours.cible === gJ) vise++; }
+      V('fermée : un char ne la vise pas et ne lui fait aucun dégât (même sur ordre forcé)', gJ.pv === pvJ && vise === 0 && !peutCibler(ours, gJ)
+        && !(ours.ordre && ours.ordre.cible === gJ), {pv:gJ.pv, pasVisee:vise, ordre:ours.ordre && ours.ordre.type});
+      ours.mort = true;
+      // Frappe de précision (J) sur le Terrier fermé, Marteau (I) sur l'Aiguille fermée ; un collecteur posé à côté
+      // de chaque galerie prouve que l'explosion a bien eu lieu.
+      const tI = unite('collecteur', 'I', gI.x, gI.y + gI.rayon + 14); tI.gare = true;
+      const tJ = unite('collecteur', 'J', gJ.x, gJ.y + gJ.rayon + 14); tJ.gare = true;
+      const okF = activerPouvoir('J', 'frappe', gI.x, gI.y, true), okM = activerPouvoir('I', 'marteau', gJ.x, gJ.y, true);
+      pas(8);
+      V('fermée : Frappe de précision et Marteau sans effet sur elle (le voisin, lui, est touché)', okF && okM && gI.pv === pvI && gJ.pv === pvJ
+        && subi(tI) > 0 && subi(tJ) > 0 && subi(gI) === 0 && subi(gJ) === 0, {frappeVoisin:r1(subi(tI)), marteauVoisin:r1(subi(tJ)), pvGaleries:[gJ.pv, gI.pv]});
+      V('fermée : infliger et explosionZone directs sans effet', (() => { const u = unite('conscrit', 'I', gJ.x + 200, gJ.y); infliger(gJ, 500, u); explosionZone(gJ.x, gJ.y, 80, 500, 'roquette', u); u.mort = true; return gJ.pv === pvJ; })(),
+        {pv:gJ.pv});
+      // Ouverte : vulnérable (peutCibler, infliger, explosionZone).
+      gJ.gal.stock = 1;
+      const cible = qg('I');
+      executerOrdre('J', {type:'tirGalerie', id:gJ.id, x:cible.x, y:cible.y});
+      const t0 = temps;
+      const u2 = unite('ours', 'I', gJ.x + 380, gJ.y); u2.recharge = 1e9;
+      const p1 = gJ.pv; infliger(gJ, 100, u2); const dInf = p1 - gJ.pv;
+      const p2 = gJ.pv; explosionZone(gJ.x, gJ.y, 80, 200, 'roquette', u2); const dZone = p2 - gJ.pv;
+      V('ouverte : vulnérable (peutCibler, infliger, explosionZone)', peutCibler(u2, gJ) && dInf === 100 && dZone > 0, {peutCibler:peutCibler(u2, gJ), infliger:dInf, zone:r1(dZone)});
+      u2.mort = true;
+      // Grêle de I à 380 px : une salve tirée à 11,5 s (arrivée avant la fermeture) porte ; une salve tirée à 15 s
+      // est encore en vol à la fermeture (16 s) et se perd.
+      const grele = unite('grele', 'I', gJ.x + 380, gJ.y); grele.recharge = 1e9;
+      while(temps - t0 < 11.5 - 1e-6) miseAJour(DT);
+      const pvA = gJ.pv; tirer(grele, gJ);
+      while(temps - t0 < 15 - 1e-6) miseAJour(DT);
+      const dAvant = pvA - gJ.pv;
+      const pvB = gJ.pv; tirer(grele, gJ);
+      while(gJ.gal.t0 !== null) miseAJour(DT);
+      const enVolALaFermeture = projectiles.filter(p => p.auteur === grele).length;
+      pas(4);
+      const dApres = pvB - gJ.pv;
+      V('Grêle : salve arrivée galerie ouverte → dégâts ; salve encore en vol à la fermeture → aucun dégât', dAvant > 0 && enVolALaFermeture > 0 && dApres === 0,
+        {avantFermeture:r1(dAvant), roquettesEnVolALaFermeture:enVolALaFermeture, apresFermeture:r1(dApres), fermeA:r2(temps - 4 - t0)});
+      grele.mort = true;
+    }
+
+    // 6. Détruite avant le départ (pas de missile, pas de remboursement ; points habituels pour le destructeur),
+    //    et missile parti qui frappe même si la galerie meurt.
+    for(const id of ['J', 'I']){
+      scene();
+      const adv = id === 'J' ? 'I' : 'J', g = poserGalerie(id), G = g.def.galerie, q = qg(adv);
+      g.gal.stock = G.lanceurs;
+      const tueur = unite(faction(adv).ouvrier, adv, q.x, q.y + 120);
+      ecouter();
+      executerOrdre(id, {type:'tirGalerie', id:g.id, x:q.x, y:q.y});
+      const t0 = temps, res0 = camps[id].reserves, pvQ = q.pv;
+      while(temps - t0 < 5 - 1e-6) miseAJour(DT);
+      const pts0 = camps[adv].points;   // relevé juste avant le coup (les points montent aussi avec le temps)
+      infliger(g, 1e6, tueur);
+      const gainPoints = camps[adv].points - pts0;
+      pas(15);
+      const missiles = journal.effets.filter(e => e.type === 'missile' && e.p.galerie).length, impacts = journal.zones.filter(z => z.arme === 'missileGalerie').length;
+      V('détruite avant le départ ' + id + ' : aucun missile, aucun impact, aucun remboursement', g.mort && missiles === 0 && impacts === 0 && q.pv === pvQ
+        && camps[id].reserves === res0 && !evenements.length, {missiles, impacts, degatsQG:pvQ - q.pv, remboursement:camps[id].reserves - res0});
+      V('détruire une galerie ' + id + ' rapporte les points habituels (prix / 180)', Math.abs(gainPoints - g.def.cout/180) < 0.01, {gain:r2(gainPoints), attendu:r2(g.def.cout/180)});
+      // Missile parti, puis galerie détruite : il frappe quand même.
+      scene();
+      const g2 = poserGalerie(id), q2 = qg(adv);
+      g2.gal.stock = G.lanceurs;
+      const tueur2 = unite(faction(adv).ouvrier, adv, q2.x, q2.y + 120);
+      ecouter();
+      executerOrdre(id, {type:'tirGalerie', id:g2.id, x:q2.x, y:q2.y});
+      const t1 = temps, pvQ2 = q2.pv;
+      while(temps - t1 < 8.7 - 1e-6) miseAJour(DT);
+      infliger(g2, 1e6, tueur2);
+      pas(8);
+      const imp2 = journal.zones.filter(z => z.arme === 'missileGalerie').length;
+      V('missile parti puis galerie ' + id + ' détruite : il frappe quand même', g2.mort && imp2 === G.lanceurs && pvQ2 - q2.pv > 0,
+        {impacts:imp2, attendus:G.lanceurs, degatsQG:r1(pvQ2 - q2.pv)});
+    }
+
+    // 7. Jamais réparée (ouvriers, réparateurs, ordre manuel), ouverte puis fermée.
+    scene();
+    for(const id of ['J', 'I']){
+      const g = poserGalerie(id), adv = id === 'J' ? 'I' : 'J', q = qg(adv);
+      g.gal.stock = 1;
+      executerOrdre(id, {type:'tirGalerie', id:g.id, x:q.x, y:q.y});
+      const frappeur = unite('conscrit', adv, g.x + 300, g.y); infliger(g, 500, frappeur); frappeur.mort = true;
+      const pvBlesse = g.pv, F = faction(id);
+      const ouvAuto = unite(F.ouvrier, id, g.x, g.y + g.rayon + 20);
+      const ouvOrdre = unite(F.ouvrier, id, g.x + g.rayon + 20, g.y); ouvOrdre.ordre = {type:'reparer', bat:g};
+      const ouvClic = unite(F.ouvrier, id, g.x - g.rayon - 20, g.y);
+      const rClic = executerOrdre(id, {type:'droit', ids:[ouvClic.id], x:g.x, y:g.y, cibleId:g.id});
+      const rep = unite(id === 'J' ? 'atelier' : 'depanneuse', id, g.x, g.y - g.rayon - 24); rep.ordre = {type:'soigner', cible:g};
+      const fantassin = unite(id === 'J' ? 'mecano' : 'infirmier', id, g.x + 30, g.y - g.rayon - 24);
+      const ordreClic = ouvClic.ordre && ouvClic.ordre.type;
+      g._ref = {pvBlesse, ordreClic, rClic, rep, fantassin, ouvAuto, ouvOrdre, ouvClic};
+    }
+    pas(30);
+    for(const id of ['J', 'I']){
+      const g = ents.find(e => e.camp === id && estGalerie(e)), R = g._ref;
+      V('jamais réparée ' + id + ' (ouvriers, réparateurs, ordre manuel ; ouverte puis fermée)', g.pv === R.pvBlesse && R.rClic.ok && R.ordreClic !== 'reparer'
+        && !peutSoigner(R.rep, g) && !peutSoigner(R.fantassin, g) && batimentAReparer(R.ouvAuto, 2000) !== g && galerieFermee(g),
+        {pv:g.pv, pvApresDegats:R.pvBlesse, ordreDuClicDroit:R.ordreClic, ordreReparateur:R.rep.ordre && R.rep.ordre.type, ordreOuvrier:R.ouvOrdre.ordre && R.ouvOrdre.ordre.type});
+    }
+
+    // 8. Aucune récompense en points pour les destructions dues à une galerie (contre-épreuve par une unité).
+    scene();
+    {
+      const gJ = poserGalerie('J'); gJ.gal.stock = 1;
+      const p = trouverEmplacement('caserne', qg('I')), cas = creerBatiment('caserne', 'I', p.c, p.r, true); cas.pv = 100;
+      executerOrdre('J', {type:'tirGalerie', id:gJ.id, x:cas.x, y:cas.y});
+      let saut = 0, prec = camps.J.points;
+      for(let k = 0; k < Math.round(15/DT); k++){ const mortAvant = cas.mort; miseAJour(DT); if(cas.mort && !mortAvant) saut = camps.J.points - prec; prec = camps.J.points; }
+      const p2 = trouverEmplacement('caserne', qg('I')), cas2 = creerBatiment('caserne', 'I', p2.c, p2.r, true); cas2.pv = 1;
+      const tireur = unite('conscrit', 'J', cas2.x - 200, cas2.y), pts0 = camps.J.points;
+      infliger(cas2, 50, tireur);
+      const controle = camps.J.points - pts0, attendu = BATIMENTS.caserne.cout/180;
+      V('aucun point de commandement pour une destruction par la galerie (contre-épreuve : unité)', cas.mort && Math.abs(saut) < 0.01 && Math.abs(controle - attendu) < 0.01,
+        {casernetuee:cas.mort, pointsGalerie:r2(saut), pointsUnite:r2(controle), attendu:r2(attendu)});
+    }
+
+    // 9. Fin de partie : camp I réduit à sa galerie (fermée) → éliminé, galerie effondrée, victoire de l'équipe A.
+    scene();
+    {
+      const gI = poserGalerie('I'), qI = qg('I'), tueur = unite('conscrit', 'J', qI.x - 250, qI.y);
+      infliger(qI, 1e6, tueur);
+      const renforts = batimentRenforts('I'), fermee = galerieFermee(gI);
+      const duree = jusqua(() => camps.I.elimine, 3);
+      pas(1.5);
+      V('fin de partie : camp réduit à sa galerie → éliminé, galerie effondrée, partie gagnée', fermee && renforts === null && duree !== null && gI.mort && partieFinie
+        && issuePartie && issuePartie.victoire === true, {eliminationApres:duree === null ? 'non' : r2(duree), galerieDetruite:gI.mort, partieFinie, victoire:issuePartie && issuePartie.victoire});
+    }
+
+    // 10. Ordres refusés en ligne (hôte, puis invité) ; pas de code réseau ; rien n'est changé.
+    scene();
+    {
+      const gJ = poserGalerie('J'); gJ.gal.stock = 1;
+      const q = qg('J'), o = unite('technicien', 'J', q.x, q.y + 110), pu = trouverEmplacement('usine', {x:q.x, y:q.y - 200});
+      creerBatiment('usine', 'J', pu.c, pu.r, true);
+      gJ.mort = true;   // (pour que la règle « une seule » ne masque pas le refus de construction)
+      const pc = trouverEmplacement('aiguille', q); gJ.mort = false;
+      const photo0 = photoEtat(), res = [];
+      for(const [mr, rm] of [['hote', 'hote'], ['invite', 'invite'], ['echo', null]]){
+        modeReseau = mr; roleMonde = rm;
+        const a = executerOrdre('J', {type:'fabriquerMissile', id:gJ.id}), b = executerOrdre('J', {type:'tirGalerie', id:gJ.id, x:1600, y:1100});
+        let c = null;
+        if(mr !== 'invite'){ gJ.mort = true; c = executerOrdre('J', {type:'construire', bat:'aiguille', c:pc.c, r:pc.r, ouvrierIds:[o.id]}); gJ.mort = false; }
+        res.push({mode:mr, actif:galeriesActives(), fab:a.ok ? 'ACCEPTÉ' : a.motif, tir:b.ok ? 'ACCEPTÉ' : b.motif, construire:c ? (c.ok ? 'ACCEPTÉ' : c.motif) : '-',
+          liste:batimentsConstructibles(faction('J')).includes('aiguille')});
+        modeReseau = reseauAvant; roleMonde = roleAvant;
+      }
+      const sansCode = ordreVersReseau({type:'fabriquerMissile', id:gJ.id}) === null && ordreVersReseau({type:'tirGalerie', id:gJ.id, x:1, y:1}) === null
+        && !Object.prototype.hasOwnProperty.call(CODES_ORDRES, 'fabriquerMissile') && !Object.prototype.hasOwnProperty.call(CODES_ORDRES, 'tirGalerie');
+      V('en ligne (hôte, invité, écho) : fabriquer, tirer et construire refusés, galerie absente de la liste ; aucun code réseau ; état inchangé',
+        res.every(r => !r.actif && r.fab !== 'ACCEPTÉ' && r.tir !== 'ACCEPTÉ' && r.construire !== 'ACCEPTÉ' && !r.liste && r.fab === MOTIF_SANS_GALERIES)
+        && sansCode && photoEtat() === photo0, {res, sansCode});
+    }
+  }
+
+  // ----------------------------------------------------------------- ordinateurs
+  // Parties d'ordinateurs (ordinaire et Ultra) où chaque camp a sa galerie, qui tire toutes les 40 s sur un
+  // bâtiment adverse (stock rempli d'office). À chaque pas : aucune unité hostile ne garde pour cible ni pour
+  // ordre une galerie fermée depuis au moins un pas, une galerie fermée ne perd aucun PV, et les fonctions de
+  // cible de l'ordinateur (cibleFrappe, cibleVague, choisirObjectifUltra, cibleHarcelement) ne renvoient jamais
+  // une galerie fermée. On compte aussi les fois où une galerie OUVERTE a été visée (l'essai voit bien quelque chose).
+  function essaisOrdinateur(){
+    const parties = [
+      {nom:'difficile (J, Halden) contre normale (I, Karsk)', liste:[{id:'J', faction:'halden', equipe:'A', niveau:'difficile'}, {id:'I', faction:'karsk', equipe:'B', niveau:'normal'}], duree:600},
+      {nom:'Ultra (J, Karsk) contre Ultra (I, Halden)', liste:[{id:'J', faction:'karsk', equipe:'A', niveau:'ultra'}, {id:'I', faction:'halden', equipe:'B', niveau:'ultra'}], duree:600},
+      {nom:'Ultra (J, Halden) contre difficile (I, Karsk)', liste:[{id:'J', faction:'halden', equipe:'A', niveau:'ultra'}, {id:'I', faction:'karsk', equipe:'B', niveau:'difficile'}], duree:600},
+    ];
+    const fonctions = ['cibleFrappe', 'cibleVague', 'choisirObjectifUltra', 'cibleHarcelement'];
+    const origIA = Object.fromEntries(fonctions.map(f => [f, window[f]]));
+    const visee = r => r && (estGalerie(r) ? r : r.b && estGalerie(r.b) ? r.b : r.e && estGalerie(r.e) ? r.e : r.cible && estGalerie(r.cible) ? r.cible : null);
+    for(const P of parties){
+      if(typeof numero === 'number' && parties.indexOf(P) !== numero) continue;
+      reinitialiserPartie();
+      demarrer(P.liste[0].faction, P.liste.map(k => ({id:k.id, faction:k.faction, equipe:k.equipe, ia:k.id !== 'J', niveau:k.id !== 'J' ? k.niveau : undefined})));
+      confierAOrdinateur('J', P.liste[0].niveau);
+      const gals = ['J', 'I'].map(poserGalerie).filter(Boolean);
+      const B = {fonctionsFermee:0, appelsFonctions:0, viseesFermee:0, ordresFermee:0, degatsFermee:0, viseesOuverte:0, degatsOuverte:0, tirs:0, erreur:null, exemples:[]};
+      for(const f of fonctions) window[f] = function(){
+        const r = origIA[f].apply(this, arguments); B.appelsFonctions++;
+        const g = visee(r); if(g && galerieFermee(g)){ B.fonctionsFermee++; if(B.exemples.length < 4) B.exemples.push(f + ' t=' + r1(temps)); }
+        return r;
+      };
+      const etat = new Map(gals.map(g => [g, {fermee:galerieFermee(g), pv:g.pv}]));
+      let prochainTir = 30;
+      try {
+        for(let k = 0; k < Math.round(P.duree/DT); k++){
+          if(temps >= prochainTir){
+            prochainTir += 40;
+            for(const g of gals){
+              if(g.mort || g.gal.t0 !== null) continue;
+              const cible = ents.find(e => e.est === 'batiment' && !e.mort && hostile(g.camp, e.camp) && !estGalerie(e));
+              if(!cible) continue;
+              g.gal.stock = g.def.galerie.lanceurs;
+              if(executerOrdre(g.camp, {type:'tirGalerie', id:g.id, x:cible.x, y:cible.y}).ok) B.tirs++;
+            }
+          }
+          try { miseAJour(DT); } catch(e){ B.erreur = 't=' + temps.toFixed(1) + ' ' + e.message; break; }
+          for(const g of gals){
+            const s = etat.get(g), f = galerieFermee(g);
+            if(!g.mort){
+              for(const e of ents){
+                if(e.mort || !hostile(e.camp, g.camp)) continue;
+                const vise = e.cible === g, ordre = !!(e.ordre && (e.ordre.cible === g || e.ordre.bat === g));
+                if(f && s.fermee){ if(vise) B.viseesFermee++; if(ordre) B.ordresFermee++; if((vise || ordre) && B.exemples.length < 4) B.exemples.push(e.type + ' ' + e.camp + ' t=' + r1(temps)); }
+                else if(!f && vise) B.viseesOuverte++;
+              }
+              if(g.pv < s.pv){ if(f && s.fermee) B.degatsFermee += s.pv - g.pv; else B.degatsOuverte += s.pv - g.pv; }
+            }
+            s.fermee = f; s.pv = g.pv;
+          }
+          if(partieFinie) break;
+        }
+      } finally { Object.assign(window, origIA); }
+      V('ordinateur ' + P.nom + ' : jamais de galerie fermée visée, ordonnée ni touchée', !B.erreur && B.fonctionsFermee === 0 && B.viseesFermee === 0 && B.ordresFermee === 0
+        && B.degatsFermee === 0 && B.tirs > 0, Object.assign({temps:Math.round(temps), galeries:gals.map(g => g.type + (g.mort ? ' (détruite)' : ''))}, B, {degatsOuverte:Math.round(B.degatsOuverte)}));
+    }
+  }
+}
+window.testerGaleries = testerGaleries;
