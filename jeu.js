@@ -2134,20 +2134,44 @@ function economieIA(C, F, bats, ouvriers, armee, qg){
   const premierAvion = !!avionVoulu && (ia.nAvions === 0 || avionsDe(aero).length === 0);
   ia.besoin = null;
   let iBesoin = -1;   // rang du bâtiment voulu dans le plan
-  // Galerie de tir (novembre 2026, option cochée) : l'attente du premier avion ne retient ni la galerie ni la
-  // batterie qui la précède dans le plan (rangs entre l'aéroport et la galerie) ; les autres bâtiments
-  // attendent toujours l'avion. (Essai du 18 novembre 2026 : l'ordinateur Difficile, réserves dépensées en
+  // Galerie de tir (novembre 2026, option cochée) : l'attente du premier avion ne retient pas la galerie (la
+  // galerie seule depuis le lot 3 : voir plus bas) ; les autres bâtiments attendent toujours l'avion. (Essai du 18 novembre 2026 : l'ordinateur Difficile, réserves dépensées en
   // unités, n'achetait jamais ce premier avion ; la galerie, placée après l'aéroport, n'était donc jamais
   // bâtie.) Option décochée : galerieLibre est faux et la condition est exactement celle d'avant.
   const galerieLibre = premierAvion && galeriesActives() && !!F.galerie && plan.includes(F.galerie);
+  // Galerie de tir, lot 3 (19 novembre 2026, défauts 1 et 2 ; Normale et Difficile, option cochée) : la galerie
+  // ne bloque plus le plan. Dès l'aéroport bâti, son prix est épargné peu à peu (epG, galerieDueIA), sauf quand
+  // l'ordinateur est en difficulté ; tant que l'épargne ne l'atteint pas, le plan passe au bâtiment suivant, comme
+  // option décochée, et ni ce bâtiment, ni les deux premiers avions, ni le premier hélicoptère, ni les deux
+  // premiers chars ne prennent cette épargne. (Mesures du 19 novembre 2026, 90 parties à graine fixe, 9
+  // affrontements × graines 1 à 10, 900 s, parties finies option décochée : avec son prix retenu d'un coup,
+  // 59 % finissaient encore option cochée, durée médiane + 54 % ; épargne progressive mais plan toujours bloqué
+  // derrière la galerie : 66 % et + 28 %, et presque plus aucune galerie ; réglage retenu : 69 % et + 28 %, 83 %
+  // et + 11 % une fois le défaut 4 du cahier corrigé, voir IA_GALERIE.)
+  // Option décochée, ou Ultra : galDue vaut SANS_GALERIE_DUE, la boucle et les seuils sont ceux d'avant.
+  const galDue = !U && galeriesActives() ? galerieDueIA(C, F, plan, bats, armee, gardeC) : SANS_GALERIE_DUE;
+  const epG = galDue.ep;
   if(!chantiers.length && (!premierAvion || galerieLibre)){
     const compte = {};
-    for(let i = 0; i < plan.length; i++){
+    // Galerie épargnée : elle passe avant les bâtiments manquants qui la précèdent (batterie qui attend le
+    // premier avion, bâtiment détruit) ; sinon elle est sautée (lot 3). Option décochée : galDue.due est faux.
+    if(galDue.due && galDue.quoi === 'galerie' && epG >= BATIMENTS[F.galerie].cout){ ia.besoin = F.galerie; iBesoin = plan.indexOf(F.galerie); }
+    else for(let i = 0; i < plan.length; i++){
       const t = plan[i];
       compte[t] = (compte[t]||0) + 1;
-      if(bats.filter(b => b.type === t).length < compte[t]){ ia.besoin = t; iBesoin = i; break; }
+      if(bats.filter(b => b.type === t).length < compte[t]){
+        if(galDue.due && BATIMENTS[t].galerie) continue;   // galerie pas encore épargnée (lot 3)
+        ia.besoin = t; iBesoin = i; break;
+      }
     }
-    if(galerieLibre && !(iBesoin > plan.indexOf('aeroport') && iBesoin <= plan.indexOf(F.galerie))){ ia.besoin = null; iBesoin = -1; }
+    // (Lot 3, 19 novembre 2026, défaut 4 : l'exception ne vaut plus que pour la galerie elle-même. Avant, la
+    // batterie placée entre l'aéroport et la galerie passait aussi, et l'option changeait l'ordinateur au-delà
+    // des galeries. Relevé : Difficile contre Difficile, graine 2, deux batteries posées à 361 s et 390 s,
+    // aéroport encore vide, aucune option décochée. Mesure de l'étape 1 avec cette seule exception : parties
+    // finies encore finies 69 % → 83 %. Contrôle de l'étape 2, chantiersPartieGaleries, DH-DK, DH-NK, NK-DH, NH-NK
+    // × graines 1 à 5 : sans cette ligne, 19 parties sur 20 avec batterie, caserne, usine, relais ou tourelle
+    // bâtis pendant l'attente du premier avion ; avec elle, 0 sur 20.)
+    if(galerieLibre && iBesoin !== plan.indexOf(F.galerie)){ ia.besoin = null; iBesoin = -1; }
     // Ultra sous la menace : seuls les bâtiments vitaux (première caserne, première usine, batterie contre
     // des appareils ou le vaisseau) ; le reste attend, et son prix n'est pas mis de côté.
     if(U && ia.besoin && !batimentPermisUltra(C.id, ia.besoin, bats)){ ia.besoin = null; iBesoin = -1; }
@@ -2156,9 +2180,12 @@ function economieIA(C, F, bats, ouvriers, armee, qg){
       const ok = !D.requiert || bats.some(b => b.type === D.requiert && !b.enCours);
       // (Galerie de tir, novembre 2026 : une seule par camp, chantier compris, comme pour le joueur. Sans
       // galerie dans le plan, D.galerie est faux et rien ne change.)
-      if(ok && C.reserves - gardeC >= D.cout && ouvriers.length >= 1 && (!D.galerie || !empechementGalerie(C.id, ia.besoin))){
-        const pos = trouverEmplacement(ia.besoin, U ? centreChantierUltra(C.id, ia.besoin, qg || bats[0])
-          : D.galerie ? centreGalerieIA(C.id, qg || bats[0]) : (qg || bats[0]));
+      // (Lot 3 : un autre bâtiment ne prend pas l'épargne de la galerie, epG ; 0 option décochée.)
+      if(ok && C.reserves - gardeC - (D.galerie ? 0 : epG) >= D.cout && ouvriers.length >= 1 && (!D.galerie || !empechementGalerie(C.id, ia.besoin))){
+        // (Lot 3, défaut 5 : la galerie a sa propre recherche d'emplacement, emplacementGalerieIA. Option décochée,
+        // D.galerie est toujours faux : même appel qu'avant, dans le même ordre.)
+        const pos = D.galerie ? emplacementGalerieIA(C.id, ia.besoin, qg || bats[0])
+          : trouverEmplacement(ia.besoin, U ? centreChantierUltra(C.id, ia.besoin, qg || bats[0]) : (qg || bats[0]));
         const o = ouvriers.find(libre) || ouvriers[0];
         if(pos && o){
           const nb = construireBatiment(C.id, ia.besoin, pos.c, pos.r, [o]);
@@ -2175,7 +2202,11 @@ function economieIA(C, F, bats, ouvriers, armee, qg){
   // est toujours vrai.)
   const apresAero = iAero >= 0 && iBesoin > iAero && ia.besoin !== 'batterie' && !(ia.besoin && BATIMENTS[ia.besoin].galerie);
   // (Avant les collecteurs, le seuil était « six ouvriers » : l'économie installée.)
-  const reserveMin = (ia.besoin && collecteurs >= 2 && !apresAero ? BATIMENTS[ia.besoin].cout : 0) + gardeC;
+  // (Galerie de tir, lot 3, 19 novembre 2026 : pour Normale et Difficile, l'épargne progressive epG remplace son
+  // prix entier, et elle est gardée quel que soit le bâtiment voulu. Option décochée, D.galerie est toujours faux
+  // et epG vaut 0 : même calcul qu'avant.)
+  const reserveMin = (ia.besoin && collecteurs >= 2 && !apresAero
+    ? (BATIMENTS[ia.besoin].galerie && !U ? 0 : BATIMENTS[ia.besoin].cout) : 0) + gardeC + epG;
   const infanterie = armee.filter(u => u.def.forme === 'infanterie').length;
   const aUsine = bats.some(b => b.type === 'usine' && !b.enCours);
   // Blindés de combat (armés, au sol, hors DCA et dépannage). Hors mission, tant qu'il y en a moins de
@@ -2196,7 +2227,9 @@ function economieIA(C, F, bats, ouvriers, armee, qg){
   if(!aUsine || niveauDur(C.id)) ia.tourAvion = true;
   const peuDAvions = !!aero && avionsDe(aero).length < 2;
   if(avionVoulu && (urgent || premierAvion || ia.tourAvion || peuDAvions)){
-    if(C.reserves - UNITES[avionVoulu].cout >= (peuDAvions ? gardeC : reserveMin) + (urgent ? 0 : reserveChar)){
+    // (Lot 3, 19 novembre 2026 : les deux premiers avions ne prennent pas non plus l'épargne de la galerie, epG,
+    // 0 option décochée ; relevé du même jour : sans cela, elle retombait de 700 à 0 à chaque achat d'appareil.)
+    if(C.reserves - UNITES[avionVoulu].cout >= (peuDAvions ? gardeC + epG : reserveMin) + (urgent ? 0 : reserveChar)){
       if(commander(aero, avionVoulu)){ ia.tourAvion = false; ia.nAvions++; if(!urgent) ia.indexAvion++; }
     } else if(premierAvion || peuDAvions || armee.length >= 6) epargne = UNITES[avionVoulu].cout;
   }
@@ -2210,7 +2243,7 @@ function economieIA(C, F, bats, ouvriers, armee, qg){
     const types = (F.helicos || []).filter(t => autorise('unites', t));
     if(types.length){
       const t = types[(ia.indexHelico || 0) % types.length];
-      const seuil = (mesHelicos === 0 ? gardeC : reserveMin + epargne) + reserveChar;
+      const seuil = (mesHelicos === 0 ? gardeC + epG : reserveMin + epargne) + reserveChar;   // epG : lot 3, comme les avions
       if(C.reserves - UNITES[t].cout >= seuil && commander(aeroH, t)) ia.indexHelico = (ia.indexHelico || 0) + 1;
     }
   }
@@ -2275,7 +2308,7 @@ function economieIA(C, F, bats, ouvriers, armee, qg){
     // L'épargne pour un avion retient les usines, et les casernes dès que quatre fantassins gardent la base.
     // La DCA réclamée par des appareils adverses passe avant (seul le rachat d'un collecteur la retient).
     const seuil = dcaUrgente && choix === F.antiair ? gardeC
-      : prioriteChar ? (blindes < 2 && blindeCombat(choix) ? gardeC : reserveMin)
+      : prioriteChar ? (blindes < 2 && blindeCombat(choix) ? gardeC + epG : reserveMin)   // epG : lot 3, 0 option décochée
       : reserveMin + (b.type === 'usine' || infanterie >= 4 ? epargne : 0) + (b.type === 'caserne' && infanterie >= 4 ? charAttendu : 0);
     if(choix && C.reserves - UNITES[choix].cout >= seuil){
       const ok = commander(b, choix);
@@ -2894,20 +2927,65 @@ function meilleurGroupe(camp, delai){
 //                    qu'elle se referme ;
 //   esquive        : ses unités sortent du cercle annoncé d'un missile de galerie adverse (Ultra le fait déjà
 //                    par son analyse, pour tous les pouvoirs : faux ici pour ne pas le faire deux fois).
+// Emplacement de la galerie (lot 3, défaut 5, 19 novembre 2026), commun aux trois niveaux (place, ci-dessous) :
+//   bord     : cases au moins entre la galerie et le bord de la carte (cahier § 10, D) ;
+//   degage   : cases libres (ni bâtiment, ni eau, ni roche, ni bois) exigées tout autour d'elle au premier choix :
+//              2 laisse toujours un passage d'au moins deux cases de chaque côté, et tient la sortie des autres
+//              bâtiments (la case sous chacun) à l'écart ; à défaut, 1 (la règle de tout bâtiment de l'ordinateur)
+//              avec les sorties et les passages vérifiés un par un (emplacementGalerieIA) ;
+//   rayon    : px au plus entre son centre et le QG (« dans la base ») ;
+//   angle, distMin, distMax : point visé, tiré au hasard une fois par partie (option cochée seulement), à
+//              l'opposé de l'adversaire à ± angle radians près, entre distMin et distMax px du QG : la galerie
+//              n'est plus toujours sur la même case. Relevé avant correction (19 novembre 2026, 9 affrontements ×
+//              graines 1 à 10) : voir emplacementGalerieIA ;
+//   choix    : la case est tirée au hasard parmi les choix cases admises les plus proches du point visé. (Relevé du
+//              19 novembre 2026, gorgesVarseche, 6 affrontements × graines 1 à 3 : avec la seule plus proche, la base
+//              de I, dans un coin, posait 5 galeries sur 6 sur la même case, le point visé tombant toujours dans le
+//              coin.)
+// Mesure finale (19 novembre 2026, bilanGaleries, objectif D) : Port-Calmes, 9 affrontements × graines 1 à 10 :
+// ancien emplacement, 79 galeries sur 79 à 1 ou 2 cases du bord ; celui-ci, 0 sur 63, aucune hors de la base (plus
+// de 450 px du QG), aucune case isolée, aucune sortie de bâtiment coupée, et jusqu'à 6 cases différentes pour un
+// même camp (ex. Difficile Karsk contre Normale Halden : 6 cases en 8 galeries). Mêmes contrôles sans aucune faute
+// sur gorgesVarseche, deltaOmbrine, capMorvent et valBrunelles (6 affrontements × graines 1 à 5). Limite : une
+// base très encombrée n'offre parfois qu'une ou deux cases admises (capMorvent, base de I : une seule), la galerie
+// y retombe alors souvent au même endroit.
+const PLACE_GALERIE = {bord:3, degage:2, rayon:380, angle:1.05, distMin:120, distMax:300, choix:4};
 const IA_GALERIE = {
   normal:   {reserveMissile:150, valeurMin:0.9,  attenteSeul:90, retenueValeur:500, retenueRayon:600, retenueAir:0,    recherche:4,
-             riposteSuper:false, contreTir:false, esquive:false, apres:0},
+             riposteSuper:false, contreTir:false, esquive:false, apres:0,
+             epargneTaux:6, epargneMissile:false, retard:0.8, calme:45, domine:0, place:PLACE_GALERIE},
   difficile:{reserveMissile:100, valeurMin:0.75, attenteSeul:90, retenueValeur:500, retenueRayon:600, retenueAir:0,    recherche:3,
-             riposteSuper:true,  contreTir:true,  esquive:true,  apres:0},
+             riposteSuper:true,  contreTir:true,  esquive:true,  apres:0,
+             epargneTaux:6, epargneMissile:false, retard:0.8, calme:45, domine:0, place:PLACE_GALERIE},
   ultra:    {reserveMissile:100, valeurMin:0.75, attenteSeul:90, retenueValeur:500, retenueRayon:600, retenueAir:1200, recherche:3,
-             riposteSuper:true,  contreTir:true,  esquive:false, apres:0},
+             riposteSuper:true,  contreTir:true,  esquive:false, apres:0,
+             retard:1, place:PLACE_GALERIE},
 };
+// Lot 3 (19 novembre 2026, cahier § 10, défauts 1 à 3) : quand et comment l'ordinateur paie sa galerie.
+// Mesures : serieGaleries / lancerSeriesGaleries / avancerSeriesGaleries (verif-missions-moteur.js), 9 affrontements
+// (AFFRONTEMENTS_GALERIES) × graines 1 à 10, 900 s, option cochée contre décochée, mêmes graines.
+//   epargneTaux : crédits par seconde mis de côté pour la galerie (Normale, Difficile) dès que l'aéroport est là ;
+//                 la somme gardée monte peu à peu jusqu'au prix de la galerie, au lieu d'être retenue d'un coup,
+//                 et le plan de construction continue sans elle en attendant (galerieDueIA). Les unités sont
+//                 produites avec le reste du revenu (environ 10 par seconde ; 13,5 en Difficile). Série sur les
+//                 7 affrontements sans Ultra (70 parties, défaut 4 neutralisé pour la mesure) : 4 par s, 21 %
+//                 (Normale) et 14 % (Difficile) des camps bâtissent dans les parties d'au moins 700 s ; 6 par s,
+//                 51 % et 44 %, parties finies encore finies 80 %, durée médiane + 15 % ; 9 par s, 62 % et 61 %,
+//                 mais finies 73 % et durée médiane + 24 % : 6 retenu (objectif A d'abord) ;
+//   epargneMissile : même épargne ensuite pour chaque missile (prix + reserveMissile). Essayée à 6 par s : tirs
+//                 + 2 à 3 points seulement, parties finies − 4 points : laissée de côté (faux) ;
+//   retard      : l'armée du camp (valeurCombat de ses unités) est « en retard » sous retard × la plus forte
+//                 armée hostile. Normale, Difficile : pas d'épargne tant qu'elle l'est. Ultra : la galerie n'entre
+//                 pas à son plan tant qu'elle l'est (défaut 3 : relevé du 19 novembre 2026, Ultra contre Ultra,
+//                 graines 3 et 5, galerie au plan avec 360 contre 2 630, galerie posée à 717 s en retard) ;
+//   calme       : s sans unité ennemie près de sa base avant de reprendre l'épargne (Normale, Difficile) ;
+//   domine      : au-delà de domine × la plus forte armée hostile, pas d'épargne non plus (pousser l'avantage ;
+//                 0 : sans effet). Essayé à 1,5 (avec epargneMissile) : galeries bâties divisées par deux environ,
+//                 parties finies à peine changées (78 % contre 76 %) : laissé à 0.
 //   apres          : s de jeu avant lesquelles l'ordinateur ordinaire ne met pas la galerie à son plan (0 : dès
-//                    que le plan y arrive). RÉGLAGE À FAIRE : mise au plan dès l'aéroport, la galerie fait
-//                    mettre 1 200 de côté vers 6 minutes, au détriment des unités (contrôle du 19 novembre
-//                    2026 : une partie presque gagnée ne se terminait plus). Essai le même jour avec 540 s
-//                    (Normale) et 420 s (Difficile) : plus aucune galerie avant 750 s. La bonne valeur reste à
-//                    trouver par des séries de parties. Ultra a ses propres conditions (ajouterGalerieAuPlan).
+//                    que le plan y arrive). (Essai du 19 novembre 2026 avec 540 s et 420 s : plus aucune galerie
+//                    avant 750 s ; remplacé par l'épargne progressive ci-dessus.) Ultra a ses propres conditions
+//                    (ajouterGalerieAuPlan).
 // (Essai du 18 novembre 2026 : avec 300 / 200 / 200 de réserve de sécurité, le premier missile n'était
 // commandé que 3 à 4 minutes après la fin de la galerie ; réserves de l'ordinateur rarement au-delà de 600.)
 function reglagesGalerieIA(id){ return IA_GALERIE[niveauIA(id)] || null; }
@@ -2927,8 +3005,10 @@ function noterGalerieIA(id, ligne){
 function galerieDuCamp(bats){ return bats.find(b => estGalerie(b) && !b.enCours && !b.mort) || null; }
 // 9.1. Place de la galerie dans le plan de construction (plan modifié sur place) : juste après l'aéroport,
 // et après la batterie quand elle le suit (plan contre une aviation adverse). Ultra : seulement quand son
-// armée domine, ou réserves au-dessus de 1 500, ou après 600 s (sa batterie avancée, quand elle est prévue,
-// est déjà placée avant l'aéroport). Prérequis (usine) vérifié par economieIA comme pour tout bâtiment.
+// armée domine, ou réserves au-dessus de 1 500, ou après 600 s, et jamais quand son armée est en retard (lot 3)
+// (sa batterie avancée, quand elle est prévue, est déjà placée avant l'aéroport). Prérequis (usine) vérifié par
+// economieIA comme pour tout bâtiment. Normale, Difficile (lot 3) : la place dans le plan ne compte plus que pour
+// l'attente du premier avion (galerieLibre) ; l'épargne et la pose suivent galerieDueIA.
 // (Essai du 18 novembre 2026, cinq parties de 900 s à graine fixe : placée en toute fin de plan, après la
 // seconde caserne, la seconde usine, la défense fixe et la batterie, Normale et Difficile n'en bâtissaient
 // AUCUNE ; leur plan n'est jamais achevé en 15 minutes.)
@@ -2939,11 +3019,79 @@ function ajouterGalerieAuPlan(id, F, plan, U){
   if(U){
     const S = etatUltra(id);
     if(!(S.domine || camps[id].reserves > 1500 || temps > 600)) return;
+    // (Lot 3, 19 novembre 2026, défaut 3 : après 600 s, Ultra la mettait à son plan même avec une armée en retard.)
+    if(armeeEnRetardUltra(S, R)) return;
   }
   let i = plan.indexOf('aeroport');
   if(i < 0){ plan.push(F.galerie); return; }
   if(plan[i + 1] === 'batterie') i++;
   plan.splice(i + 1, 0, F.galerie);
+}
+// Ultra : son armée (S.monArmee, posée par productionUltra à la réflexion précédente) est-elle en retard sur la
+// plus forte armée adverse vue par son analyse (A.plusForte) ? Mêmes mesures que celles de sa production.
+function armeeEnRetardUltra(S, R){
+  const A = S.analyse;
+  return !A || (S.monArmee || 0) < R.retard * A.plusForte;
+}
+// Valeur de combat (valeurCombat) de la plus forte armée hostile au camp id, envahisseurs exclus : unités armées
+// en vie, comme les voit tout joueur (la carte entière est visible).
+function plusForteArmeeHostile(id){
+  const v = {};
+  for(const e of ents) if(e.est === 'unite' && !e.mort && e.camp !== 'X' && hostile(id, e.camp)) v[e.camp] = (v[e.camp] || 0) + valeurCombat(e);
+  let m = 0; for(const k in v) m = Math.max(m, v[k]);
+  return m;
+}
+// Normale, Difficile : l'ordinateur est-il en difficulté ? Armée en retard (moins de R.retard fois la plus forte
+// armée hostile), ou unité ennemie au sol près d'un de ses bâtiments (550 px, comme les menaces de majIACamp)
+// depuis moins de R.calme s. Aussi vrai, quand R.domine > 0, si son armée dépasse R.domine fois la plus forte
+// armée hostile (il pousse alors son avantage). M : mémoire de sa galerie (menaceT : dernière menace vue).
+function enDifficulteGalerieIA(id, armee, bats, R, M){
+  if(ents.some(e => e.est === 'unite' && !e.mort && e.def.arme && !(e.def.avion && enVol(e)) && hostile(id, e.camp) && bats.some(b => dist(b, e) < 550))) M.menaceT = temps;
+  if(M.menaceT != null && temps - M.menaceT < R.calme) return true;
+  let moi = 0; for(const u of armee) moi += valeurCombat(u);
+  const fort = plusForteArmeeHostile(id);
+  return moi < R.retard * fort || (R.domine > 0 && moi > R.domine * fort);
+}
+// Défauts 1 et 2 (lot 3, 19 novembre 2026) : somme à garder pour la galerie (ou son missile) quand elle est due
+// (galerieDueIA ; Normale, Difficile), à la place de son prix entier. Elle monte de R.epargneTaux par seconde
+// jusqu'à cout, sans dépasser les réserves présentes (ce qui a été dépensé n'est plus épargné) ; elle ne monte
+// pas, et rien n'est retenu, tant que l'ordinateur est en difficulté. Appelée seulement quand la galerie est au
+// plan, donc jamais option décochée.
+function epargneGalerieIA(C, armee, bats, gardeC, cout){
+  const R = reglagesGalerieIA(C.id), M = memoireGalerieIA(C.id);
+  // Entre deux réflexions (0,8 s) ; plafonné pour qu'une longue pause (chantier, attente d'avion) ne compte pas.
+  const dt = M.epargneT == null ? 0 : Math.min(2, Math.max(0, temps - M.epargneT));
+  M.epargneT = temps;
+  if(!R || !R.epargneTaux || enDifficulteGalerieIA(C.id, armee, bats, R, M)) return 0;
+  M.epargne = Math.min(cout, (M.epargne || 0) + R.epargneTaux*dt, Math.max(0, C.reserves - gardeC));
+  return M.epargne;
+}
+// Épargne « due » (Normale, Difficile), rendue sous la forme {due, quoi, ep} (ep : somme épargnée, à garder ;
+// SANS_GALERIE_DUE quand rien n'est dû) :
+//  - quoi 'galerie' : galerie au plan, pas encore posée (chantier compris), et tous les bâtiments du plan jusqu'à
+//    l'aéroport compris sont là (même décompte que la boucle du plan d'economieIA). La batterie qui la précède
+//    dans le plan contre une aviation adverse n'est pas attendue : elle attend elle-même le premier avion, que
+//    l'ordinateur tarde souvent à acheter (relevé du 19 novembre 2026, Difficile Karsk, graine 1 : jamais
+//    d'épargne en 900 s quand la galerie attendait la batterie). Écart au § 9.1, à valider ;
+//  - quoi 'missile' (si R.epargneMissile) : galerie debout, fermée, et un lanceur sans missile ni commande :
+//    épargne pour le missile suivant (prix + réserve de sécurité du niveau, ce que demande fabriquerMissileIA).
+const SANS_GALERIE_DUE = Object.freeze({due:false, quoi:null, ep:0});
+function galerieDueIA(C, F, plan, bats, armee, gardeC){
+  const i = F.galerie ? plan.indexOf(F.galerie) : -1;
+  if(i < 0) return SANS_GALERIE_DUE;
+  const g = bats.find(b => estGalerie(b));
+  if(g){
+    const R = reglagesGalerieIA(C.id), G = g.def.galerie;
+    if(!R || !R.epargneMissile || g.enCours || g.gal.t0 !== null || g.gal.stock + g.gal.fab >= G.lanceurs) return SANS_GALERIE_DUE;
+    return {due:true, quoi:'missile', ep:epargneGalerieIA(C, armee, bats, gardeC, G.coutMissile + R.reserveMissile)};
+  }
+  const iAero = plan.indexOf('aeroport'), fin = iAero >= 0 && iAero < i ? iAero + 1 : i;
+  const compte = {};
+  for(let k = 0; k < fin; k++){
+    const t = plan[k]; compte[t] = (compte[t] || 0) + 1;
+    if(bats.filter(b => b.type === t).length < compte[t]) return SANS_GALERIE_DUE;
+  }
+  return {due:true, quoi:'galerie', ep:epargneGalerieIA(C, armee, bats, gardeC, BATIMENTS[F.galerie].cout)};
 }
 // Emplacement : dans sa base, à l'opposé de l'adversaire le plus proche (bâtiment d'abord : cibleVague), pour
 // qu'une armée qui arrive tombe d'abord sur le reste de la base. trouverEmplacement cherche ensuite une zone
@@ -2953,6 +3101,108 @@ function centreGalerieIA(id, defaut){
   if(!e) return defaut;
   const dx = defaut.x - e.x, dy = defaut.y - e.y, d = Math.hypot(dx, dy) || 1, m = TUILE*3;
   return {x:Math.max(m, Math.min(LARG - m, defaut.x + dx/d*200)), y:Math.max(m, Math.min(HAUT - m, defaut.y + dy/d*200))};
+}
+// Défaut 5 (lot 3, 19 novembre 2026) : emplacement de la galerie de l'ordinateur (Normale, Difficile, Ultra ;
+// appelé seulement pour une galerie, donc jamais option décochée). Avant : centreGalerieIA puis trouverEmplacement,
+// dont la spirale partait d'un point à 200 px du QG du côté du bord ; relevé du 19 novembre 2026 (bilanGaleries,
+// 9 affrontements × graines 1 à 5, Port-Calmes) : 30 galeries sur 31 à 1 ou 2 cases du bord, et une seule case
+// par affrontement et par camp (deux pour un camp de la partie à quatre). Désormais :
+//  - un point visé tiré une fois par partie (PLACE_GALERIE : à l'opposé de l'adversaire, à un angle et une
+//    distance tirés au hasard), pour que la case change d'une partie à l'autre ;
+//  - parmi les cases à au moins P.bord cases du bord et à moins de P.rayon px du QG (dans la base) qui laissent
+//    P.degage cases libres tout autour (aucun passage rétréci sous deux cases, aucune sortie de bâtiment touchée)
+//    et ne sont pas sur le trajet des collecteurs (QG → minerai proche), une des P.choix plus proches de ce point,
+//    tirée au hasard ; celles sans unité dessus d'abord, puis unités comprises (elles s'écartent) ;
+//    mesure : voir bilanGaleries (objectif D), résultats sous PLACE_GALERIE ;
+//  - à défaut, une case ordinaire (une case libre autour, règle de tout bâtiment de l'ordinateur) qui n'isole
+//    aucune case libre et laisse joignable la sortie de chacun de ses bâtiments (parcours de la grille) ;
+//  - à défaut encore, l'ancien emplacement (l'ordinateur n'est jamais empêché de bâtir) ; M.repli le compte.
+function emplacementGalerieIA(id, type, defaut){
+  const R = reglagesGalerieIA(id), P = (R && R.place) || PLACE_GALERIE, M = memoireGalerieIA(id);
+  if(!M.vise) M.vise = pointViseGalerieIA(id, defaut, P);
+  const t = BATIMENTS[type].taille, cands = [];
+  const c0 = Math.max(P.bord, Math.floor((defaut.x - P.rayon)/TUILE)), c1 = Math.min(COLS - P.bord - t, Math.ceil((defaut.x + P.rayon)/TUILE));
+  const r0 = Math.max(P.bord, Math.floor((defaut.y - P.rayon)/TUILE)), r1 = Math.min(LIGNES - P.bord - t, Math.ceil((defaut.y + P.rayon)/TUILE));
+  for(let r = r0; r <= r1; r++) for(let c = c0; c <= c1; c++){
+    const x = (c + t/2)*TUILE, y = (r + t/2)*TUILE;
+    if(Math.hypot(x - defaut.x, y - defaut.y) > P.rayon || !emplacementValide(type, c, r, true)) continue;
+    cands.push({c, r, x, y, d:Math.hypot(x - M.vise.x, y - M.vise.y)});
+  }
+  cands.sort((a, b) => a.d - b.d);
+  const trajets = trajetsRecolteIA(defaut);
+  const degagee = k => zoneDegagee(k.c, k.r, t, P.degage) && !trajets.some(s => distanceSegment(k.x, k.y, s) < t*TUILE/2 + TUILE);
+  // (Cases sans unité dessus en tête, puis les autres admises : relevé du 19 novembre 2026, capMorvent, partie à
+  // quatre, graine 1 : 12 cases admises pour J mais 2 seulement sans unité, presque la même ; la galerie tombait
+  // toujours en (8, 40).)
+  const admises = cands.filter(degagee), libres = admises.filter(k => emplacementLibreIA(type, k.c, k.r));
+  let p = tirerParmiProchesIA(libres.concat(admises.filter(k => !libres.includes(k))), P.choix);
+  if(!p && cands.length){
+    const depart = caseSortieBatiment(defaut), avant = casesJoignables(depart);
+    const sorties = ents.filter(e => e.est === 'batiment' && !e.mort && e.camp === id).map(caseSortieBatiment);
+    p = cands.find(k => !galerieGene(k.c, k.r, t, depart, avant.n, sorties));
+  }
+  if(p) return {c:p.c, r:p.r};
+  M.repli = (M.repli || 0) + 1;
+  return trouverEmplacement(type, centreGalerieIA(id, defaut));
+}
+// Une case tirée au hasard parmi les n premières de la liste (déjà triée, la plus proche du point visé en tête) ;
+// null si la liste est vide. Option cochée seulement (appelée par emplacementGalerieIA).
+function tirerParmiProchesIA(liste, n){
+  if(!liste.length) return null;
+  return liste[Math.floor(Math.random()*Math.min(liste.length, Math.max(1, n || 1)))];
+}
+// Point visé (tirage au hasard, une fois par partie et par camp) : à l'opposé de l'adversaire le plus proche
+// (cibleVague), à ± P.angle radians près, entre P.distMin et P.distMax px de defaut (le QG).
+function pointViseGalerieIA(id, defaut, P){
+  const e = cibleVague(defaut, id);
+  const a0 = e ? Math.atan2(defaut.y - e.y, defaut.x - e.x) : 0;
+  const a = a0 + (Math.random()*2 - 1)*P.angle, d = P.distMin + Math.random()*(P.distMax - P.distMin);
+  return {x:defaut.x + Math.cos(a)*d, y:defaut.y + Math.sin(a)*d};
+}
+// Vrai si le carré de t cases en (c, r), agrandi de m cases de chaque côté, est entièrement dans la carte et
+// libre (grille à 0 : ni eau, ni obstacle, ni bâtiment). Lecture seule.
+function zoneDegagee(c, r, t, m){
+  for(let rr = r - m; rr < r + t + m; rr++) for(let cc = c - m; cc < c + t + m; cc++)
+    if(cc < 0 || rr < 0 || cc >= COLS || rr >= LIGNES || grille[rr*COLS + cc] !== 0) return false;
+  return true;
+}
+// Trajets des collecteurs : segments du point de dépôt (defaut, le QG) aux gisements non épuisés à moins de 640 px.
+function trajetsRecolteIA(defaut){
+  return noeuds.filter(n => n.reste > 0 && Math.hypot(n.x - defaut.x, n.y - defaut.y) < 640).map(n => ({x0:defaut.x, y0:defaut.y, x1:n.x, y1:n.y}));
+}
+// Distance du point (x, y) au segment s. Fonction pure.
+function distanceSegment(x, y, s){
+  const dx = s.x1 - s.x0, dy = s.y1 - s.y0, l2 = dx*dx + dy*dy;
+  const k = l2 ? Math.max(0, Math.min(1, ((x - s.x0)*dx + (y - s.y0)*dy)/l2)) : 0;
+  return Math.hypot(x - s.x0 - k*dx, y - s.y0 - k*dy);
+}
+// Case libre où sortent les unités d'un bâtiment (même calcul que positionSortie, sans le hasard).
+function caseSortieBatiment(b){
+  return plusProcheLibre(Math.floor(b.x/TUILE), Math.floor((b.y + (b.rayon || 0) + 20)/TUILE)) || [Math.floor(b.x/TUILE), Math.floor(b.y/TUILE)];
+}
+// Cases libres joignables depuis depart (pas de 4 directions sur la grille) : {n, vu}. Lecture seule.
+function casesJoignables(depart){
+  const vu = new Uint8Array(COLS*LIGNES), k0 = depart[1]*COLS + depart[0];
+  if(grille[k0] !== 0) return {n:0, vu};
+  const file = [k0]; vu[k0] = 1; let n = 0;
+  while(file.length){
+    const k = file.pop(), kc = k % COLS, kr = (k/COLS)|0; n++;
+    if(kc > 0 && !vu[k-1] && grille[k-1] === 0){ vu[k-1] = 1; file.push(k-1); }
+    if(kc < COLS-1 && !vu[k+1] && grille[k+1] === 0){ vu[k+1] = 1; file.push(k+1); }
+    if(kr > 0 && !vu[k-COLS] && grille[k-COLS] === 0){ vu[k-COLS] = 1; file.push(k-COLS); }
+    if(kr < LIGNES-1 && !vu[k+COLS] && grille[k+COLS] === 0){ vu[k+COLS] = 1; file.push(k+COLS); }
+  }
+  return {n, vu};
+}
+// Une galerie de t cases en (c, r) gênerait-elle ? Elle isole des cases libres (les cases joignables depuis depart
+// baissent de plus que ses t × t cases) ou rend une sortie de bâtiment injoignable. La grille est remise en état.
+function galerieGene(c, r, t, depart, nAvant, sorties){
+  const cases = [];
+  for(let rr = r; rr < r + t; rr++) for(let cc = c; cc < c + t; cc++) cases.push(rr*COLS + cc);
+  for(const k of cases) grille[k] = 3;
+  const apres = casesJoignables(depart);
+  for(const k of cases) grille[k] = 0;
+  return apres.n < nAvant - t*t || sorties.some(s => !apres.vu[s[1]*COLS + s[0]]);
 }
 // 9.2. Fabrication : galerie fermée, place libre sur un lanceur, et réserves au-delà de retenue (ce que
 // l'économie garde pour un collecteur et le prochain bâtiment) plus la réserve de sécurité du niveau. commanderMissile fait les mêmes contrôles et
@@ -3170,12 +3420,22 @@ function contreTirGalerieIA(id, bats, ouvertes, R){
   const cible = galerieOuverteAtteignable(ouvertes, delaiTirGalerie(n), MARGE_CONTRE_TIR);
   if(!cible) return false;
   const motif = retenueGalerieIA(id, b, R);
-  if(motif){ noterGalerieIA(id, {quoi:'retenue', motif, contreTir:true, cibleId:cible.id}); return false; }
+  if(motif){ noterRetenueGalerieIA(id, cible, motif); return false; }
   if(valeurZoneGalerie(G, n, ciblesGalerieIA(id, delaiTirGalerie(n)), cible.x, cible.y) <= 0 || empechementTirGalerie(b, cible.x, cible.y)) return false;
   if(!ouvrirGalerie(b, cible.x, cible.y)) return false;
   memoireGalerieIA(id).pretT = null;
   noterGalerieIA(id, {quoi:'contreTir', n, cible:cible.type, camp:cible.camp, cibleId:cible.id, galT:Math.round(cible.galT*100)/100});
   return true;
+}
+// Défaut 6 (lot 3, 19 novembre 2026) : la retenue d'un contre-tir est notée UNE fois par ouverture adverse, et non
+// à chaque réflexion (0,8 s) tant que la galerie adverse reste à portée de contre-tir (jusqu'à 3 lignes en double).
+// Une ouverture se reconnaît à la galerie et à l'heure de son ordre de tir (cible.gal.t0, ce que tout joueur
+// déduit de l'alerte) ; une seule mémoire par galerie adverse suffit, l'heure changeant à chaque ouverture.
+function noterRetenueGalerieIA(id, cible, motif){
+  const M = memoireGalerieIA(id), vues = M.retenues || (M.retenues = {});
+  if(vues[cible.id] === cible.gal.t0) return;
+  vues[cible.id] = cible.gal.t0;
+  noterGalerieIA(id, {quoi:'retenue', motif, contreTir:true, cibleId:cible.id});
 }
 // Riposte d'un ordinateur (Normale et au-dessus ; Facile : rien). Appelée derrière galeriesActives(), avant
 // ses pouvoirs habituels et son propre tir : le contre-tir passe avant un tir ordinaire.
@@ -3488,7 +3748,8 @@ function batimentPermisUltra(id, type, bats){
 function centreChantierUltra(id, type, defaut){
   const S = etatUltra(id), F = faction(id);
   // Galerie de tir (novembre 2026) : à l'opposé de l'adversaire, comme pour l'ordinateur ordinaire. Jamais
-  // demandée option décochée (elle n'entre alors dans aucun plan).
+  // demandée option décochée (elle n'entre alors dans aucun plan). (Depuis le lot 3, economieIA passe par
+  // emplacementGalerieIA pour la galerie et n'arrive plus ici ; ligne gardée pour tout autre appelant.)
   if(BATIMENTS[type] && BATIMENTS[type].galerie) return centreGalerieIA(id, defaut);
   if(type === 'depot' && S.champLointain){
     const n = S.champLointain, dx = defaut.x - n.x, dy = defaut.y - n.y, d = Math.hypot(dx, dy) || 1;

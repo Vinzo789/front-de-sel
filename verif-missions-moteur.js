@@ -1106,7 +1106,8 @@ function partieGaleriesSurveillee(liste, duree, graine){
     return r;
   };
   let res;
-  try { res = avecGraine(graine, () => partieGaleries(liste, duree)); }
+  // (Étape 2 du lot 3 : partieRejouable, pour que la partie ne dépende plus de ce qui a tourné avant dans la page.)
+  try { res = partieRejouable(() => avecGraine(graine, () => partieGaleries(liste, duree))); }
   finally { window.miseAJour = mj; }
   // Ce que chaque ordinateur a fait de ses occasions (journal daté) : contre-tir dans les 3 s, pouvoir dans
   // les 16 s, ou retenue notée dans les 3 s (le contre-tir est alors refusé par la règle du tir ordinaire).
@@ -1126,6 +1127,303 @@ function partieGaleriesSurveillee(liste, duree, graine){
     arrivees:S.arrivees.map(a => ({camp:a.camp, quoi:a.quoi, ok:a.ok}))});
 }
 window.partieGaleriesSurveillee = partieGaleriesSurveillee;
+// ---------------------------------------------------------------------
+//  Galeries de tir, lot 3 (19 novembre 2026) : séries « option décochée contre cochée » à graine fixe, pour
+//  régler l'ordinateur par la mesure (cahier § 10, objectifs A et B). Outils de mesure seulement : rien ici
+//  ne change le comportement des outils plus haut.
+//  Ex. : serieGaleries('DH-NK', [1, 2, 3], 900)  (synchrone : environ 30 s par graine)
+//        lancerSerieGaleries('s1', 'DH-NK', [1,2,3,4,5,6,7,8,9,10], 900)  puis lire RESULTATS.s1 (faits, bilan)
+//        bilanGaleries(RESULTATS.s1.parties.concat(RESULTATS.s2.parties), 900)  (bilan de plusieurs séries)
+// ---------------------------------------------------------------------
+// Affrontements de l'objectif C (J à gauche ; D : Difficile, N : Normale, U : Ultra ; H : Halden, K : Karsk).
+const campSerie = (id, faction, equipe, niveau) => ({id, faction, equipe, niveau});
+const AFFRONTEMENTS_GALERIES = {
+  'DH-NK': [campSerie('J', 'halden', 'A', 'difficile'), campSerie('I', 'karsk', 'B', 'normal')],
+  'DK-NH': [campSerie('J', 'karsk', 'A', 'difficile'), campSerie('I', 'halden', 'B', 'normal')],
+  'NH-DK': [campSerie('J', 'halden', 'A', 'normal'), campSerie('I', 'karsk', 'B', 'difficile')],
+  'NK-DH': [campSerie('J', 'karsk', 'A', 'normal'), campSerie('I', 'halden', 'B', 'difficile')],
+  'DH-DK': [campSerie('J', 'halden', 'A', 'difficile'), campSerie('I', 'karsk', 'B', 'difficile')],
+  'NH-NK': [campSerie('J', 'halden', 'A', 'normal'), campSerie('I', 'karsk', 'B', 'normal')],
+  'UH-DK': [campSerie('J', 'halden', 'A', 'ultra'), campSerie('I', 'karsk', 'B', 'difficile')],
+  'UK-DH': [campSerie('J', 'karsk', 'A', 'ultra'), campSerie('I', 'halden', 'B', 'difficile')],
+  // Hors objectif C : Ultra contre Ultra, où une armée Ultra peut être en retard (défaut 3 du cahier).
+  'UH-UK': [campSerie('J', 'halden', 'A', 'ultra'), campSerie('I', 'karsk', 'B', 'ultra')],
+  'quatre': [campSerie('J', 'karsk', 'A', 'difficile'), campSerie('I', 'halden', 'B', 'normal'),
+             campSerie('K', 'karsk', 'C', 'normal'), campSerie('L', 'halden', 'D', 'difficile')],
+};
+window.AFFRONTEMENTS_GALERIES = AFFRONTEMENTS_GALERIES;
+// Parties option décochée déjà jouées (clé « nom:graine:durée ») : l'option décochée ne dépend pas du réglage de
+// l'ordinateur pour les galeries (règle d'or), on ne la rejoue donc pas d'une série à l'autre dans la même page.
+// Après un rechargement, on peut les rendre par SANS_GALERIES = {...} (copie d'une page précédente).
+window.SANS_GALERIES = {};
+// Vainqueur d'une partie qui vient de finir : camps encore en jeu (ex. 'J', ou 'I+K' pour des alliés) ; null si
+// la partie n'est pas terminée.
+function vainqueurSerie(r){
+  if(r.issue === 'non terminée') return null;
+  return campsEnJeu().filter(id => !camps[id].elimine).join('+') || 'aucun';
+}
+// Une graine, jouée option décochée (ou reprise de SANS_GALERIES) puis cochée. Par camp, option cochée : date du
+// chantier, commandes de missiles, tirs (contre-tirs compris), unités produites, triche (écart inexpliqué / unités
+// sans commande / réserves finales), réserves minimales, et valeur d'armée (somme des prix des unités armées) du
+// camp et de la plus forte armée hostile au moment où il pose sa galerie.
+// Correction de l'étape 2 (19 novembre 2026) : une partie d'ordinateurs ne remet pas prochainId à 1 (numéros des
+// entités) ; or quelques règles en dépendent (sens d'orbite d'un avion, prochainId % 2 ; durée de poursuite,
+// u.id % 5). Une même graine donnait donc une partie différente selon ce qui avait tourné avant dans la page
+// (relevé : Difficile contre Difficile, graine 2, option cochée, fin à 674, 700, 750 ou 900 s selon l'ordre).
+// Les outils de série partent donc tous de prochainId = 1, comme le premier appel d'une page neuve.
+function partieRejouable(fn){ prochainId = 1; return fn(); }
+function partieSerieGaleries(nom, graine, duree){
+  const liste = typeof nom === 'string' ? AFFRONTEMENTS_GALERIES[nom] : nom;
+  const cle = (typeof nom === 'string' ? nom : JSON.stringify(nom)) + ':' + graine + ':' + duree;
+  const cu = window.creerUnite, cb = window.construireBatiment, mj = window.miseAJour;
+  let unites = {}, chantiers = {}, resMin = {};
+  window.creerUnite = function(type, camp){
+    const e = cu.apply(this, arguments);
+    if(temps > 0 && UNITES[type] && !UNITES[type].ouvrier) unites[camp] = (unites[camp] || 0) + 1;
+    return e;
+  };
+  window.construireBatiment = function(camp, type){
+    const b = cb.apply(this, arguments);
+    if(b && BATIMENTS[type] && BATIMENTS[type].galerie && !chantiers[camp]){
+      let fort = 0; for(const id of campsEnJeu()) if(hostile(camp, id) && !camps[id].elimine) fort = Math.max(fort, valeurArmee(id));
+      // (Étape 2 : place, contrôle de l'emplacement au moment du chantier, objectif D.)
+      chantiers[camp] = {t:Math.round(temps), armee:valeurArmee(camp), plusForte:fort, place:controleEmplacementGalerie(b)};
+    }
+    return b;
+  };
+  window.miseAJour = function(){
+    const r = mj.apply(this, arguments);
+    for(const id of campsEnJeu()){ const v = camps[id].reserves; if(!(id in resMin) || v < resMin[id]) resMin[id] = v; }
+    return r;
+  };
+  let sans, avec, uSans;
+  try {
+    sans = SANS_GALERIES[cle];
+    if(!sans){
+      const avant = optionGaleries; optionGaleries = false;
+      try { const r = partieRejouable(() => avecGraine(graine, () => partieOrdinateurs(liste, duree))); sans = {fin:r.temps, vainqueur:vainqueurSerie(r), erreur:r.erreur, unites:unites}; }
+      finally { optionGaleries = avant; }
+      SANS_GALERIES[cle] = sans;
+    }
+    unites = {}; chantiers = {}; resMin = {};
+    const r = partieRejouable(() => avecGraine(graine, () => partieGaleries(liste, duree)));
+    avec = {fin:r.temps, vainqueur:vainqueurSerie(r), erreur:r.erreur, camps:{}};
+    for(const id of Object.keys(r.galeries)){
+      const g = r.galeries[id], E = etatsIA[id], J = E && E.galerie ? E.galerie.journal : [];
+      // (Chantier : relevé aussi par l'instrument de construireBatiment, le journal étant limité à 200 lignes.)
+      const ch = g.chantier != null ? g.chantier : chantiers[id] ? chantiers[id].t : null;
+      avec.camps[id] = {niveau:g.niveau, faction:g.faction, chantier:ch, commandes:g.commandes.length,
+        tirs:J.filter(l => l.quoi === 'tir' || l.quoi === 'contreTir').length, unites:unites[id] || 0, triche:r.triche[id],
+        resMin:Math.round(resMin[id]), armeeAuChantier:chantiers[id] || null,
+        repli:(E && E.galerie && E.galerie.repli) || 0};   // (étape 2 : emplacements pris faute de mieux, ancien calcul)
+    }
+  } finally { window.creerUnite = cu; window.construireBatiment = cb; window.miseAJour = mj; }
+  return {nom:typeof nom === 'string' ? nom : 'liste', graine, duree, sans, avec};
+}
+window.partieSerieGaleries = partieSerieGaleries;
+const medianeSerie = l => { const s = l.slice().sort((a, b) => a - b), n = s.length; return n ? (n % 2 ? s[(n - 1)/2] : (s[n/2 - 1] + s[n/2])/2) : null; };
+const pourcent = (a, b) => b ? Math.round(100*a/b) : null;
+// Bilan des objectifs du cahier (§ 10), directement en pourcentages.
+//  A : parmi les parties terminées option décochée, part encore terminée option cochée (but ≥ 90 %), part au même
+//      vainqueur (but ≥ 80 %), et durée médiane cochée / décochée sur ces parties (une partie non terminée compte
+//      pour sa durée maximale ; but : hausse ≤ 15 %).
+//  B : parmi les parties cochées d'au moins 700 s (terminées plus tard ou non terminées), par niveau et faction,
+//      part des camps Normale ou Difficile qui bâtissent leur galerie (but ≥ 60 %) et qui tirent au moins une
+//      fois (but ≥ 50 %) ; Ultra : nombre de chantiers posés alors que son armée était en retard (but : 0).
+//  E : écarts inexpliqués, unités sans commande, réserves négatives, erreurs (but : 0 partout).
+function bilanGaleries(parties, duree){
+  duree = duree || (parties[0] && parties[0].duree) || 900;
+  parties = parties.filter(p => p && p.sans && p.avec);
+  const base = parties.filter(p => p.sans.vainqueur);
+  const termine = base.filter(p => p.avec.vainqueur).length, meme = base.filter(p => p.avec.vainqueur === p.sans.vainqueur).length;
+  const mS = medianeSerie(base.map(p => p.sans.fin)), mA = medianeSerie(base.map(p => p.avec.vainqueur ? p.avec.fin : duree));
+  const A = {terminesSans:base.length, encoreTermines:termine + ' (' + pourcent(termine, base.length) + ' %)', memeVainqueur:meme + ' (' + pourcent(meme, base.length) + ' %)',
+    medianeSans:mS, medianeAvec:mA, hausseMediane:mS ? Math.round(100*(mA/mS - 1)) + ' %' : null,
+    atteint:!base.length || (termine >= 0.9*base.length && meme >= 0.8*base.length && mA <= 1.15*mS)};
+  const longues = parties.filter(p => p.avec.fin >= 700);
+  const B = {partiesLongues:longues.length, parCamp:{}, ultra:{chantiers:0, enRetard:0, details:[]}};
+  const tous = {normal:{n:0, bati:0, tir:0}, difficile:{n:0, bati:0, tir:0}};
+  for(const p of longues) for(const [id, c] of Object.entries(p.avec.camps)){
+    if(c.niveau === 'ultra'){
+      if(c.armeeAuChantier){ B.ultra.chantiers++; const a = c.armeeAuChantier; if(a.armee < a.plusForte) B.ultra.enRetard++;
+        B.ultra.details.push(p.nom + ' g' + p.graine + ' ' + id + ' : ' + a.t + ' s, armée ' + a.armee + ' contre ' + a.plusForte); }
+      continue;
+    }
+    if(!tous[c.niveau]) continue;
+    const k = c.niveau + ' ' + c.faction, s = B.parCamp[k] || (B.parCamp[k] = {n:0, bati:0, tir:0});
+    for(const x of [s, tous[c.niveau]]){ x.n++; if(c.chantier != null) x.bati++; if(c.tirs >= 1) x.tir++; }
+  }
+  const lire = s => s.n + ' camps : bâtie ' + pourcent(s.bati, s.n) + ' %, tir ' + pourcent(s.tir, s.n) + ' %';
+  for(const k of Object.keys(B.parCamp)) B.parCamp[k] = Object.assign(B.parCamp[k], {lu:lire(B.parCamp[k])});
+  B.normale = lire(tous.normal); B.difficile = lire(tous.difficile);
+  B.atteint = Object.values(B.parCamp).every(s => s.bati >= 0.6*s.n && s.tir >= 0.5*s.n) && B.ultra.enRetard === 0;
+  const E = {fautes:[]};
+  for(const p of parties){
+    if(p.sans.erreur || p.avec.erreur) E.fautes.push(p.nom + ' g' + p.graine + ' erreur ' + (p.sans.erreur || p.avec.erreur));
+    for(const [id, c] of Object.entries(p.avec.camps)) if(!/^0 \/ 0 \//.test(c.triche) || c.resMin < 0) E.fautes.push(p.nom + ' g' + p.graine + ' ' + id + ' triche ' + c.triche + ', réserves min ' + c.resMin);
+  }
+  E.atteint = !E.fautes.length;
+  // D (étape 2, 19 novembre 2026) : emplacements des galeries posées (toutes les parties cochées) : à moins de 3
+  // cases du bord, loin de la base (plus de 450 px du QG), cases isolées, sorties bloquées ; cases distinctes par
+  // affrontement et camp (une même case pour toutes les graines : « toujours au même endroit »).
+  const D = {galeries:0, presDuBord:0, horsBase:0, coupe:0, sortiesBloquees:0, replis:0, distinctes:{}, exemples:[]};
+  for(const p of parties) for(const [id, c] of Object.entries(p.avec.camps)){
+    D.replis += c.repli || 0;
+    const pl = c.armeeAuChantier && c.armeeAuChantier.place;
+    if(!pl) continue;
+    D.galeries++;
+    const k = p.nom + ' ' + id, s = D.distinctes[k] || (D.distinctes[k] = {n:0, cases:{}});
+    s.n++; s.cases[pl.c + ',' + pl.r] = 1;
+    const f = [];
+    if(pl.bord < 3) { D.presDuBord++; f.push('bord ' + pl.bord); }
+    if(pl.qg > 450) { D.horsBase++; f.push('QG à ' + pl.qg + ' px'); }
+    if(pl.coupe > 0) { D.coupe++; f.push(pl.coupe + ' cases isolées'); }
+    if(pl.sortiesBloquees && pl.sortiesBloquees.length) { D.sortiesBloquees++; f.push('sorties ' + pl.sortiesBloquees.join(',')); }
+    if(f.length && D.exemples.length < 10) D.exemples.push(p.nom + ' g' + p.graine + ' ' + id + ' : ' + f.join(', '));
+  }
+  for(const k of Object.keys(D.distinctes)){ const s = D.distinctes[k]; D.distinctes[k] = Object.keys(s.cases).length + ' cases / ' + s.n; }
+  D.atteint = D.galeries > 0 && !D.presDuBord && !D.horsBase && !D.coupe && !D.sortiesBloquees &&
+    Object.values(D.distinctes).every(v => { const m = v.split(' '); return +m[3] < 2 || +m[0] > 1; });
+  return {parties:parties.length, A, B, D, E};
+}
+window.bilanGaleries = bilanGaleries;
+// Lignes courtes d'une série (lecture rapide) : graine, fin et vainqueur sans / avec, puis par camp :
+// chantier, commandes, tirs, unités (avec ; entre parenthèses : sans).
+function lignesSerieGaleries(parties){
+  return parties.filter(p => p && p.avec).map(p => p.nom + ' g' + p.graine + ' | sans ' + p.sans.fin + ' s ' + (p.sans.vainqueur || '—') + ' | avec ' + p.avec.fin + ' s ' + (p.avec.vainqueur || '—') + ' | ' +
+    Object.entries(p.avec.camps).map(([id, c]) => id + ' ' + c.niveau.slice(0, 4) + ' ' + c.faction.slice(0, 1).toUpperCase() + ' ch ' + (c.chantier == null ? '—' : c.chantier) + ' cmd ' + c.commandes + ' tir ' + c.tirs +
+      ' u ' + c.unites + '(' + ((p.sans.unites || {})[id] || 0) + ')' + (c.armeeAuChantier ? ' arm ' + c.armeeAuChantier.armee + '/' + c.armeeAuChantier.plusForte : '')).join(' ; '));
+}
+window.lignesSerieGaleries = lignesSerieGaleries;
+// Série complète, synchrone (environ 15 s par partie : au-delà de deux graines, préférer lancerSerieGaleries).
+function serieGaleries(nom, graines, duree){
+  const parties = (graines || [1, 2, 3]).map(g => partieSerieGaleries(nom, g, duree || 900));
+  return {nom, parties, lignes:lignesSerieGaleries(parties), bilan:bilanGaleries(parties, duree || 900)};
+}
+window.serieGaleries = serieGaleries;
+// Même série, par morceaux : une graine par tour de la boucle du navigateur (setTimeout), résultat dans
+// RESULTATS[cle] = {etat, faits, total, parties, lignes, bilan}, lisible à tout moment par de petits appels.
+function lancerSerieGaleries(cle, nom, graines, duree){
+  duree = duree || 900;
+  const R = RESULTATS[cle] = {etat:'en cours', nom, faits:0, total:graines.length, parties:[], lignes:[], bilan:null};
+  let i = 0;
+  const pas = () => {
+    if(i >= graines.length){ R.bilan = bilanGaleries(R.parties, duree); R.etat = 'fini'; return; }
+    try { R.parties.push(partieSerieGaleries(nom, graines[i], duree)); }
+    catch(e){ R.parties.push({nom, graine:graines[i], erreur:e.message}); }
+    i++; R.faits = i; R.lignes = lignesSerieGaleries(R.parties);
+    setTimeout(pas, 10);
+  };
+  setTimeout(pas, 10);
+  return 'lancée : RESULTATS.' + cle;
+}
+window.lancerSerieGaleries = lancerSerieGaleries;
+// Plusieurs séries à la suite, une graine à la fois (même principe) : noms = ['DH-NK', 'NH-NK', ...].
+function lancerSeriesGaleries(cle, noms, graines, duree){
+  duree = duree || 900;
+  const R = RESULTATS[cle] = {etat:'en cours', faits:0, total:noms.length*graines.length, parties:[], lignes:[], bilan:null};
+  const travaux = []; for(const n of noms) for(const g of graines) travaux.push([n, g]);
+  let i = 0;
+  const pas = () => {
+    if(i >= travaux.length){ R.bilan = bilanGaleries(R.parties, duree); R.etat = 'fini'; return; }
+    const [n, g] = travaux[i];
+    try { R.parties.push(partieSerieGaleries(n, g, duree)); }
+    catch(e){ R.parties.push({nom:n, graine:g, erreur:e.message}); }
+    i++; R.faits = i; R.lignes = lignesSerieGaleries(R.parties);
+    setTimeout(pas, 10);
+  };
+  setTimeout(pas, 10);
+  return 'lancées : RESULTATS.' + cle;
+}
+window.lancerSeriesGaleries = lancerSeriesGaleries;
+// Variante par morceaux SYNCHRONES, quand la page est en arrière-plan (le navigateur y ralentit les setTimeout
+// enchaînés jusqu'à une graine par minute) : preparerSeriesGaleries('c', noms, graines, 900), puis
+// avancerSeriesGaleries('c', 20000) autant de fois qu'il faut (chaque appel joue des graines pendant 20 s au
+// plus, et rend ce qui reste) ; RESULTATS.c.bilan est rempli quand tout est joué. Un appel interrompu de
+// l'extérieur perd au plus la partie en cours (elle reste dans la file).
+function preparerSeriesGaleries(cle, noms, graines, duree){
+  const travaux = []; for(const n of noms) for(const g of graines) travaux.push([n, g]);
+  RESULTATS[cle] = {etat:'en cours', duree:duree || 900, travaux, faits:0, total:travaux.length, parties:[], lignes:[], bilan:null};
+  return travaux.length + ' parties à jouer';
+}
+window.preparerSeriesGaleries = preparerSeriesGaleries;
+function avancerSeriesGaleries(cle, limite){
+  const R = RESULTATS[cle], t0 = performance.now();
+  while(R.travaux.length && performance.now() - t0 < (limite || 20000)){
+    const [n, g] = R.travaux[0];
+    R.parties.push(partieSerieGaleries(n, g, R.duree));
+    R.travaux.shift(); R.faits++;
+  }
+  R.lignes = lignesSerieGaleries(R.parties);
+  if(!R.travaux.length){ R.bilan = bilanGaleries(R.parties, R.duree); R.etat = 'fini'; }
+  return {reste:R.travaux.length, faits:R.faits};
+}
+window.avancerSeriesGaleries = avancerSeriesGaleries;
+// Lot 3, étape 2 (19 novembre 2026), défaut 4 : chantiers d'une partie, datés, avec « aeroVide » vrai quand le
+// camp a un aéroport terminé, sans avion ni commande (l'ordinateur attend alors son premier avion, et rien d'autre que
+// la galerie ne doit passer option cochée). Ex. : chantiersPartieGaleries('DH-DK', 2, 900, true).batteriesAttente
+function chantiersPartieGaleries(nom, graine, duree, cochee){
+  const liste = typeof nom === 'string' ? AFFRONTEMENTS_GALERIES[nom] : nom;
+  const cb = window.construireBatiment, l = [];
+  window.construireBatiment = function(camp, type){
+    const b = cb.apply(this, arguments);
+    if(b){
+      // (Comme dans economieIA : aéroport prêt SANS commande en cours ; avec un avion en commande, l'ordinateur
+      // n'attend plus et tout bâtiment peut passer, option décochée comme cochée.)
+      const aero = ents.find(e => e.camp === camp && e.def.aeroport && !e.enCours && !e.mort && !e.file.length);
+      l.push({t:Math.round(temps), camp, type, aeroVide:!!aero && avionsDe(aero).length === 0});
+    }
+    return b;
+  };
+  const avant = optionGaleries; optionGaleries = !!cochee;
+  let r;
+  try { r = partieRejouable(() => avecGraine(graine, () => partieOrdinateurs(liste, duree || 900))); }
+  finally { optionGaleries = avant; window.construireBatiment = cb; }
+  const attente = l.filter(x => x.aeroVide && !BATIMENTS[x.type].galerie);
+  return {fin:r.temps, issue:r.issue, erreur:r.erreur, chantiers:l, batteriesAttente:attente.filter(x => x.type === 'batterie').map(x => x.camp + ' ' + x.t + ' s'),
+    autresAttente:attente.map(x => x.camp + ' ' + x.type + ' ' + x.t + ' s')};
+}
+window.chantiersPartieGaleries = chantiersPartieGaleries;
+// Défaut 5 : contrôle de l'emplacement d'une galerie b (posée). Rend :
+//  bord : cases entre la galerie et le bord de la carte (but ≥ 3) ; qg : px jusqu'au QG du camp (ou son bâtiment
+//  le plus proche) ; batProche : px jusqu'au plus proche autre bâtiment du camp ;
+//  coupe : cases libres que la galerie isole du reste (comptage des cases joignables depuis la sortie du QG, avec
+//  et sans la galerie, moins ses 9 cases) : 0 attendu ; sortiesBloquees : bâtiments du camp dont la case de sortie
+//  n'est plus joignable depuis celle du QG (0 attendu).
+function controleEmplacementGalerie(b){
+  const t = b.def.taille, c = Math.round(b.x/TUILE - t/2), r = Math.round(b.y/TUILE - t/2);
+  const bord = Math.min(c, r, COLS - (c + t), LIGNES - (r + t));
+  const miens = ents.filter(e => e.est === 'batiment' && !e.mort && e.camp === b.camp && e !== b);
+  const qg = miens.find(e => e.type === 'qg') || miens[0];
+  const caseSortie = e => [Math.max(0, Math.min(COLS-1, Math.floor(e.x/TUILE))), Math.max(0, Math.min(LIGNES-1, Math.floor((e.y + e.rayon + 20)/TUILE)))];
+  const joignables = depart => {
+    const vu = new Uint8Array(COLS*LIGNES), file = [depart[1]*COLS + depart[0]];
+    if(grille[file[0]] !== 0) return {n:0, vu};
+    vu[file[0]] = 1; let n = 0;
+    while(file.length){
+      const k = file.pop(); n++;
+      const kc = k % COLS, kr = (k/COLS)|0;
+      for(const [dc, dr] of [[1,0],[-1,0],[0,1],[0,-1]]){
+        const nc = kc + dc, nr = kr + dr, nk = nr*COLS + nc;
+        if(nc < 0 || nr < 0 || nc >= COLS || nr >= LIGNES || vu[nk] || grille[nk] !== 0) continue;
+        vu[nk] = 1; file.push(nk);
+      }
+    }
+    return {n, vu};
+  };
+  if(!qg) return {bord, qg:null};
+  const s0 = caseSortie(qg), avec = joignables(s0);
+  const cases = [];
+  for(let rr = r; rr < r + t; rr++) for(let cc = c; cc < c + t; cc++) if(rr >= 0 && cc >= 0 && rr < LIGNES && cc < COLS){ cases.push(rr*COLS + cc); }
+  const avant = cases.map(k => grille[k]);
+  for(const k of cases) grille[k] = 0;
+  const sans = joignables(s0);
+  cases.forEach((k, i) => { grille[k] = avant[i]; });
+  const sortiesBloquees = miens.filter(e => { const s = caseSortie(e), k = s[1]*COLS + s[0]; return sans.vu[k] && !avec.vu[k]; }).map(e => e.type);
+  let batProche = Infinity; for(const e of miens) batProche = Math.min(batProche, dist(e, b));
+  return {c, r, bord, qg:Math.round(dist(qg, b)), batProche:Math.round(batProche), coupe:sans.n - avec.n - cases.length, sortiesBloquees};
+}
+window.controleEmplacementGalerie = controleEmplacementGalerie;
 // Hasard fixé pour rejouer une partie à l'identique : avecGraine(5, () => duelUltra('difficile', false, 'halden')).
 function avecGraine(graine, fn){
   let s = graine; const r0 = Math.random;
@@ -2015,6 +2313,30 @@ function testerGaleries(quoi, numero){
       V('tir ordinaire : une galerie ouverte qui se refermera avant l’impact n’est ni visée ni comptée', a1 && !a5 && sans, {ouverte1s:a1, ouverte5s:a5, sansDelai:sans});
     }
 
+    // 5 bis. Journal (lot 3, défaut 6, 19 novembre 2026) : Difficile (I, sa boucle tourne), galerie chargée mais des
+    //    unités de J valant plus que la retenue près d'elle ; J ouvre deux fois. Une seule ligne « retenue » par
+    //    ouverture (avant : une par réflexion tant que le contre-tir restait possible), et aucun contre-tir.
+    {
+      scene();
+      const gJ = poserGalerie('J'), gI = poserGalerie('I');
+      niveau('I', 'difficile', true);
+      pas(1);
+      const R = reglagesGalerieIA('I');
+      for(let k = 0; k < 40 && valeurEnnemiePres('I', gI.x, gI.y, R.retenueRayon) <= R.retenueValeur; k++)
+        unite('conscrit', 'J', gI.x + 120*Math.cos(k), gI.y + 120*Math.sin(k));
+      const valeur = valeurEnnemiePres('I', gI.x, gI.y, R.retenueRayon), lignes = [];
+      for(let n = 0; n < 2; n++){
+        gI.gal.stock = gI.def.galerie.lanceurs; gI.gal.fab = 0; gJ.gal.stock = 1; gJ.gal.fab = 0;
+        const avant = journalIA('I').length, ok = executerOrdre('J', {type:'tirGalerie', id:gJ.id, x:LARG/2, y:HAUT/2}).ok, t0 = temps;
+        while(temps - t0 < 4) miseAJour(DT);
+        const J = journalIA('I').slice(avant);
+        lignes.push({ordreJ:ok, retenues:J.filter(l => l.quoi === 'retenue' && l.cibleId === gJ.id).length, contreTirs:J.filter(l => l.quoi === 'contreTir').length});
+        while(gJ.galT !== null) miseAJour(DT);
+      }
+      V('journal : une retenue de contre-tir notée une seule fois par ouverture adverse (deux ouvertures, deux lignes)',
+        valeur > R.retenueValeur && lignes.every(l => l.ordreJ && l.retenues === 1 && l.contreTirs === 0), {valeurPres:valeur, ouvertures:lignes});
+    }
+
     // 6. Esquive (§ 9.5) : un conscrit de I au point de rassemblement de son ordinateur (rien d'autre ne le
     //    déplace) ; J tire dessus. Difficile : il reçoit l'ordre de sortir du cercle et n'est pas touché.
     //    Normale : il ne bouge pas et il est touché.
@@ -2048,13 +2370,27 @@ function testerGaleries(quoi, numero){
   // Ultra gagne souvent contre Difficile avant que sa galerie ait tiré : sur 12 graines essayées (1 à 6, Ultra
   // Karsk puis Ultra Halden), seule la graine 6, Ultra Halden, le voit tirer ; Difficile n'y bâtit pas de galerie.
   // Graine 43 : la partie de l'étape 1 où les deux camps Difficile bâtissent ; on y voit un contre-tir.
+  // Graines rechoisies le 19 novembre 2026 (lot 3 : l'ordinateur épargne désormais peu à peu pour sa galerie, les
+  // parties ne se déroulent plus pareil), sans rien changer à ce que prouvent les verdicts. Les anciennes ne
+  // montraient plus : graine 2, la riposte par pouvoir de Normale ; graine 6, le tir d'Ultra (partie finie à
+  // 727 s, missile pas encore prêt) ; graine 43, le contre-tir. Premières graines qui montrent tout, parmi 1 à 20
+  // (1 à 15 pour Ultra) : 13 (graines 13, 15, 16, 18, 19 conviennent), 11 (seule), 13 (13 et 14).
+  // Rechoisies de nouveau à l'étape 2 (19 novembre 2026) : les parties partent désormais de prochainId = 1
+  // (partieRejouable, voir partieSerieGaleries : avant, elles dépendaient de ce qui avait tourné avant dans la page),
+  // et l'emplacement de la galerie est tiré au hasard (défaut 5). Graine 13 de la première partie : J bâtit et
+  // fabrique mais ne tire pas, aucune riposte ; graine 13 de la troisième : seul I bâtit. Premières graines qui
+  // montrent tout : 5 (parmi 1 à 5), 11 (inchangée), 33 (parmi 1 à 35, seule ; Difficile Halden bâtit rarement).
+  // Rechoisies encore en fin d'étape 2 (19 novembre 2026) : la case de la galerie est désormais tirée parmi les quatre
+  // plus proches du point visé (PLACE_GALERIE.choix), ce qui change la suite des parties. Graine 5 : J bâtit et
+  // fabrique mais ne tire plus (partie finie à 620 s), aucune riposte ; graine 33 : aucun contre-tir. Mêmes critères
+  // que les verdicts ci-dessous (hors temps de calcul) : 2 et 6 conviennent parmi 1 à 14 ; 25 seule parmi 1 à 30.
   function essaisParties(){
     const parties = [
       {nom:'Difficile (J, Karsk) contre Normale (I, Halden)', graine:2, sujets:['J'], riposte:'ripostePouvoir',
        liste:[{id:'J', faction:'karsk', equipe:'A', niveau:'difficile'}, {id:'I', faction:'halden', equipe:'B', niveau:'normal'}]},
-      {nom:'Ultra (J, Halden) contre Difficile (I, Karsk)', graine:6, sujets:['J'], riposte:null,
+      {nom:'Ultra (J, Halden) contre Difficile (I, Karsk)', graine:11, sujets:['J'], riposte:null,
        liste:[{id:'J', faction:'halden', equipe:'A', niveau:'ultra'}, {id:'I', faction:'karsk', equipe:'B', niveau:'difficile'}]},
-      {nom:'Difficile (J, Halden) contre Difficile (I, Karsk)', graine:43, sujets:['J', 'I'], riposte:'contreTir',
+      {nom:'Difficile (J, Halden) contre Difficile (I, Karsk)', graine:25, sujets:['J', 'I'], riposte:'contreTir',
        liste:[{id:'J', faction:'halden', equipe:'A', niveau:'difficile'}, {id:'I', faction:'karsk', equipe:'B', niveau:'difficile'}]},
     ];
     const DUREE = 900;

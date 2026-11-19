@@ -45,7 +45,7 @@ d'effets, et les modules 3D les mettent en scène à chaque image, à travers
 l'objet global `R3D`. On peut donc modifier les règles sans toucher au rendu,
 et inversement.
 
-Chaque balise `<script>` porte un numéro de version (`?v=35` au 19 novembre 2026 : l’ordinateur construit et utilise une galerie de tir ; `?v=34` au 18 novembre 2026 : galeries de tir en escarmouche solo, voir « Galeries de tir » ; `?v=33` au 16 novembre 2026 : délai de retour d'un joueur porté à 120 secondes ; `?v=32` : annonce du salon liée à son serveur, issue de la partie annoncée par l'hôte ; `?v=31` : écran de fin de l'invité seulement sur la fin confirmée par l'hôte, clés des joueurs partis jamais oubliées, voir « Multijoueur » ; `?v=30` : compteurs datés dans le futur et identifiant d'un joueur sorti du salon ; `?v=29` : retour d'un invité et fin de partie protégés ; `?v=28` : messages en ligne signés ; `?v=26` et `?v=27` : multijoueur corrigé et protégé ; `?v=25` : multijoueur en ligne ; `?v=24` : seconde passe de fluidité, voir « Fluidité » à la fin ; la version publiée sur GitHub Pages est encore la 24, solo seulement). **Il faut
+Chaque balise `<script>` porte un numéro de version (`?v=36` au 19 novembre 2026 : réglage de l’ordinateur pour les galeries ; `?v=35` le même jour : l’ordinateur construit et utilise une galerie de tir ; `?v=34` au 18 novembre 2026 : galeries de tir en escarmouche solo, voir « Galeries de tir » ; `?v=33` au 16 novembre 2026 : délai de retour d'un joueur porté à 120 secondes ; `?v=32` : annonce du salon liée à son serveur, issue de la partie annoncée par l'hôte ; `?v=31` : écran de fin de l'invité seulement sur la fin confirmée par l'hôte, clés des joueurs partis jamais oubliées, voir « Multijoueur » ; `?v=30` : compteurs datés dans le futur et identifiant d'un joueur sorti du salon ; `?v=29` : retour d'un invité et fin de partie protégés ; `?v=28` : messages en ligne signés ; `?v=26` et `?v=27` : multijoueur corrigé et protégé ; `?v=25` : multijoueur en ligne ; `?v=24` : seconde passe de fluidité, voir « Fluidité » à la fin ; la version publiée sur GitHub Pages est encore la 24, solo seulement). **Il faut
 l'augmenter à chaque modification d'un fichier**, sinon le navigateur garde
 l'ancienne version en mémoire.
 
@@ -815,6 +815,32 @@ détruire que pendant qu'il tire. Option C retenue : une version par camp.
   plus (ni la batterie qui la précède), le missile passe avant le prochain
   bâtiment, le petit pouvoir de riposte part même quand il garde ses points
   pour la super-arme.
+- **Réglage de l'ordinateur** (lot 3, 19 novembre 2026, `?v=36`, option cochée
+  seulement) : Normale et Difficile mettent le prix de la galerie de côté peu à
+  peu (6 par seconde) une fois l'aéroport bâti, sans arrêter de produire, et
+  pas quand ils sont en difficulté (armée sous 0,8 fois la plus forte armée
+  adverse, ou ennemi près de la base depuis moins de 45 s) ; Ultra ne met plus
+  la galerie à son plan quand son armée est en retard ; l'exception « attente
+  du premier avion » ne profite plus qu'à la galerie (elle laissait passer
+  batterie, caserne, usine : 19 parties sur 20) ; la galerie se pose dans la
+  base, à au moins 3 cases du bord, 2 cases libres autour, sur une case tirée
+  au hasard parmi les 4 meilleures. Objectifs fixés avant de régler, mesurés
+  par `serieGaleries` (`verif-missions-moteur.js` : 9 affrontements, 90 parties
+  de 900 s, chaque graine jouée option décochée puis cochée) et remesurés par
+  un relecteur indépendant sur les graines 101 à 110. **Atteints** : emplacement
+  (aucune galerie près du bord, contre toutes avant), aucune triche, réserves
+  jamais négatives, temps de calcul inchangé. **Non atteints** : « ne pas
+  affaiblir l'ordinateur » (77 % des parties se terminent encore, but 90 % ;
+  75 % au même vainqueur, but 80 % ; durée médiane +5 %, dans le but de 15 % ;
+  en `?v=35`, sur d'autres graines : 66 %, 66 % et +30 %) et « usage réel »
+  (Normale bâtit une galerie dans 37 % des parties longues et tire dans 15 %,
+  Difficile 35 % et 22 % ; buts 60 % et 50 % ; Halden est le plus bas). Les
+  deux objectifs se contredisent : priorité donnée au premier. Cause repérée
+  par le relecteur, pas encore corrigée : la galerie n'est bâtie que lorsque
+  le compteur d'épargne atteint son prix, alors que les réserves suffisent
+  souvent bien avant ; et l'épargne n'est jamais remise à zéro. Règle d'or
+  vérifiée par deux relecteurs : `7d442efb`, `8e338d28`, `6053f9be` ;
+  `testerGaleries()` 59 sur 59, `testerGaleries('parties')` 15 sur 15.
 - **Code** : `jeu.js` (tables `BATIMENTS.aiguille` / `terrier`, `CYCLE_GALERIE`,
   `galeriesActives`, `galerieFermee`, `majGalerie`, ordres `fabriquerMissile` et
   `tirGalerie`, restés locaux), `r3d-batiments.js` (bloc « GALERIES DE TIR » :
