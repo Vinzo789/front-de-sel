@@ -1553,6 +1553,16 @@ développement, le 11 novembre 2026 :
 
 ## Choix faits sans le propriétaire, à valider
 
+- (`?v=40`, 20 novembre 2026, deux demandes du propriétaire) **Missiles des galeries à 1 200 de dégâts** : l'Aiguille
+  passe de 600 à 1 200 ; le Brisant de 330 à 600 par missile, soit 1 200 pour la salve de deux (choix fait sans lui :
+  « 1 200 sur la zone » compris comme le total de la salve ; à valider). Rien d'autre n'a été adapté, à sa demande :
+  ni prix, ni durées, ni ordinateur. Conséquence connue : malgré les demi-dégâts sur les véhicules légers, un missile
+  détruit maintenant un collecteur (520 PV). **Un seul réparateur à la fois par bâtiment** (`seulReparateur`, `jeu.js`) :
+  ouvriers et réparateurs ; les autres attendent et prennent le relais. Cette règle vaut partout (missions et parties
+  en ligne comprises) et change donc les parties de référence : duel `7d442efb` inchangé, quatre camps `d9afd39c`
+  (avant : `8e338d28`). `testerGaleries()` 59 sur 59 (quatre essais adaptés aux nouveaux dégâts), `testerDefense()`
+  47 sur 47 ; les missions n'ont pas été rejouées.
+
 - (`?v=34`, galeries de tir) Noms « Galerie Aiguille » et « Terrier des Brisants » ; case décochée par défaut ;
   missiles payés en minerai et fabriqués d'avance (400 en 120 s pour Halden, 220 en 60 s pièce pour Karsk) au lieu
   des 60 s et 45 s de l'option C d'origine, jugée trop forte ; galerie jamais réparée ; demi-dégâts sur les

@@ -1957,13 +1957,14 @@ function testerGaleries(quoi, numero){
       V('cycle : effets « missile » (vol de 5 s depuis la galerie) et « marqueur » pouvoir:galerie', effOk('J') && effOk('I'),
         {marqueursJ:marqueurs('J').length, marqueursI:marqueurs('I').length});
       V('cycle : impact = explosionZone missileGalerie, auteur {camp, est:galerie, galerie:true}, bord 0,5',
-        iJ.concat(iI).every(z => z.auteur.est === 'galerie' && z.auteur.galerie === true) && iJ.every(z => z.r === 70 && z.deg === 600) && iI.every(z => z.r === 95 && z.deg === 330),
+        iJ.concat(iI).every(z => z.auteur.est === 'galerie' && z.auteur.galerie === true) && iJ.every(z => z.r === 70 && z.deg === BATIMENTS.aiguille.galerie.degats) && iI.every(z => z.r === 95 && z.deg === BATIMENTS.terrier.galerie.degats),
         iJ.concat(iI).map(z => [z.auteur.camp, z.r, z.deg]));
       V('cycle : fermeture à 17,5 s, b.galT suit le temps du cycle puis null, b.galN = n puis 0', Math.abs(fermeture.J - 17.5) <= EPS && Math.abs(fermeture.I - 17.5) <= EPS && suiviOk.J && suiviOk.I
         && gJ.galT === null && gI.galT === null && gJ.galN === 0 && gI.galN === 0 && galerieFermee(gJ) && galerieFermee(gI),
         {fermeture, suiviOk, ecarts:ecarts.slice(0, 4)});
       const dI = pvI - qI.pv, dJ = pvJ - qJ.pv;
-      V('dégâts : QG au centre, Aiguille 600, salve du Terrier entre 600 et 660 (dispersion)', Math.abs(dI - 600) < 0.01 && dJ >= 600 && dJ <= 660.01,
+      // (Dégâts lus dans la table depuis le 20 novembre 2026 : 1 200 pour l'Aiguille, 600 par Brisant ; avant, 600 et 330.)
+      V('dégâts : QG au centre, Aiguille à pleins dégâts, salve du Terrier entre 90 et 100 % de deux missiles (dispersion)', Math.abs(dI - BATIMENTS.aiguille.galerie.degats) < 0.01 && dJ >= 1.8*BATIMENTS.terrier.galerie.degats && dJ <= 2*BATIMENTS.terrier.galerie.degats + 0.01,
         {qgI:r1(dI), qgJ:r1(dJ), pointsImpactI:iI.map(z => [Math.round(z.x - qJ.x), Math.round(z.y - qJ.y)])});
       V('dispersion : Aiguille au point visé, Terrier à 45 px au plus', iJ.every(z => z.x === qI.x && z.y === qI.y) && iI.every(z => Math.hypot(z.x - qJ.x, z.y - qJ.y) <= 45.001),
         iI.map(z => r1(Math.hypot(z.x - qJ.x, z.y - qJ.y))));
@@ -1985,11 +1986,13 @@ function testerGaleries(quoi, numero){
       executerOrdre('J', {type:'tirGalerie', id:gJ.id, x:ennemi.x, y:ennemi.y});
       pas(17);
       const dCol = subi(col, parGalerie);
-      V('dégâts : collecteur (520 PV) touché par la salve du Terrier, il survit', !col.mort && dCol > 0 && dCol <= 330.01,
+      // (Depuis le 20 novembre 2026, à 600 par missile, une salve qui touche deux fois détruit un collecteur de 520 PV :
+      // le propriétaire a demandé ces dégâts « sans rien adapter ». L'essai ne vérifie plus que les demi-dégâts.)
+      V('dégâts : collecteur touché par la salve du Terrier, demi-dégâts au plus (léger 0,5)', dCol > 0 && dCol <= BATIMENTS.terrier.galerie.degats + 0.01,
         {degats:r1(dCol), pv:r1(col.pv), touches:(journal.degats.get(col.id) || []).filter(parGalerie).length});
       V('dégâts : unité du camp tireur épargnée (I sous sa propre salve)', subi(propreI) === 0 && !propreI.mort, {pv:propreI.pv});
-      V('dégâts : Aiguille sur un collecteur adverse (léger 0,5 → 300), son camp (J) et son allié (K) épargnés',
-        subi(ennemi, parGalerie) > 280 && subi(ennemi, parGalerie) <= 300.01 && subi(propreJ) === 0 && subi(allieK) === 0 && !propreJ.mort && !allieK.mort,
+      V('dégâts : Aiguille sur un collecteur adverse (léger 0,5 : demi-dégâts au plus), son camp (J) et son allié (K) épargnés',
+        subi(ennemi, parGalerie) > 0 && subi(ennemi, parGalerie) <= BATIMENTS.aiguille.galerie.degats*0.5 + 0.01 && subi(propreJ) === 0 && subi(allieK) === 0 && !propreJ.mort && !allieK.mort,
         {ennemi:r1(subi(ennemi, parGalerie)), J:subi(propreJ), K:subi(allieK)});
     }
 

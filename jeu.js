@@ -255,11 +255,11 @@ const BATIMENTS = {
   // Pas de champ « arme » sur le bâtiment : il ne tire pas comme une tourelle (et les tables du réseau,
   // construites à partir des armes des bâtiments, ne changent pas).
   aiguille:{nom:'Galerie Aiguille', taille:3, pv:1500, cout:1200, temps:40, requiert:'usine',
-    galerie:{lanceurs:1, coutMissile:400, tempsMissile:120, degats:600, rayon:70, dispersion:0},
+    galerie:{lanceurs:1, coutMissile:400, tempsMissile:120, degats:1200, rayon:70, dispersion:0},   // 1 200 depuis le 20 novembre 2026 (600 avant), demande du propriétaire
     // (Descriptions courtes : au-delà d'environ 170 signes, la fiche de 1280 × 720 n'affiche plus la ligne d'état.)
     desc:'Propre à Halden. Galerie enterrée : un missile lourd et précis, n’importe où sur la carte. Une fois bâtie et fermée, elle est intouchable ; vulnérable 17,5 s à chaque tir. Jamais réparée.'},
   terrier:{nom:'Terrier des Brisants', taille:3, pv:1900, cout:1000, temps:45, requiert:'usine',
-    galerie:{lanceurs:2, coutMissile:220, tempsMissile:60, degats:330, rayon:95, dispersion:45},
+    galerie:{lanceurs:2, coutMissile:220, tempsMissile:60, degats:600, rayon:95, dispersion:45},   // 600 par missile, 1 200 la salve, depuis le 20 novembre 2026 (330 avant)
     desc:'Propre à Karsk. Galerie enterrée : une salve de deux missiles moins précis, n’importe où sur la carte. Une fois bâtie et fermée, elle est intouchable ; vulnérable 17,5 s à chaque tir. Jamais réparée.'},
   // Défense antimissile, lot A (19 novembre 2026, cahier des charges § 11) : les deux camps, mêmes règles, derrière
   // la même option que les galeries (galeriesActives). Placées après les galeries : l'ordre des bâtiments existants
@@ -1115,10 +1115,19 @@ function majOuvrier(u, dt){
     if(distBord(u,b) > 30){ allerVers(u, b.x, b.y, dt); return; }
     u.chemin = null; u.travaille = true;
     u.angle = Math.atan2(b.y-u.y, b.x-u.x);
-    b.pv = Math.min(b.pvMax, b.pv + b.pvMax*0.5*dt/Math.max(20, b.def.temps || 40));
+    if(seulReparateur(u, b)) b.pv = Math.min(b.pvMax, b.pv + b.pvMax*0.5*dt/Math.max(20, b.def.temps || 40));
     return;
   }
   u.ordre = null;   // ordre inconnu des ouvriers (dont l'ancien « recolter »)
+}
+
+// Un seul réparateur à la fois par bâtiment (20 novembre 2026, demande du propriétaire : à plusieurs, la
+// réparation allait trop vite). Le premier arrivé répare ; les autres restent en place et prennent le relais
+// dès qu'il s'arrête. Vaut pour les ouvriers comme pour les réparateurs. b.repPar / b.repT : qui répare, et quand.
+function seulReparateur(u, b){
+  if(b.repPar !== undefined && b.repPar !== u.id && temps - b.repT < 0.25) return false;
+  b.repPar = u.id; b.repT = temps;
+  return true;
 }
 
 // ---------- Réparateurs (mécano, infirmier, atelier mobile, dépanneuse) ----------
@@ -1182,7 +1191,7 @@ function soigner(u, e, dt){
   const ang = Math.atan2(e.y - u.y, e.x - u.x);
   u.angle = tournerVers(u.angle, ang, dt*6); u.angleT = u.angle;
   const k = e.est === 'batiment' ? u.def.soinBat : u.def.soin;
-  e.pv = Math.min(e.pvMax, e.pv + k*dt);
+  if(e.est !== 'batiment' || seulReparateur(u, e)) e.pv = Math.min(e.pvMax, e.pv + k*dt);
   u.repareT = temps; u.travaille = true;
   return e.pv < e.pvMax - 0.5;
 }
