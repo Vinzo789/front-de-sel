@@ -8169,7 +8169,7 @@ function initInterfaceSurprises(params){
 // Option « Galeries de tir » (novembre 2026) : case à cocher de l'écran d'escarmouche, sur le modèle de
 // « Mode Surprises » (aucune mémorisation dans le navigateur ; gardée d'une carte à l'autre par le
 // paramètre d'adresse ?galeries=1, qui sert aussi aux essais automatiques). Appelé une fois, au lancement.
-// Réserves de départ de l'escarmouche (21 novembre 2026, demande du propriétaire) : de 0 à 2 500, par paliers de
+// Réserves de départ de l'escarmouche (20 novembre 2026, demande du propriétaire) : de 0 à 2 500, par paliers de
 // 200 (2 500 n'est pas un multiple de 200 : c'est le dernier choix, après 2 400). Les mêmes pour tous les camps,
 // ordinateurs compris ; 1 000 par défaut, comme avant. Liste déroulante de l'écran d'escarmouche, gardée d'une carte
 // à l'autre par le paramètre d'adresse ?reserves=, sans mémorisation dans le navigateur. Les missions gardent leurs
@@ -8182,7 +8182,7 @@ function reservesDepartValides(v){
   const n = typeof v === 'number' ? v : (typeof v === 'string' && /^\d+$/.test(v) ? parseInt(v, 10) : NaN);
   return RESERVES_DEPART_CHOIX.includes(n) ? n : RESERVES_DEPART_DEFAUT;
 }
-// Charge des collecteurs (21 novembre 2026, décision du propriétaire) : 50 par voyage (habituel) ou 100, au choix sur
+// Charge des collecteurs (20 novembre 2026, décision du propriétaire) : 50 par voyage (habituel) ou 100, au choix sur
 // l'écran d'escarmouche ; gardé d'une carte à l'autre par ?collecte=100. À 100, le chargement par seconde double
 // aussi (25 au lieu de 12,5) : la navette garde son rythme, 4 s au champ, et le revenu double pour tous les camps
 // (mesuré sur des duels d'ordinateurs : parties de 4 à 7 minutes au lieu de 10 à 15, galeries rarement utilisées).

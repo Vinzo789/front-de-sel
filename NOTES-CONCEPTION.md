@@ -952,7 +952,7 @@ Règles complètes : `travaux/galerie/CAHIER-DES-CHARGES.md`, § 11.
   Zénith (haute altitude), écran radar d'altitude. Modèles prêts dans
   `travaux/galerie/r3d-batiments-d.js`.
 
-### Réglages de l'escarmouche : réserves de départ, charge des collecteurs (21 novembre 2026, `?v=38`)
+### Réglages de l'escarmouche : réserves de départ, charge des collecteurs (20 novembre 2026, `?v=38`)
 Demandes du propriétaire. Deux listes sur l'écran d'escarmouche, sous
 « Galeries de tir » ; aucune mémorisation dans le navigateur, gardées d'une
 carte à l'autre par l'adresse (`?reserves=`, `?collecte=100`).
