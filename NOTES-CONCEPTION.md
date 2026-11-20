@@ -768,7 +768,8 @@ détruire que pendant qu'il tire. Option C retenue : une version par camp.
 - **Activation** : case « Galeries de tir » de l'écran d'escarmouche, décochée
   par défaut (`?galeries=1` la coche). Décochée, rien ne change : le bâtiment
   n'existe dans aucune barre et les empreintes de référence du solo sont
-  identiques. Jamais en mission, jamais en ligne (lot à part), ni dans la
+  identiques. Jamais en mission, jamais en ligne avant `?v=44` (depuis : au choix de l'hôte, voir « Galeries
+  de tir et défense antimissile en ligne »), ni dans la
   vitrine `?demo`. Une seule galerie par camp, après l'usine.
 - **Fabrication** : bouton « Fabriquer un missile » de la fiche de la galerie ;
   payé à la commande, un missile à la fois, autant que de lanceurs ; elle
@@ -1002,6 +1003,89 @@ RISE », a été écartée : c'était le nom d'une série existante, mots invers
 - **Vérifié** : menu affiché (le titre tient dans la boîte), duel de
   référence `7d442efb` inchangé, console sans erreur. Non vérifié : à la
   souris ; le bandeau en partie sur un écran large.
+
+### Galeries de tir et défense antimissile en ligne (20 novembre 2026, `?v=44`)
+Demande du propriétaire : jouer en multijoueur les galeries de tir, la Batterie
+Parasol et les radars de veille, jusque-là réservés au jeu contre l'ordinateur.
+Cahier des charges : `travaux/multijoueur/CAHIER-GALERIES-EN-LIGNE.md`. Rien du
+« lot B » (missile lourd, Batterie Zénith), qui n'est pas développé.
+- **Réglage** : case « Galeries de tir » sur l'écran du salon de l'hôte,
+  décochée par défaut (`?galeries=1` la pré-coche). Le choix part avec les
+  données de lancement ; il vaut pour tous les camps, ordinateurs compris.
+  L'invité ne le voit qu'au début de la partie (message à l'écran), pas dans
+  le salon. Décochée : la partie en ligne se déroule comme en version 43.
+- **Comment** : l'hôte simule tout, comme avant. Les instantanés portent en
+  plus l'état des galeries (stock, fabrication, heure de l'ordre de tir) et des
+  batteries (munitions, fabrication, heure du dernier tir) ; les missiles,
+  marqueurs d'impact et intercepteurs passent par les effets ; les quatre
+  ordres (`fabriquerMissile`, `tirGalerie`, `fabriquerMunition`,
+  `repondreInterception`) sont envoyés par l'invité et validés par l'hôte
+  (bâtiment du bon camp, réserves, stock) ; l'état de la fenêtre
+  d'interception d'un joueur distant lui arrive par un message fiable
+  (`interception`).
+- **Fenêtre d'interception chez l'invité** : son affichage a 0,15 s de retard
+  et sa réponse met un aller jusqu'à l'hôte. Son décompte est donc raccourci de
+  0,35 s : à zéro, il est trop tard pour être sûr. Une réponse « Intercepter »
+  arrivée après le départ est refusée et l'hôte le dit (« Réponse arrivée trop
+  tard : le missile était déjà parti. »).
+- **Versions** : le numéro de protocole reste 2 (il nomme les sujets du
+  serveur). Deux joueurs de versions différentes restent séparés par le
+  contrôle de version existant (`?v=` comparé strictement à l'arrivée : « Votre
+  version du jeu diffère de celle de l'hôte »). Le format des instantanés a
+  changé : une version 43 ne peut pas jouer avec une version 44, et ne le
+  tente pas.
+- **Vérifié** (volet masqué, sans souris). Par l'orchestrateur : pages neuves,
+  duel `7d442efb`, quatre camps `d9afd39c` ; `testerDefenseEnLigne()` 16 sur 16
+  et `testerGaleriesEnLigne()` 15 sur 15 (hôte et invité dans la même page, mode
+  `?echo&galeries=1`, réseau simulé), rejoués après les corrections de la
+  relecture. Par l'agent qui a écrit le code (rapports dans le dossier de notes
+  de la session) : `avecGraine(7, () => testerGaleries())` 59 sur 59,
+  `testerDefense()` 47 sur 47 ; `essai-codec.html?essai=tout` 95 sur 96 (le
+  seul échec est une mesure de durée du sceau, 0,36 ms pour 0,25 exigé, page
+  chargée en même temps que d'autres ; relancée seule, 13 sur 13 ; ce code
+  n'est pas touché) ; vrai salon HiveMQ à deux onglets, case cochée : les deux
+  camps bâtissent galerie, batterie et trois radars par leurs ordres,
+  fabriquent, tirent et interceptent dans les deux sens, mêmes états des deux
+  côtés, consoles sans erreur (chantiers et fabrications raccourcis à la main
+  chez l'hôte) ; salon case décochée : ni galerie ni batterie dans les barres,
+  les quatre ordres refusés. Puis un relecteur indépendant en lecture seule :
+  rien de bloquant ; trois constats corrigés (l'effacement d'un missile abattu
+  choisit maintenant le bon camp ; « trop tard » n'est plus dit pour un
+  « Laisser passer » ; nombre de missiles reçu borné au nombre de lanceurs).
+  Le vrai salon n'a pas été rejoué après ces trois corrections.
+- **Non vérifié** : entre deux ordinateurs ; à la souris ; l'allure du missile
+  et de l'intercepteur à l'écran d'un invité ; le retour d'un invité (page
+  rechargée) au milieu d'une proposition d'interception ; un camp d'invité
+  confié à l'ordinateur pendant une proposition (relu dans le code seulement) ;
+  une longue partie (poids des messages `interception` dans la mémoire de
+  rattrapage, non mesuré).
+- **Limites acceptées** (toutes liées à L1, messages non chiffrés) : le stock
+  et la fabrication des galeries et des batteries adverses voyagent dans les
+  instantanés ; l'issue d'une interception voyage dès le tir de l'intercepteur
+  (le rendu en a besoin), soit environ 3 s avant d'être affichée ; la réponse
+  d'un défenseur est diffusée à tous. Un navigateur modifié pourrait les lire ;
+  le jeu normal ne les montre pas. Le point visé par une galerie, lui, n'est
+  jamais transmis avant le départ du missile.
+- **Restes connus** : si l'hôte refuse une réponse sans que rien ne change chez
+  lui, la fenêtre de l'invité peut garder « interception ordonnée » jusqu'à sa
+  fermeture (le message « trop tard » arrive quand même) ; avec deux galeries
+  ouvertes, « trop tard » peut être dit deux fois ; la case du salon garde sa
+  dernière valeur tant que la page n'est pas rechargée.
+- **Choix faits sans le propriétaire, à valider** : case décochée par défaut ;
+  l'invité n'est prévenu qu'au lancement ; marge de 0,35 s ; le changement de
+  difficulté en cours de partie reste réservé au jeu contre l'ordinateur ; la
+  charge des collecteurs à 100 aussi.
+- **Trouvé en passant, pas corrigé** : `testerGaleries('parties')` donne 11 sur
+  15 et `testerDefense('parties')` 3 sur 6, sur la version 43 d'origine comme
+  sur celle-ci (relevé par l'agent). Ces parties d'essai n'ont sans doute pas
+  été rejouées depuis le passage des missiles à 1 200 de dégâts (`?v=40`) :
+  leurs graines sont à rechoisir.
+- **Code** : `jeu.js` (`galeriesEnLigne`, `galeriesActives`, section 11 ter :
+  `tablesReseau`, `effetVersReseau`, `fabriquerInstantane`, `galerieRecue`,
+  `batterieRecue`, `interceptionPourReseau`, `interceptionRecue`,
+  `majGaleriesInvite`, `envoyerOrdreInvite`), `reseau.js` (extension du
+  bâtiment dans le codec, format en commentaire au-dessus de `qBatiment` ;
+  quatre codes d'ordres), `verif-missions-moteur.js` (les deux essais en ligne).
 
 ### Commandes
 

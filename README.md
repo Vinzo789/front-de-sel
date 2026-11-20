@@ -20,8 +20,8 @@ la bibliothèque 3D three.js est chargée au démarrage.
 - Réglages de l'escarmouche : réserves de départ (de 0 à 2 500) et charge des
   collecteurs (50 ou 100 par voyage).
 - Mode « Surprises », à cocher sur l'écran de l'escarmouche.
-- « Galeries de tir », à cocher sur le même écran (escarmouche contre
-  l'ordinateur seulement) : un abri enterré d'où sortent des lanceurs de
+- « Galeries de tir », à cocher sur le même écran (et, en ligne, par l'hôte
+  dans le salon) : un abri enterré d'où sortent des lanceurs de
   missiles. Fermé, il est intouchable ; on ne peut le détruire que pendant les
   17,5 secondes où il tire. Pour s'en défendre : la Batterie Parasol et ses
   radars de veille, qui tentent d'abattre les missiles en vol.
@@ -55,7 +55,10 @@ compte : seul un pseudonyme est demandé.
   sa place s'il revient en moins de 2 minutes (en rouvrant le lien dans le même
   navigateur) ; ensuite, l'ordinateur prend son camp. Si l'hôte part, la partie
   s'arrête pour tous.
-- Les campagnes, le mode « Surprises » et les galeries de tir restent en solo.
+- Les galeries de tir et la défense antimissile se jouent en ligne si l'hôte
+  coche « Galeries de tir » dans le salon, avant de lancer la partie.
+- Les campagnes, le mode « Surprises » et le changement de difficulté en cours
+  de partie restent en solo.
 
 Le détail, les limites connues et ce qui a été vérifié sont dans
 `NOTES-CONCEPTION.md`, section « Multijoueur ».

@@ -1773,6 +1773,426 @@ function essaiEcho(opts){
 window.essaiEcho = essaiEcho;
 
 // ---------------------------------------------------------------------
+//  Galeries de tir en ligne, lot 1 (20 novembre 2026, travaux/multijoueur/CAHIER-GALERIES-EN-LIGNE.md § 8)
+//  Page : front-de-sel.html?echo&galeries=1&camps=2&verif, attendre echo.pret, puis
+//    tache('gel', () => 'lancé') ; testerGaleriesEnLigne().then(r => RESULTATS.gel = r)
+//  (ou simplement testerGaleriesEnLigne('gel') : le rapport arrive dans RESULTATS.gel, environ 40 s plus tard).
+//  Mené en temps réel par le minuteur du Worker (la boucle locale de reseau.js a un vrai retard). L'invité (I,
+//  Karsk, monde affiché) donne ses ordres par executerOrdre → réseau simulé → hôte : construire la galerie,
+//  fabriquer un missile, un tir refusé sur place (hors carte), puis tirer sur le QG de J. Pour aller vite, dans le
+//  monde de l'hôte et par les seules données du moteur : réserves gonflées, usine posée, chantier achevé d'un coup,
+//  fabrication raccourcie (fabT), galerie de J posée et chargée, son tir ordonné par executerOrdre chez l'hôte.
+//  Comparé à chaque instantané appliqué par l'invité : état des deux galeries (stock, fab, fabT arrondi, t0 à
+//  1/50 s, n, tires) contre celui de l'hôte au même instant. Renvoie une promesse de verdicts {nom, ok, detail}.
+// ---------------------------------------------------------------------
+function testerGaleriesEnLigne(cle){
+  if(modeReseau !== 'echo' || !echo.pret || !mondes) return Promise.resolve([{nom:'page ?echo&galeries=1&verif prête', ok:false, detail:{modeReseau, pret:echo.pret}}]);
+  const H = mondes.hote, V = [], verdict = (nom, ok, detail) => V.push({nom, ok:!!ok, detail});
+  if(cle) RESULTATS[cle] = 'en cours';
+  verdict('réglage galeries actif dans les deux mondes (?echo&galeries=1), barre de l’invité avec la galerie',
+    galeriesEnLigne === true && galeriesActives() && dansMonde(H, () => galeriesActives())
+    // (lot 2 : batterie et radar aussi, DEFENSE_EN_LIGNE retiré)
+    && batimentsConstructibles(faction('I')).includes('terrier') && batimentsConstructibles(faction('I')).includes('parasol'),
+    {galeriesEnLigne, liste:batimentsConstructibles(faction('I'))});
+  echo.piloteExterne = true;
+  window.enregistrerVictoire = () => {};
+  const r2 = v => v == null ? v : Math.round(v*100)/100;
+  const etatGal = g => g ? {stock:g.stock, fab:g.fab, fabS:Math.ceil(g.fabT - 1e-6), t0:g.t0, n:g.n, tires:g.tires} : null;
+  // Monde de l'hôte : préparation.
+  const prep = dansMonde(H, () => {
+    camps.I.reserves = 6000; camps.J.reserves = Math.max(camps.J.reserves, 3000);
+    const qI = ents.find(b => b.camp === 'I' && b.type === 'qg' && !b.mort), qJ = ents.find(b => b.camp === 'J' && b.type === 'qg' && !b.mort);
+    let usine = ents.find(b => b.camp === 'I' && b.type === 'usine' && !b.mort && !b.enCours);
+    if(!usine){ const p = trouverEmplacement('usine', {x:qI.x + 150, y:qI.y}); usine = creerBatiment('usine', 'I', p.c, p.r, true); }
+    const pT = trouverEmplacement('terrier', {x:qI.x - 160, y:qI.y + 60});
+    return {qI:{id:qI.id, x:qI.x, y:qI.y}, qJ:{id:qJ.id, x:qJ.x, y:qJ.y}, usine:usine.id, pT};
+  });
+  const histo = [];
+  const G = {terrier:null, aiguille:null};   // identifiants (monde de l'hôte = mêmes chez l'invité)
+  echo.apresPasHote = () => {
+    const h = {T:temps, gal:{}, pvQG:{}};
+    for(const e of ents) if(!e.mort && e.gal && !e.enCours) h.gal[e.id] = etatGal(e.gal);
+    for(const e of ents) if(!e.mort && e.type === 'qg') h.pvQG[e.camp] = e.pv;
+    histo.push(h); if(histo.length > 120) histo.shift();
+  };
+  const M = {ecarts:0, comparaisons:0, ecartsEx:[], galT:[], missiles:new Set(), marqueurs:new Set(), missilesParCamp:{}, erreurs:[], lignes:{},
+    pvQGJ:[], pvEcart:0};
+  echo.apresPasInvite = () => {
+    // Effets recréés chez l'invité : chacun compté une fois (objets distincts).
+    for(const f of effets){
+      if(f.type === 'missile' && f.galerie && !M.missiles.has(f)){ M.missiles.add(f); M.missilesParCamp[f.camp] = (M.missilesParCamp[f.camp] || 0) + 1;
+        if(!M.premierMissile) M.premierMissile = {camp:f.camp, galerie:f.galerie, x0:r2(f.x0), y0:r2(f.y0), duree:f.duree}; }
+      if(f.type === 'marqueur' && f.pouvoir === 'galerie') M.marqueurs.add(f);
+    }
+    const t = G.terrier && invite.index.get(G.terrier);
+    if(t && t.galT != null) M.galT.push(r2(t.galT));
+    // Galeries de l'invité contre l'hôte au même instant (dernier instantané appliqué).
+    const s0 = invite.courant; if(!s0) return;
+    const h = histo.find(x => Math.abs(x.T - s0.T) < 0.0015); if(!h) return;
+    for(const id in h.gal){
+      const b = invite.index.get(+id); M.comparaisons++;
+      const a = h.gal[id], g = b && etatGal(b.gal);
+      const ok = g && a.stock === g.stock && a.fab === g.fab && a.fabS === g.fabS && a.n === g.n && a.tires === g.tires
+        // t0 : deux arrondis au 1/50 s (heure de l'instantané et heure de t0), d'où 0,02 s au plus (mesuré : 0,02).
+        && (a.t0 === null ? g.t0 === null : g.t0 !== null && Math.abs(a.t0 - g.t0) <= 0.0201);
+      if(!ok){ M.ecarts++; if(M.ecartsEx.length < 5) M.ecartsEx.push({id, T:r2(s0.T), hote:a, invite:g}); }
+    }
+    const qJ = invite.index.get(prep.qJ.id);
+    if(qJ && h.pvQG.J != null){ const d = Math.abs(qJ.pv - h.pvQG.J); if(d > M.pvEcart) M.pvEcart = d; }
+  };
+  let phase = 0, phaseT = performance.now(), pas = 0, tirT = null, recusAvant = 0, resAvant = 0;
+  const debut = performance.now();
+  const suite = () => { phase++; phaseT = performance.now(); };
+  const delaiDepasse = s => performance.now() - phaseT > s*1000;
+  const promesse = new Promise(fin => {
+    let arret = null, fini = false;
+    const terminer = raison => {
+      if(fini) return; fini = true;
+      if(arret) arret();
+      echo.apresPasHote = echo.apresPasInvite = null; echo.piloteExterne = false;
+      if(raison) verdict('déroulé complet (' + raison + ')', false, {phase});
+      const g = M.galT;
+      let monotone = true; for(let i = 1; i < g.length; i++) if(g[i] < g[i - 1] - 1e-9) monotone = false;
+      verdict('invité : galT du terrier avance de 0 à 17,5 sans reculer, puis null (fermée)',
+        g.length > 100 && g[0] <= 0.3 && Math.max(...g) >= 17.3 && Math.max(...g) <= 17.5 && monotone && invite.index.get(G.terrier) && invite.index.get(G.terrier).galT === null,
+        {mesures:g.length, premier:g[0], max:g.length ? Math.max(...g) : null, monotone});
+      verdict('invité : un missile de galerie par tir, recréé une fois (I : 1, J : 1), avec point de départ ; deux marqueurs « galerie »',
+        M.missilesParCamp.I === 1 && M.missilesParCamp.J === 1 && M.marqueurs.size === 2 && M.premierMissile && M.premierMissile.x0 != null,
+        {missiles:M.missilesParCamp, marqueurs:M.marqueurs.size, premier:M.premierMissile});
+      verdict('aucun écart entre les galeries de l’invité et celles de l’hôte au même instant', M.comparaisons > 100 && M.ecarts === 0,
+        {comparaisons:M.comparaisons, ecarts:M.ecarts, exemples:M.ecartsEx});
+      const pvJ = M.pvQGJ;
+      // (Comparaison au même instant de jeu seulement, M.pvEcart : relevés à la fin, l'hôte a de l'avance sur l'affichage
+      // de l'invité, et un ouvrier de J peut réparer entre-temps ; vu le 20 novembre 2026, 12 PV d'écart ainsi.)
+      verdict('invité : dégâts du missile visibles sur le QG de J, égaux à ceux de l’hôte au même instant (à 1/255 près)',
+        pvJ.length === 2 && pvJ[1].invite < pvJ[0].invite - 50 && M.pvEcart <= pvJ[1].pvMax/255 + 1e-6,
+        {pvJ, ecartMaxPendant:r2(M.pvEcart)});
+      verdict('ordres de l’hôte : reçus et acceptés, aucun refus inattendu', hoteReseau.ordres.refuses === 0 && hoteReseau.ordres.acceptes >= 3, hoteReseau.ordres);
+      verdict('aucune erreur pendant l’essai', !M.erreurs.length, M.erreurs);
+      const res = {verdicts:V, reussis:V.filter(v => v.ok).length + ' / ' + V.length, dureeReelle:r2((performance.now() - debut)/1000), lignes:M.lignes};
+      if(cle) RESULTATS[cle] = res;
+      fin(res);
+    };
+    const etape = () => {
+      if(phase === 0){
+        // Ordre de construction de l'invité (camp local, monde affiché).
+        recusAvant = hoteReseau.ordres.recus;
+        const r = executerOrdre('I', {type:'construire', bat:'terrier', c:prep.pT.c, r:prep.pT.r});
+        verdict('invité : ordre « construire terrier » envoyé', r.ok && r.envoye, r);
+        suite();
+      } else if(phase === 1){
+        const ch = dansMonde(H, () => ents.find(b => b.camp === 'I' && b.type === 'terrier' && !b.mort));
+        if(ch){
+          G.terrier = ch.id;
+          dansMonde(H, () => {
+            ch.progres = 1; ch.enCours = false; ch.pv = ch.pvMax;   // chantier achevé d'un coup (essai)
+            const pA = trouverEmplacement('aiguille', {x:prep.qJ.x + 170, y:prep.qJ.y + 60});
+            const a = creerBatiment('aiguille', 'J', pA.c, pA.r, true); G.aiguille = a.id;
+          });
+          verdict('hôte : chantier du terrier ouvert par l’ordre de l’invité', true, {id:ch.id});
+          suite();
+        } else if(delaiDepasse(5)) terminer('chantier jamais ouvert');
+      } else if(phase === 2){
+        const b = invite.index.get(G.terrier);
+        if(b && !b.enCours && b.gal){
+          M.lignes.ferme = ligneEtatGalerie(b, true);
+          verdict('invité : fiche du terrier terminé « Fermée — aucun missile (à fabriquer) », boutons possibles', M.lignes.ferme === 'Fermée — aucun missile (à fabriquer)'
+            && empechementFabrication(b) === null && galerieFermee(b), {ligne:M.lignes.ferme, fab:empechementFabrication(b)});
+          resAvant = dansMonde(H, () => camps.I.reserves);
+          const r = executerOrdre('I', {type:'fabriquerMissile', id:G.terrier});
+          verdict('invité : ordre « fabriquer un missile » envoyé', r.ok && r.envoye, r);
+          suite();
+        } else if(delaiDepasse(5)) terminer('terrier jamais vu terminé chez l’invité');
+      } else if(phase === 3){
+        const b = invite.index.get(G.terrier), gH = dansMonde(H, () => entiteParId(G.terrier).gal);
+        if(b && b.gal.fab === 1 && gH.fab === 1){
+          M.lignes.fabrication = ligneEtatGalerie(b, true);
+          const paye = dansMonde(H, () => resAvant - camps.I.reserves);
+          verdict('fabrication : hôte payé 220, invité « Fermée — Fabrication 60 s » (ou 59 s)', Math.abs(paye - 220) < 30 && /^Fermée — Fabrication (60|59) s$/.test(M.lignes.fabrication),
+            {paye:r2(paye), ligne:M.lignes.fabrication});
+          dansMonde(H, () => { gH.fabT = Math.min(gH.fabT, 0.6); });   // fabrication raccourcie (essai)
+          suite();
+        } else if(delaiDepasse(5)) terminer('fabrication jamais vue');
+      } else if(phase === 4){
+        const b = invite.index.get(G.terrier);
+        if(b && b.gal.stock === 1 && b.gal.fab === 0){
+          M.lignes.pret = ligneEtatGalerie(b, true);
+          // Refus sur place (contrôle local, rien n'est envoyé), puis le vrai tir sur le QG de J.
+          const recus = hoteReseau.ordres.recus, envoyes = echo.salonInvite.statistiques().ordres;
+          const k = executerOrdre('I', {type:'tirGalerie', id:G.terrier, x:-5, y:100});
+          const t = executerOrdre('I', {type:'tirGalerie', id:G.terrier, x:prep.qJ.x, y:prep.qJ.y});
+          verdict('invité : tir hors carte refusé sur place (« Cible hors de la carte. », code coordonnees, non envoyé) ; vrai tir envoyé',
+            !k.ok && k.motif === 'Cible hors de la carte.' && k.code === 'coordonnees' && k.genre === 'alerte' && t.ok && t.envoye && M.lignes.pret === 'Fermée — 1 missile prêt sur 2',
+            {refus:k, tir:t, ligne:M.lignes.pret, envoyes});
+          // Hôte (J, monde de l'hôte) : sa galerie chargée, tir ordonné sur le QG de I.
+          const rJ = dansMonde(H, () => { const a = entiteParId(G.aiguille); a.gal.stock = 1; return executerOrdre('J', {type:'tirGalerie', id:a.id, x:prep.qI.x, y:prep.qI.y}); });
+          verdict('hôte : tir de sa galerie accepté', rJ.ok, rJ);
+          M.pvQGJ.push({invite:invite.index.get(prep.qJ.id).pv, hote:dansMonde(H, () => entiteParId(prep.qJ.id).pv), pvMax:invite.index.get(prep.qJ.id).pvMax});
+          suite();
+        } else if(delaiDepasse(5)) terminer('missile jamais prêt');
+      } else if(phase === 5){
+        const b = invite.index.get(G.terrier);
+        if(b && b.galT != null && tirT === null){ tirT = performance.now(); M.lignes.ouverture = ligneEtatGalerie(b, true); }
+        if(b && b.galT != null && b.galT > 11 && !M.lignes.impact) M.lignes.impact = ligneEtatGalerie(b, true);
+        if(tirT !== null && b && b.galT === null && performance.now() - tirT > 15000){
+          M.lignes.apres = ligneEtatGalerie(b, true);
+          M.pvQGJ.push({invite:invite.index.get(prep.qJ.id).pv, hote:dansMonde(H, () => entiteParId(prep.qJ.id).pv), pvMax:invite.index.get(prep.qJ.id).pvMax});
+          verdict('invité : fiche du terrier pendant et après le cycle', /\(vulnérable\)$/.test(M.lignes.ouverture || '') && /^Impact dans \d+ s \(vulnérable\)$/.test(M.lignes.impact || '')
+            && M.lignes.apres === 'Fermée — aucun missile (à fabriquer)', {ouverture:M.lignes.ouverture, impact:M.lignes.impact, apres:M.lignes.apres});
+          terminer();
+        } else if(delaiDepasse(30)) terminer('cycle de tir jamais terminé chez l’invité');
+      }
+    };
+    const tic = () => {
+      if(fini) return;
+      const du = Math.min(4, Math.floor((performance.now() - debut)/50) - pas);
+      for(let k = 0; k < du && !fini; k++){ pasEcho(0.05); pas++; }
+      if(!fini) etape();
+    };
+    arret = Reseau.minuteur(50, () => { try { tic(); } catch(e){ M.erreurs.push(e.message + ' | ' + String(e.stack || '').split('\n').slice(1, 3).join(' | ')); terminer('erreur'); } });
+  });
+  return promesse;
+}
+window.testerGaleriesEnLigne = testerGaleriesEnLigne;
+
+// ---------------------------------------------------------------------
+//  Défense antimissile en ligne, lot 2 (20 novembre 2026, CAHIER-GALERIES-EN-LIGNE.md § 3 à 6 et 8)
+//  Page : front-de-sel.html?echo&galeries=1&perte=0&verif (quatre camps : J et L Halden, K Karsk, ordinateurs ;
+//  I Karsk, l'invité), attendre echo.pret, puis testerDefenseEnLigne('def') ; rapport dans RESULTATS.def (environ
+//  70 s). Mené en temps réel (minuteur du Worker). L'invité donne tous ses ordres par executerOrdre → réseau simulé :
+//  construire batterie, trois radars et terrier (ouvriers fournis), fabriquer trois munitions et un missile ;
+//  il répond à la fenêtre par les fonctions de l'interface (majFenetreDefense, toucheDefense). Raccourcis dans le
+//  monde de l'hôte, par les seules données du moteur : réserves, ouvriers, chantiers achevés, fabrications
+//  raccourcies, galeries de J et K posées et chargées, leurs tirs ordonnés par executerOrdre chez l'hôte.
+//    1. J et K tirent ensemble sur I : deux propositions, une réponse « Intercepter » (I) pour les deux.
+//    2. I tire sur le QG de J (batterie de J posée chez l'hôte, J ordinateur : il répond seul).
+//    3. J tire de nouveau : « Laisser passer » (L), puis une réponse forcée après le départ → refus « trop tard » dit.
+//  Comparé à chaque instantané : para (stock, fab, fabT arrondi) et intT des batteries, invité contre hôte.
+// ---------------------------------------------------------------------
+function testerDefenseEnLigne(cle){
+  if(modeReseau !== 'echo' || !echo.pret || !mondes || !camps.K) return Promise.resolve([{nom:'page ?echo&galeries=1&verif (quatre camps) prête', ok:false, detail:{modeReseau, pret:echo.pret}}]);
+  const H = mondes.hote, V = [], verdict = (nom, ok, detail) => V.push({nom, ok:!!ok, detail});
+  if(cle) RESULTATS[cle] = 'en cours';
+  verdict('réglage actif : batterie et radar dans la barre de l’invité', galeriesActives() && batimentsConstructibles(faction('I')).includes('parasol')
+    && batimentsConstructibles(faction('I')).includes('radar'), batimentsConstructibles(faction('I')));
+  echo.piloteExterne = true;
+  window.enregistrerVictoire = () => {};
+  const r2 = v => v == null ? v : Math.round(v*100)/100;
+  const etatPara = b => ({stock:b.para.stock, fab:b.para.fab, fabS:Math.ceil(b.para.fabT - 1e-6), intT:typeof b.intT === 'number' ? b.intT : null});
+  const compteurs = r => r ? ['missiles', 'horsZone', 'sansMunition', 'tires', 'rencontres', 'abattus', 'parAllie'].map(k => r[k]).join(',') : null;
+  // Monde de l'hôte : préparation.
+  const prep = dansMonde(H, () => {
+    camps.I.reserves = 9000; camps.J.reserves = Math.max(camps.J.reserves, 4000);
+    const q = c => ents.find(b => b.camp === c && b.type === 'qg' && !b.mort);
+    const qI = q('I'), qJ = q('J'), qK = q('K');
+    if(!ents.some(b => b.camp === 'I' && b.type === 'usine' && !b.mort && !b.enCours)){ const p = trouverEmplacement('usine', {x:qI.x + 150, y:qI.y + 160}); creerBatiment('usine', 'I', p.c, p.r, true); }
+    const sapeurs = []; for(let k = 0; k < 5; k++) sapeurs.push(creerUnite('sapeur', 'I', qI.x - 60 + k*24, qI.y + 110).id);
+    const pos = {parasol:trouverEmplacement('parasol', {x:qI.x - 260, y:qI.y - 40}), r1:trouverEmplacement('radar', {x:qI.x - 120, y:qI.y - 240}),
+      r2:trouverEmplacement('radar', {x:qI.x - 120, y:qI.y + 240}), r3:trouverEmplacement('radar', {x:qI.x - 400, y:qI.y + 200}),
+      terrier:trouverEmplacement('terrier', {x:qI.x - 440, y:qI.y - 280})};
+    // Galeries de J et K, batterie de J (ordinateur) avec deux munitions.
+    const pA = trouverEmplacement('aiguille', {x:qJ.x + 170, y:qJ.y + 220}), a = creerBatiment('aiguille', 'J', pA.c, pA.r, true);
+    const pB = trouverEmplacement('terrier', {x:qK.x, y:qK.y + 240}), k = creerBatiment('terrier', 'K', pB.c, pB.r, true);
+    const pP = trouverEmplacement('parasol', {x:qJ.x + 200, y:qJ.y - 160}), pj = creerBatiment('parasol', 'J', pP.c, pP.r, true); pj.para.stock = 2;
+    return {qI:{id:qI.id, x:qI.x, y:qI.y}, qJ:{id:qJ.id, x:qJ.x, y:qJ.y}, sapeurs, pos, aiguille:a.id, terrierK:k.id, parasolJ:pj.id};
+  });
+  const ids = {};   // parasol, r1, r2, r3, terrier (camp I), connus une fois les chantiers ouverts chez l'hôte
+  const histo = [];
+  echo.apresPasHote = () => {
+    const h = {T:temps, para:{}};
+    for(const e of ents) if(!e.mort && e.para && !e.enCours) h.para[e.id] = etatPara(e);
+    histo.push(h); if(histo.length > 120) histo.shift();
+  };
+  const M = {comparaisons:0, ecarts:0, ecartsEx:[], erreurs:[], messages:[], intercepteurs:[], marqueursAbattus:0};
+  const vus = new Set();
+  echo.salonInvite.on('evenement', ev => { if(ev && ev.t === 'message' && ev.camp === 'I') M.messages.push(ev.texte); });
+  echo.apresPasInvite = () => {
+    for(const f of effets) if(f.type === 'intercepteur' && !vus.has(f)){ vus.add(f); M.intercepteurs.push({camp:f.camp, reussi:f.reussi, duree:r2(f.duree), h:r2(f.h)}); }
+    const s0 = invite.courant; if(!s0) return;
+    const h = histo.find(x => Math.abs(x.T - s0.T) < 0.0015); if(!h) return;
+    for(const id in h.para){
+      const b = invite.index.get(+id); M.comparaisons++;
+      const a = h.para[id], g = b && b.para ? etatPara(b) : null;
+      const ok = g && a.stock === g.stock && a.fab === g.fab && a.fabS === g.fabS
+        && (a.intT === null || temps - a.intT > 5.1 ? true : g.intT !== null && Math.abs(a.intT - g.intT) <= 0.0201);
+      if(!ok){ M.ecarts++; if(M.ecartsEx.length < 5) M.ecartsEx.push({id, T:r2(s0.T), hote:a, invite:g}); }
+    }
+  };
+  const hoteE = () => dansMonde(H, () => camps.I.interception);
+  let phase = 0, phaseT = performance.now(), pas = 0, info = {};
+  const debut = performance.now();
+  const suite = () => { phase++; phaseT = performance.now(); };
+  const delaiDepasse = s => performance.now() - phaseT > s*1000;
+  return new Promise(fin => {
+    let arret = null, fini = false;
+    const terminer = raison => {
+      if(fini) return; fini = true;
+      if(arret) arret();
+      echo.apresPasHote = echo.apresPasInvite = null; echo.piloteExterne = false;
+      if(raison) verdict('déroulé complet (' + raison + ')', false, {phase, info});
+      verdict('para et intT des batteries : aucun écart entre l’invité et l’hôte au même instant', M.comparaisons > 100 && M.ecarts === 0,
+        {comparaisons:M.comparaisons, ecarts:M.ecarts, exemples:M.ecartsEx});
+      verdict('aucune erreur pendant l’essai', !M.erreurs.length, M.erreurs);
+      const res = {verdicts:V, reussis:V.filter(v => v.ok).length + ' / ' + V.length, dureeReelle:r2((performance.now() - debut)/1000), info,
+        messages:M.messages.slice(-12), intercepteurs:M.intercepteurs, ordres:hoteReseau.ordres};
+      if(cle) RESULTATS[cle] = res;
+      fin(res);
+    };
+    const sp = prep.sapeurs, P = prep.pos;
+    const etape = () => {
+      if(phase === 0){
+        if(!sp.every(id => invite.index.has(id))){ if(delaiDepasse(5)) terminer('ouvriers jamais vus'); return; }
+        const o = [['parasol', P.parasol, sp[0]], ['radar', P.r1, sp[1]], ['radar', P.r2, sp[2]], ['radar', P.r3, sp[3]], ['terrier', P.terrier, sp[4]]]
+          .map(([bat, p, u]) => executerOrdre('I', {type:'construire', bat, c:p.c, r:p.r, ouvrierIds:[u]}));
+        verdict('invité : cinq ordres « construire » envoyés (batterie, trois radars, terrier)', o.every(r => r.ok && r.envoye), o);
+        suite();
+      } else if(phase === 1){
+        const l = dansMonde(H, () => ents.filter(b => b.camp === 'I' && !b.mort && b.enCours && ['parasol', 'radar', 'terrier'].includes(b.type)));
+        if(l.length === 5){
+          dansMonde(H, () => { for(const b of l){ b.progres = 1; b.enCours = false; b.pv = b.pvMax; } });
+          for(const b of l){ if(b.type === 'radar') (ids.radars = ids.radars || []).push(b.id); else ids[b.type] = b.id; }
+          verdict('hôte : cinq chantiers ouverts par les ordres de l’invité (limite de trois radars respectée)', true, ids);
+          suite();
+        } else if(delaiDepasse(6)) terminer('chantiers jamais tous ouverts (' + l.length + ')');
+      } else if(phase === 2){
+        const b = invite.index.get(ids.parasol);
+        if(b && !b.enCours && b.para && ids.radars.every(id => invite.index.get(id) && !invite.index.get(id).enCours)){
+          info.ficheAvant = ligneEtatDefense(b, true);
+          const o = [1, 2, 3].map(() => executerOrdre('I', {type:'fabriquerMunition', id:ids.parasol}));
+          const m = executerOrdre('I', {type:'fabriquerMissile', id:ids.terrier});
+          verdict('invité : fiche de la batterie « Munitions : 0 / 4 » et « Chances : 75 % — 3 radars sur 3 » ; trois munitions et un missile commandés',
+            info.ficheAvant.etat === 'Munitions : 0 / 4' && info.ficheAvant.chances === 'Chances : 75 % — 3 radars sur 3' && o.every(r => r.ok) && m.ok, {fiche:info.ficheAvant, o, m});
+          suite();
+        } else if(delaiDepasse(6)) terminer('batterie et radars jamais vus terminés chez l’invité');
+      } else if(phase === 3){
+        const pH = dansMonde(H, () => entiteParId(ids.parasol).para), gH = dansMonde(H, () => entiteParId(ids.terrier).gal);
+        const b = invite.index.get(ids.parasol);
+        if(pH.fab === 3 && gH.fab === 1 && b.para.fab === 3){
+          info.ficheFab = ligneEtatDefense(b, true).etat;
+          verdict('invité : fabrication vue « Munitions : 0 / 4 · fabrication 30 s (+2 en attente) » (ou 29 s)', /^Munitions : 0 \/ 4 · fabrication (30|29) s \(\+2 en attente\)$/.test(info.ficheFab), info.ficheFab);
+          dansMonde(H, () => { pH.fabT = Math.min(pH.fabT, 0.4); gH.fabT = Math.min(gH.fabT, 0.4); });
+          suite();
+        } else if(delaiDepasse(6)) terminer('fabrication jamais vue');
+      } else if(phase === 4){
+        // Accélère les munitions suivantes chez l'hôte, jusqu'à trois prêtes.
+        const pH = dansMonde(H, () => entiteParId(ids.parasol).para);
+        if(pH.fab > 0 && pH.fabT > 0.4) dansMonde(H, () => { pH.fabT = 0.4; });
+        const b = invite.index.get(ids.parasol), t = invite.index.get(ids.terrier);
+        if(b.para.stock === 3 && t.gal.stock === 1){
+          // 1. J et K tirent ensemble sur le QG de I.
+          const rr = dansMonde(H, () => { entiteParId(prep.aiguille).gal.stock = 1; entiteParId(prep.terrierK).gal.stock = 2;
+            return [executerOrdre('J', {type:'tirGalerie', id:prep.aiguille, x:prep.qI.x, y:prep.qI.y}), executerOrdre('K', {type:'tirGalerie', id:prep.terrierK, x:prep.qI.x, y:prep.qI.y + 20})]; });
+          verdict('hôte : J et K ouvrent leur galerie sur le QG de I', rr.every(r => r.ok), rr);
+          suite();
+        } else if(delaiDepasse(8)) terminer('munitions ou missile jamais prêts');
+      } else if(phase === 5){
+        const p = propositionEnCours('I', FENETRE_DEFENSE.fermees);
+        if(p && p.ouvertes === 2){
+          majFenetreDefense();
+          info.proposition = {ouvertes:p.ouvertes, departDans:r2(p.departDans), chances:Math.round(p.chances), munitions:p.munitions, affiche:FENETRE_DEFENSE.affiche,
+            titre:(el('defense') && el('defense').querySelector('.titre') || {}).textContent};
+          const pris = toucheDefense('i');
+          const loc = propositionEnCours('I', FENETRE_DEFENSE.fermees);
+          verdict('invité : deux propositions (J et K), fenêtre « 2 galeries ennemies en ouverture », décompte raccourci (< 9,5 − 0,35), « Intercepter » noté tout de suite',
+            info.proposition.affiche === 'proposition' && /^2 galeries ennemies/.test(info.proposition.titre || '') && p.departDans <= 9.5 - 0.35 + 1e-6 && p.departDans > 7
+              && pris && loc && loc.armees === 2, Object.assign({armeesApres:loc && loc.armees}, info.proposition));
+          suite();
+        } else if(delaiDepasse(6)) terminer('propositions jamais reçues par l’invité');
+      } else if(phase === 6){
+        const E = hoteE(), P2 = E && Object.values(E.propositions).filter(q => galerieDeProposition(q));
+        if(P2 && P2.length === 2 && P2.every(q => q.reponse === true)){ info.hoteOui = r2(dansMonde(H, () => temps)); suite(); }
+        else if(delaiDepasse(4)) terminer('réponses jamais notées chez l’hôte');
+      } else if(phase === 7){
+        // Attendre la fin des trois missiles (J : 1, K : 2) et des rencontres, puis comparer les résultats.
+        const E = hoteE(), R = E ? Object.values(E.resultats) : [];
+        const fini3 = R.length === 2 && R.every(r => r.missiles === r.n && r.tires === r.rencontres) && dansMonde(H, () => temps) > info.hoteOui + 12;
+        if(fini3 && !info.fini3) info.fini3 = performance.now();
+        const Ei = camps.I.interception, ok = fini3 && R.every(r => Ei && Ei.resultats[r.cle] && compteurs(Ei.resultats[r.cle]) === compteurs(r));
+        // L'invité voit tout avec son retard d'affichage (0,15 s) plus le trajet : jusqu'à 3 s pour rejoindre l'hôte.
+        if(fini3 && (ok || performance.now() - info.fini3 > 3000)){
+          info.rattrapageMs = Math.round(performance.now() - info.fini3);
+          const mun = invite.index.get(ids.parasol).para.stock, munH = dansMonde(H, () => entiteParId(ids.parasol).para.stock);
+          const tiresTot = R.reduce((s, r) => s + r.tires, 0), abattus = R.reduce((s, r) => s + r.abattus + r.parAllie, 0);
+          const interI = M.intercepteurs.filter(x => x.camp === 'I');
+          const marqVivants = effets.filter(f => f.type === 'marqueur' && f.pouvoir === 'galerie' && f.vie > 0).length;
+          info.salve1 = {hote:R.map(r => ({cle:r.cle, c:compteurs(r)})), invite:R.map(r => Ei && Ei.resultats[r.cle] ? compteurs(Ei.resultats[r.cle]) : null),
+            munInvite:mun, munHote:munH, tiresTot, abattus, intercepteursI:interI, marqVivants};
+          verdict('salve 1 : résultats de l’invité identiques à ceux de l’hôte (compteurs), munitions consommées une par tir (3 − tirs), un intercepteur recréé par tir, issue réussie/manquée identique',
+            ok && mun === munH && mun === 3 - tiresTot && interI.length === tiresTot && interI.filter(x => x.reussi).length === R.reduce((s, r) => s + r.abattus, 0), info.salve1);
+          // Juste après la dernière rencontre, avant les impacts (17,45 s et plus) : seuls les marqueurs des missiles
+          // non abattus restent au sol chez l'invité.
+          verdict('salve 1 : chez l’invité, le marqueur de chaque missile abattu est effacé, les autres restent', marqVivants === 3 - abattus,
+            {marqVivants, abattus, rattrapageMs:info.rattrapageMs});
+          suite();
+        } else if(delaiDepasse(30)) terminer('salve 1 jamais terminée');
+      } else if(phase === 8){
+        // 2. I tire sur le QG de J (zone de la batterie de J).
+        const t = invite.index.get(ids.terrier);
+        if(t && t.gal.t0 === null && t.gal.stock === 1){
+          info.avant2 = {munJ:dansMonde(H, () => entiteParId(prep.parasolJ).para.stock)};
+          const r = executerOrdre('I', {type:'tirGalerie', id:ids.terrier, x:prep.qJ.x + 150, y:prep.qJ.y - 120});
+          verdict('invité : tir du terrier sur la base de J envoyé', r.ok && r.envoye, r);
+          suite();
+        } else if(delaiDepasse(10)) terminer('terrier de I jamais prêt');
+      } else if(phase === 9){
+        const E = dansMonde(H, () => camps.J.interception), R = E ? Object.values(E.resultats).filter(r => r.tireur === 'I') : [];
+        if(R.length === 1 && R[0].missiles === 1 && R[0].tires === R[0].rencontres && performance.now() - phaseT > 18000){
+          const r = R[0], interJ = M.intercepteurs.filter(x => x.camp === 'J');
+          const munJ = dansMonde(H, () => entiteParId(prep.parasolJ).para.stock);
+          info.salve2 = {resultatHoteJ:compteurs(r), munJ, avant:info.avant2.munJ, intercepteursJ:interJ, messagesI:M.messages.filter(m => /intercept/i.test(m))};
+          verdict('salve 2 : J (ordinateur) intercepte le missile de I ; l’invité voit un intercepteur de J ; munition de J consommée ; message dit à l’invité si abattu',
+            r.tires === 1 && interJ.length === 1 && munJ === info.avant2.munJ - 1 && (r.abattus === 1 ? info.salve2.messagesI.includes('Missile intercepté !') : true), info.salve2);
+          suite();
+        } else if(delaiDepasse(30)) terminer('salve 2 jamais terminée');
+      } else if(phase === 10){
+        // 3. J tire de nouveau sur I : « Laisser passer », puis réponse forcée après le départ.
+        const a = dansMonde(H, () => entiteParId(prep.aiguille));
+        if(a && a.gal.t0 === null){
+          info.munAvant3 = invite.index.get(ids.parasol).para.stock;
+          const r = dansMonde(H, () => { a.gal.stock = 1; return executerOrdre('J', {type:'tirGalerie', id:a.id, x:prep.qI.x - 30, y:prep.qI.y}); });
+          verdict('hôte : J tire une seconde fois sur I', r.ok, r);
+          suite();
+        } else if(delaiDepasse(20)) terminer('galerie de J jamais refermée');
+      } else if(phase === 11){
+        const p = propositionEnCours('I', FENETRE_DEFENSE.fermees);
+        if(p){
+          majFenetreDefense();
+          info.cle3 = p.cle;
+          const pris = toucheDefense('l');
+          verdict('invité : « Laisser passer » ferme la fenêtre', pris && FENETRE_DEFENSE.fermees[p.cle] === true && propositionEnCours('I', FENETRE_DEFENSE.fermees) === null
+            && FENETRE_DEFENSE.affiche !== 'proposition', {cle:p.cle, affiche:FENETRE_DEFENSE.affiche});
+          suite();
+        } else if(delaiDepasse(6)) terminer('troisième proposition jamais reçue');
+      } else if(phase === 12){
+        const a = dansMonde(H, () => entiteParId(prep.aiguille)), E = hoteE(), p = E && E.propositions[info.cle3];
+        if(p && p.reponse === false && a.gal.tires >= 1){
+          // Après le départ : réponse envoyée telle quelle sur le réseau (sans le contrôle local), comme un ordre en retard.
+          info.messagesAvant = M.messages.length;
+          echo.salonInvite.envoyerOrdre({o:'repInter', oui:true, cle:info.cle3});
+          suite();
+        } else if(delaiDepasse(15)) terminer('départ du troisième missile jamais vu');
+      } else if(phase === 13){
+        const dit = M.messages.slice(info.messagesAvant).includes('Réponse arrivée trop tard : le missile était déjà parti.');
+        if(dit || delaiDepasse(4)){
+          const munH = dansMonde(H, () => entiteParId(ids.parasol).para.stock);
+          verdict('réponse arrivée après le départ : refusée par l’hôte, « Réponse arrivée trop tard… » dit à l’invité ; « Laisser passer » : aucune munition dépensée',
+            dit && munH === info.munAvant3 && hoteReseau.ordres.motifs.etat >= 1, {dit, munH, munAvant:info.munAvant3, motifs:hoteReseau.ordres.motifs});
+          terminer();
+        }
+      }
+    };
+    const tic = () => {
+      if(fini) return;
+      const du = Math.min(4, Math.floor((performance.now() - debut)/50) - pas);
+      for(let k = 0; k < du && !fini; k++){ pasEcho(0.05); pas++; }
+      if(!fini) etape();
+    };
+    arret = Reseau.minuteur(50, () => { try { tic(); } catch(e){ M.erreurs.push(e.message + ' | ' + String(e.stack || '').split('\n').slice(1, 3).join(' | ')); terminer('erreur'); } });
+  });
+}
+window.testerDefenseEnLigne = testerDefenseEnLigne;
+
+// ---------------------------------------------------------------------
 //  Galeries de tir (novembre 2026) : essais automatiques des règles du cahier des charges
 //  (travaux/galerie/CAHIER-DES-CHARGES.md), pour les deux camps, par simulation sans rendu et sans attendre le
 //  temps réel. À lancer depuis front-de-sel.html?verif (escarmouche, pas de mission) :
@@ -2164,19 +2584,23 @@ function testerGaleries(quoi, numero){
       creerBatiment('usine', 'J', pu.c, pu.r, true);
       gJ.mort = true;   // (pour que la règle « une seule » ne masque pas le refus de construction)
       const pc = trouverEmplacement('aiguille', q); gJ.mort = false;
-      const photo0 = photoEtat(), res = [];
+      const photo0 = photoEtat(), res = [], galEnLigneAvant = galeriesEnLigne;
+      // (20 novembre 2026, galeries en ligne, lot 1 : en ligne, c'est le réglage du salon qui compte, galeriesEnLigne,
+      // ici décoché ; les ordres ont maintenant un code réseau, CAHIER-GALERIES-EN-LIGNE.md § 5.)
       for(const [mr, rm] of [['hote', 'hote'], ['invite', 'invite'], ['echo', null]]){
-        modeReseau = mr; roleMonde = rm;
+        modeReseau = mr; roleMonde = rm; galeriesEnLigne = false;
         const a = executerOrdre('J', {type:'fabriquerMissile', id:gJ.id}), b = executerOrdre('J', {type:'tirGalerie', id:gJ.id, x:1600, y:1100});
         let c = null;
         if(mr !== 'invite'){ gJ.mort = true; c = executerOrdre('J', {type:'construire', bat:'aiguille', c:pc.c, r:pc.r, ouvrierIds:[o.id]}); gJ.mort = false; }
         res.push({mode:mr, actif:galeriesActives(), fab:a.ok ? 'ACCEPTÉ' : a.motif, tir:b.ok ? 'ACCEPTÉ' : b.motif, construire:c ? (c.ok ? 'ACCEPTÉ' : c.motif) : '-',
           liste:batimentsConstructibles(faction('J')).includes('aiguille')});
-        modeReseau = reseauAvant; roleMonde = roleAvant;
+        modeReseau = reseauAvant; roleMonde = roleAvant; galeriesEnLigne = galEnLigneAvant;
       }
-      const sansCode = ordreVersReseau({type:'fabriquerMissile', id:gJ.id}) === null && ordreVersReseau({type:'tirGalerie', id:gJ.id, x:1, y:1}) === null
-        && !Object.prototype.hasOwnProperty.call(CODES_ORDRES, 'fabriquerMissile') && !Object.prototype.hasOwnProperty.call(CODES_ORDRES, 'tirGalerie');
-      V('en ligne (hôte, invité, écho) : fabriquer, tirer et construire refusés, galerie absente de la liste ; aucun code réseau ; état inchangé',
+      // Codes réseau (depuis le 20 novembre 2026) : fabMissile et tirGalerie, dans les deux sens.
+      const om = ordreVersReseau({type:'fabriquerMissile', id:gJ.id}), ot = ordreVersReseau({type:'tirGalerie', id:gJ.id, x:1, y:1});
+      const sansCode = !!om && om.o === 'fabMissile' && !!ot && ot.o === 'tirGalerie' && ot.x === 1
+        && ordreDepuisReseau(om).type === 'fabriquerMissile' && ordreDepuisReseau(ot).type === 'tirGalerie';
+      V('en ligne réglage décoché (hôte, invité, écho) : fabriquer, tirer et construire refusés, galerie absente de la liste ; codes réseau fabMissile et tirGalerie ; état inchangé',
         res.every(r => !r.actif && r.fab !== 'ACCEPTÉ' && r.tir !== 'ACCEPTÉ' && r.construire !== 'ACCEPTÉ' && !r.liste && r.fab === MOTIF_SANS_GALERIES)
         && sansCode && photoEtat() === photo0, {res, sansCode});
     }
@@ -3058,19 +3482,22 @@ function testerDefense(quoi, numero){
     poser('usine', 'J', {x:q.x, y:q.y - 220});
     const b = poser('parasol', 'J'), gI = poser('terrier', 'I'); gI.gal.stock = 1;
     const pc = trouverEmplacement('radar', {x:q.x + 260, y:q.y});
-    const photo0 = photoEtat(), res = [];
+    const photo0 = photoEtat(), res = [], galEnLigneAvant = galeriesEnLigne;
     for(const [opt, mr, rm] of [[false, null, null], [true, 'hote', 'hote'], [true, 'invite', 'invite'], [true, 'echo', null]]){
-      optionGaleries = opt; modeReseau = mr; roleMonde = rm;
+      optionGaleries = opt; modeReseau = mr; roleMonde = rm; galeriesEnLigne = false;   // (en ligne : réglage du salon décoché)
       const a = executerOrdre('J', {type:'fabriquerMunition', id:b.id}), r = executerOrdre('J', {type:'repondreInterception', oui:true});
       const c = mr === 'invite' ? null : executerOrdre('J', {type:'construire', bat:'radar', c:pc.c, r:pc.r, ouvrierIds:[o.id]});
       const listes = ['halden', 'karsk'].map(f => batimentsConstructibles(FACTIONS[f])).every(l => !l.includes('parasol') && !l.includes('radar'));
       res.push({option:opt, mode:mr, actif:galeriesActives(), fab:a.ok ? 'ACCEPTÉ' : a.motif, reponse:r.ok ? 'ACCEPTÉ' : r.motif, construire:c ? (c.ok ? 'ACCEPTÉ' : c.motif) : '-', listes});
-      optionGaleries = true; modeReseau = reseauAvant; roleMonde = roleAvant;
+      optionGaleries = true; modeReseau = reseauAvant; roleMonde = roleAvant; galeriesEnLigne = galEnLigneAvant;
     }
-    const sansCode = ordreVersReseau({type:'fabriquerMunition', id:b.id}) === null && ordreVersReseau({type:'repondreInterception', oui:true}) === null
-      && !['fabriquerMunition', 'repondreInterception'].some(k => Object.prototype.hasOwnProperty.call(CODES_ORDRES, k))
-      && !tablesReseau().batiments.includes('parasol') && !tablesReseau().batiments.includes('radar');
-    V('option décochée et en ligne (hôte, invité, écho) : munition, réponse et radar refusés, absents des listes ; aucun code ni table réseau ; état inchangé',
+    // (20 novembre 2026, défense antimissile en ligne : la table réseau des bâtiments les contient tous, batterie et
+    // radar compris, et les deux ordres ont un code réseau, fabMunition et repInter, CAHIER-GALERIES-EN-LIGNE.md § 2 et 5.)
+    const om = ordreVersReseau({type:'fabriquerMunition', id:b.id}), orep = ordreVersReseau({type:'repondreInterception', oui:true, cle:'1@2'});
+    const sansCode = !!om && om.o === 'fabMunition' && !!orep && orep.o === 'repInter' && orep.cle === '1@2'
+      && ordreDepuisReseau(om).type === 'fabriquerMunition' && ordreDepuisReseau(orep).type === 'repondreInterception'
+      && tablesReseau().batiments.includes('parasol') && tablesReseau().batiments.includes('radar');
+    V('option décochée et en ligne réglage décoché (hôte, invité, écho) : munition, réponse et radar refusés, absents des listes ; codes réseau fabMunition et repInter ; batterie et radar dans la table ; état inchangé',
       res.every(r => !r.actif && r.fab !== 'ACCEPTÉ' && r.reponse !== 'ACCEPTÉ' && r.construire !== 'ACCEPTÉ' && r.listes && r.fab === MOTIF_SANS_GALERIES) && sansCode && photoEtat() === photo0, {res, sansCode});
     V('mission : batterie et radar réservés à l’escarmouche, option jamais active en mission',
       RESERVES_ESCARMOUCHE.batiments.has('parasol') && RESERVES_ESCARMOUCHE.batiments.has('radar') && /!MISSION/.test(String(galeriesActives)), String(galeriesActives));

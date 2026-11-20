@@ -400,6 +400,10 @@ let pouvoirsActifs = {J:true, I:true, K:true, L:true};
 // Option « Galeries de tir » de l'écran d'escarmouche (novembre 2026), décochée par défaut. Seule la case
 // (ou le paramètre d'adresse ?galeries=1) la change ; la lire par galeriesActives(), jamais directement.
 let optionGaleries = false;
+// Même réglage pour une partie en ligne (20 novembre 2026, galeries en ligne, lot 1), faux par défaut : case de
+// l'hôte sur l'écran du salon (pré-cochée par ?galeries=1), transmise aux invités dans les données de lancement
+// (debut.galeries) ; mode ?echo : ?echo&galeries=1. Lu par galeriesActives() seulement quand modeReseau !== null.
+let galeriesEnLigne = false;
 // ---------- Camps ----------
 // Deux notions distinctes, à ne pas confondre :
 //  - le camp du JOUEUR LOCAL (campJoueur / campLocal()) : celui que l'interface montre et commande
@@ -843,13 +847,16 @@ function batimentsConstructibles(F){
   if(F.galerie && galeriesActives()) liste.push(F.galerie);
   // Défense antimissile (19 novembre 2026) : même option, les deux camps, en fin de liste (Halden 10 boutons dans
   // la barre, Karsk 9). Les factions sans galerie (neutre, envahisseurs) ne la reçoivent pas.
+  // (20 novembre 2026, galeries en ligne : de même en ligne, réglage de l'hôte coché.)
   if(F.galerie && galeriesActives()) liste.push('parasol', 'radar');
   return liste;
 }
-// Option « Galeries de tir » en vigueur ? Escarmouche solo seulement : jamais en mission, jamais en ligne
-// (hôte, invité ni écho : la case est alors tenue pour décochée), jamais dans la vitrine ?demo.
+// Option « Galeries de tir » en vigueur ? Jamais en mission, jamais dans la vitrine ?demo. En solo : la case de
+// l'écran d'escarmouche (optionGaleries). En ligne (hôte, invité, écho ; 20 novembre 2026, cahier
+// travaux/multijoueur/CAHIER-GALERIES-EN-LIGNE.md § 1) : le réglage de l'hôte dans le salon (galeriesEnLigne), le
+// même pour tous les camps, ordinateurs compris. Avant ce jour, toujours faux en ligne.
 function galeriesActives(){
-  return optionGaleries === true && !MISSION && modeReseau === null && !window.MODE_DEMO;
+  return !MISSION && !window.MODE_DEMO && (modeReseau === null ? optionGaleries === true : galeriesEnLigne === true);
 }
 // Règle « une seule galerie par camp, chantier compris » (lecture seule, sans effet) : raison du refus, ou null.
 // Ne dit rien pour un bâtiment qui n'est pas une galerie : aucun effet sans galerie.
@@ -2187,9 +2194,12 @@ function avanceMissile(f){ return 0.65*f + 0.35*f*f*(3 - 2*f); }
 function hauteurRencontre(d, f){ return Math.max(200, Math.min(560, d*0.3))*4*f*(1 - f); }
 // Galerie d'une proposition, si son cycle de tir est toujours celui de la proposition et qu'il reste au moins un
 // missile à partir ; sinon null (galerie détruite, cycle terminé, tous les missiles partis).
+// (20 novembre 2026, défense en ligne : chez l'invité, t0 de la galerie vient du codec, au 1/50 s, d'où 0,02 s
+// d'écart au plus ; comparé avec 0,03 s de tolérance. Ailleurs, égalité stricte, comme avant.)
 function galerieDeProposition(p){
   for(const e of ents) if(e.id === p.galerie){
-    return !e.mort && e.gal && e.gal.t0 === p.t0 && e.gal.tires < e.gal.n ? e : null;
+    const memeCycle = !!e.gal && (roleMonde === 'invite' ? e.gal.t0 !== null && Math.abs(e.gal.t0 - p.t0) <= 0.03 : e.gal.t0 === p.t0);
+    return !e.mort && memeCycle && e.gal.tires < e.gal.n ? e : null;
   }
   return null;
 }
@@ -2269,8 +2279,11 @@ function propositionEnCours(camp, exclues){
   const p = liste ? liste[0] : propositionOuverte(camp), bat = p && batterieDe(camp);
   if(!bat) return null;
   const g = galerieDeProposition(p), prochain = g.gal.t0 + CYCLE_GALERIE.departs[g.gal.tires];
+  // Invité (20 novembre 2026, défense en ligne) : son affichage a RESEAU.retard de retard et sa réponse met un aller
+  // jusqu'à l'hôte ; le décompte est raccourci de RESEAU.margeInterception (à zéro, il est trop tard pour être sûr).
+  const marge = roleMonde === 'invite' ? RESEAU.margeInterception : 0;
   return {cle:p.cle, camp, galerie:p.galerie, tireur:p.tireur, gx:p.gx, gy:p.gy, depart:p.depart,
-    prochainDepart:prochain, departDans:Math.max(0, prochain - temps), n:p.n, restants:g.gal.n - g.gal.tires,
+    prochainDepart:prochain, departDans:Math.max(0, prochain - temps - marge), n:p.n, restants:g.gal.n - g.gal.tires,
     chances:chancesInterception(camp), radars:radarsActifs(camp), munitions:bat.para.stock, fabrication:bat.para.fab,
     reponse:p.reponse, ouvertes:liste ? liste.length : 1, armees:liste ? liste.filter(q => q.reponse === true).length : (p.reponse === true ? 1 : 0),
     cles:liste ? liste.map(q => q.cle) : [p.cle]};
@@ -2423,6 +2436,9 @@ function rencontreManquee(v, r, impactT){
 function rencontreReussieA(v, r, tireur, fMarqueur, credites){
   r.rencontres++; r.abattus++; r.t = temps;
   if(fMarqueur) fMarqueur.vie = 0;
+  // En ligne (20 novembre 2026) : l'invité efface lui aussi le marqueur (effet réseau 'abattu', jamais passé à
+  // effet()). En solo, journalReseau est nul : rien.
+  if(fMarqueur && journalReseau && !journalMuet) journalReseau.effets.push({type:'abattu', x:fMarqueur.x, y:fMarqueur.y, duree:0, camp:tireur});
   for(const c of credites){
     const a = c.r;
     if(c.nouveau) a.missiles++;
@@ -6410,9 +6426,10 @@ const TYPES_ORDRES = ['droit', 'attaqueDeplacement', 'arret', 'ralliement', 'con
   'pouvoir', 'pause', 'abandon', 'alliance', 'proposerTreve', 'fabriquerMissile', 'tirGalerie', 'fabriquerMunition', 'repondreInterception'];
 // Défense antimissile (19 novembre 2026) : 'fabriquerMunition' {id} et 'repondreInterception' {oui, cle?} sont,
 // comme les ordres des galeries, des ordres de la partie locale : sans code réseau, refusés en ligne.
-// Galeries de tir (novembre 2026) : 'fabriquerMissile' {id} et 'tirGalerie' {id, x, y} restent des ordres de
-// la partie locale. Ils n'ont pas de code réseau (CODES_ORDRES inchangé : ordreVersReseau ne sait pas les
-// émettre) et sont refusés en ligne par galeriesActives(), chez l'hôte comme chez l'invité.
+// Galeries de tir (novembre 2026) : 'fabriquerMissile' {id} et 'tirGalerie' {id, x, y}. Depuis le 20 novembre 2026
+// (galeries en ligne), ces quatre ordres ont un code réseau (CODES_ORDRES : fabMissile, tirGalerie, fabMunition,
+// repInter) et passent en ligne quand l'hôte a coché « Galeries de tir » (galeriesActives) ; sinon refusés, chez
+// l'hôte comme chez l'invité.
 // Réservés au joueur local (en ligne : l'hôte) : pause, abandon de sa propre partie, décisions du mode
 // Surprises (désactivé en ligne).
 const ORDRES_LOCAUX = ['pause', 'abandon', 'alliance', 'proposerTreve'];
@@ -8232,7 +8249,7 @@ function initInterfaceReserves(params){
   c.onchange = () => { reservesDepart = reservesDepartValides(c.value); };
 }
 function initInterfaceGaleries(params){
-  if(params.get('galeries') === '1') optionGaleries = true;
+  if(params.get('galeries') === '1'){ optionGaleries = true; galeriesEnLigne = true; }   // (galeriesEnLigne : case du salon pré-cochée)
   const c = el('modeGaleries');
   if(c){ c.checked = optionGaleries; c.onchange = () => { optionGaleries = c.checked; }; }
 }
@@ -9560,6 +9577,11 @@ const RESEAU = {
   // de jeu, et au moins eliminationN instantanés ; sinon seule la fin confirmée par reseau.js (événement 'fin') compte.
   eliminationS:1,
   eliminationN:5,
+  // Invité (20 novembre 2026, défense antimissile en ligne) : s retranchées du décompte de la fenêtre d'interception
+  // (retard d'affichage 0,15 s + un aller de l'ordre, avec de la marge) ; voir propositionEnCours.
+  margeInterception:0.35,
+  // Invité : événements « interception » en attente que l'affichage atteigne leur heure, au plus.
+  interceptionsMax:20,
 };
 // ---------- Contrôle de ce qui vient du réseau (défauts S1 et S2, 14 novembre 2026) ----------
 // reseau.js contrôle la forme des messages ; jeu.js contrôle leur sens avec ses propres tables, sans compter sur
@@ -9577,7 +9599,12 @@ let mondes = null, mondeCourant = null;
 const echo = {pret:false, piloteExterne:false, apresPasHote:null, apresPasInvite:null, bus:null, erreur:null};
 
 // ---------- Tables du codec (identiques chez tous : même version du jeu) ----------
-const EFFETS_RESEAU = ['trait', 'eclair', 'explosion', 'fumee', 'marqueur', 'missile', 'rayon', 'chargeSol', 'bouclier', 'brulure'];
+// (20 novembre 2026, galeries en ligne : 'intercepteur' et 'abattu' ajoutés à la fin, pour le lot 2 ; les indices
+// des effets d'avant ne changent pas.)
+const EFFETS_RESEAU = ['trait', 'eclair', 'explosion', 'fumee', 'marqueur', 'missile', 'rayon', 'chargeSol', 'bouclier', 'brulure', 'intercepteur', 'abattu'];
+// Marqueur au sol d'un missile de galerie : h1 = 255, valeur réservée hors de la table des pouvoirs (qui sert aussi aux
+// recharges par camp : 'galerie' n'y entre pas).
+const H1_MARQUEUR_GALERIE = 255;
 const PROJECTILES_RESEAU = ['roquette', 'missileAir', 'bombe', 'plasma'];
 const COULEURS_TRAIT = ['#fff1a8', '#bfe9ff', '#a8d8ff'];
 function tablesReseau(){
@@ -9589,10 +9616,11 @@ function tablesReseau(){
   }
   const pouvoirs = new Set();
   for(const f of Object.keys(POUVOIRS)) for(const P of POUVOIRS[f] || []) if(P && P.cle) pouvoirs.add(P.cle);
-  // Galeries de tir (novembre 2026) : exclues des tables du réseau, qui restent celles du multijoueur publié
-  // (les galeries n'existent jamais en ligne dans ce lot : voir galeriesActives). De même la défense antimissile
-  // (Batterie Parasol, Radar de veille, 19 novembre 2026), soumise à la même option.
-  const t = {unites:Object.keys(UNITES), batiments:Object.keys(BATIMENTS).filter(k => !BATIMENTS[k].galerie && !BATIMENTS[k].defense), camps:['J', 'I', 'K', 'L', 'N', 'X'],
+  // Galeries de tir et défense antimissile (20 novembre 2026, galeries en ligne, lot 1) : tous les bâtiments entrent
+  // dans la table (jusqu'au 20 novembre, galeries, Batterie Parasol et radars en étaient exclus). L'arme
+  // missileGalerie y entre par la boucle ci-dessus (BATIMENTS[...].arme des galeries), sinon ci-dessous.
+  if(!armes.has('missileGalerie')) armes.add('missileGalerie');
+  const t = {unites:Object.keys(UNITES), batiments:Object.keys(BATIMENTS), camps:['J', 'I', 'K', 'L', 'N', 'X'],
     pouvoirs:[...pouvoirs].sort(), projectiles:PROJECTILES_RESEAU, armes:[...armes].sort(), effets:EFFETS_RESEAU};
   t.armesEffet = [null].concat(t.armes); t.roles = [null].concat([...roles].sort());
   t.ensembleArmes = new Set(t.armes);
@@ -9617,12 +9645,24 @@ function effetVersReseau(f){
       p2:(indiceOu0(T.roles, f.role) & 31) | ((indiceOu0(COULEURS_TRAIT, f.couleur) & 7) << 5)};
     case 'eclair': return {type:'eclair', x:f.x, y:f.y, h1:f.h || 0, h2:0, duree:f.duree, p1:indiceOu0(T.armesEffet, f.arme) & 127};
     case 'explosion': return {type:'explosion', x:f.x, y:f.y, h1:f.h || 0, h2:0, duree:f.duree, p1:(f.grande ? 1 : 0) | (f.batiment ? 2 : 0), p2:octet(f.r)};
-    case 'fumee': case 'missile': return {type:f.type, x:f.x, y:f.y, duree:f.duree};
-    case 'marqueur': return {type:'marqueur', x:f.x, y:f.y, duree:f.duree, p1:indiceOu0(T.camps, f.camp), p2:octet(f.r), h1:T.pouvoirs.indexOf(f.pouvoir) + 1, h2:0};
+    // Missile de galerie (20 novembre 2026, galeries en ligne) : x2, y2 = galerie de départ, p1 = indice du camp + 1,
+    // p2 = rang du missile + 1 (1 ou 2). Sans f.galerie (frappe d'un pouvoir) : comme avant.
+    case 'missile': if(f.galerie) return {type:'missile', x:f.x, y:f.y, duree:f.duree, x2:f.x0, y2:f.y0,
+      p1:indiceOu0(T.camps, f.camp) + 1, p2:octet(f.galerie)};
+      return {type:f.type, x:f.x, y:f.y, duree:f.duree};
+    case 'fumee': return {type:f.type, x:f.x, y:f.y, duree:f.duree};
+    case 'marqueur': return {type:'marqueur', x:f.x, y:f.y, duree:f.duree, p1:indiceOu0(T.camps, f.camp), p2:octet(f.r),
+      h1:f.pouvoir === 'galerie' ? H1_MARQUEUR_GALERIE : T.pouvoirs.indexOf(f.pouvoir) + 1, h2:0};
     case 'rayon': return {type:'rayon', x:f.x1, y:f.y1, x2:f.x2, y2:f.y2, h1:f.h1 || 0, h2:f.h2 || 0, duree:f.duree, p2:octet(f.largeur)};
     case 'chargeSol': return {type:'chargeSol', x:f.x, y:f.y, duree:f.duree, p2:octet(f.rayon)};
     case 'bouclier': return {type:'bouclier', x:f.x, y:f.y, h1:f.h || 0, h2:0, duree:f.duree};
     case 'brulure': return {type:'brulure', x:f.x, y:f.y, duree:0, p2:octet(f.r)};
+    // Défense antimissile (20 novembre 2026) : intercepteur, x, y = rencontre, x2, y2 = batterie, h1 = hauteur/3 (≤ 560),
+    // p1 = camp, p2 = 1 si réussi. Limite acceptée : l'issue voyage dès le tir (le rendu en a besoin) ; un navigateur
+    // modifié pourrait la lire 3 s avant la rencontre. Rien n'est affiché avant. abattu : marqueur à effacer.
+    case 'intercepteur': return {type:'intercepteur', x:f.x, y:f.y, x2:f.x0, y2:f.y0, h1:octet((f.h || 0)/3), h2:0, duree:f.duree,
+      p1:indiceOu0(T.camps, f.camp), p2:f.reussi ? 1 : 0};
+    case 'abattu': return {type:'abattu', x:f.x, y:f.y, duree:0, p1:indiceOu0(T.camps, f.camp)};   // camp du tireur (relecture du 20 novembre 2026)
   }
   return null;
 }
@@ -9639,16 +9679,50 @@ function effetDepuisReseau(e){
     }
     case 'eclair': { const p = {x:e.x, y:e.y, h:e.h1 || 0, duree:e.duree}; const a = T.armesEffet[e.p1 & 127]; if(a) p.arme = a; effet('eclair', p); return; }
     case 'explosion': { const p = {x:e.x, y:e.y, h:e.h1 || 0, r:e.p2, duree:e.duree}; if(e.p1 & 1) p.grande = true; if(e.p1 & 2) p.batiment = true; effet('explosion', p); return; }
-    case 'fumee': case 'missile': effet(e.type, {x:e.x, y:e.y, duree:e.duree}); return;
+    case 'missile': {
+      // Missile de galerie (20 novembre 2026) : camp connu, rang 1 ou 2, point de départ présent ; sinon, comme avant.
+      const camp = e.p1 >= 1 ? T.camps[e.p1 - 1] : null;
+      if(e.p2 >= 1 && e.p2 <= 2 && aCle(camps, camp) && estNombre(e.x2) && estNombre(e.y2)){
+        effet('missile', {x:e.x, y:e.y, duree:e.duree, camp, galerie:e.p2, x0:e.x2, y0:e.y2});
+        return;
+      }
+      effet('missile', {x:e.x, y:e.y, duree:e.duree}); return;
+    }
+    case 'fumee': effet(e.type, {x:e.x, y:e.y, duree:e.duree}); return;
     case 'marqueur': {
       const camp = T.camps[e.p1], C = camps[camp], F = C && FACTIONS[C.faction];
-      effet('marqueur', {x:e.x, y:e.y, camp, r:e.p2, duree:e.duree, couleur:F ? F.couleur : '#ffd27a', pouvoir:T.pouvoirs[(e.h1 || 0) - 1]});
+      // h1 = 255 : marqueur d'un missile de galerie (20 novembre 2026), pouvoir:'galerie' comme chez l'hôte.
+      const pouvoir = e.h1 === H1_MARQUEUR_GALERIE ? 'galerie' : T.pouvoirs[(e.h1 || 0) - 1];
+      effet('marqueur', {x:e.x, y:e.y, camp, r:e.p2, duree:e.duree, couleur:F ? F.couleur : '#ffd27a', pouvoir});
       return;
     }
     case 'rayon': effet('rayon', {x1:e.x, y1:e.y, h1:e.h1 || 0, x2:e.x2, y2:e.y2, h2:e.h2 || 0, t:temps, duree:e.duree, largeur:e.p2}); return;
     case 'chargeSol': effet('chargeSol', {x:e.x, y:e.y, rayon:e.p2, t:temps, duree:e.duree}); return;
     case 'bouclier': effet('bouclier', {x:e.x, y:e.y, h:e.h1 || 0, t:temps, duree:e.duree}); return;
     case 'brulure': brulure(e.x, e.y, e.p2); return;
+    // Défense antimissile (20 novembre 2026)
+    case 'intercepteur': {
+      const camp = T.camps[e.p1];
+      if(!aCle(camps, camp)) return;
+      effet('intercepteur', {x0:e.x2, y0:e.y2, x:e.x, y:e.y, h:(e.h1 || 0)*3, duree:e.duree, camp, reussi:e.p2 === 1});
+      return;
+    }
+    case 'abattu': {
+      // Comme chez l'hôte : le marqueur « galerie » le plus proche (moins de 2 px) s'efface ; le missile de galerie
+      // qui visait ce point disparaît du ciel à l'instant de la rencontre (abattuA, secondes de vol).
+      // Seulement ceux du camp du tireur (relecture du 20 novembre 2026 : deux galeries de camps différents visant le
+      // même point, c'était le mauvais missile qui pouvait disparaître).
+      const tireur = T.camps[e.p1];
+      let m = null, dm = 2, mis = null, dmis = 2;
+      for(const f of effets){
+        if(f.camp !== tireur) continue;
+        if(f.type === 'marqueur' && f.pouvoir === 'galerie' && f.vie > 0){ const d = Math.hypot(f.x - e.x, f.y - e.y); if(d < dm){ dm = d; m = f; } }
+        if(f.type === 'missile' && f.galerie && f.abattuA === undefined && f.vie > 0){ const d = Math.hypot(f.x - e.x, f.y - e.y); if(d < dmis){ dmis = d; mis = f; } }
+      }
+      if(m) m.vie = 0;
+      if(mis) mis.abattuA = Math.max(0, mis.max - mis.vie);
+      return;
+    }
   }
 }
 // Projectile chez l'invité : mêmes champs que ceux du moteur (sans dégâts), avancé localement.
@@ -9687,8 +9761,15 @@ function fabriquerInstantane(){
       etat.unites.push(r);
     } else {
       const D0 = e.file.length ? UNITES[e.file[0]] : null;
-      etat.batiments.push({id:e.id, type:e.type, camp:e.camp, c:e.c, r:e.r, pv:e.pv, pvMax:e.pvMax, progres:e.progres, enCours:!!e.enCours,
-        angleT:e.angleT, bloque:!!e.bloque, file:e.file, avancement:D0 && D0.temps > 0 ? Math.min(1, e.prodT/D0.temps) : 0, rally:e.rally, tirT:e.tirT});
+      const r = {id:e.id, type:e.type, camp:e.camp, c:e.c, r:e.r, pv:e.pv, pvMax:e.pvMax, progres:e.progres, enCours:!!e.enCours,
+        angleT:e.angleT, bloque:!!e.bloque, file:e.file, avancement:D0 && D0.temps > 0 ? Math.min(1, e.prodT/D0.temps) : 0, rally:e.rally, tirT:e.tirT};
+      // Galerie de tir terminée (20 novembre 2026, galeries en ligne, lot 1) : son état (extension du codec). Le point
+      // visé (cx, cy) n'est jamais transmis : il n'est révélé qu'au départ du missile, par son marqueur.
+      if(e.gal && !e.enCours){ const g = e.gal; r.gal = {stock:g.stock, fab:g.fab, fabT:g.fabT, t0:g.t0, n:g.n, tires:g.tires}; }
+      // Batterie Parasol terminée (lot 2) : munitions, fabrication, heure du dernier tir (caisson). Les accords
+      // d'avance (para.autorise) ne partent pas : l'invité lit sa réponse dans l'événement « interception ».
+      if(e.para && !e.enCours){ const p = e.para; r.para = {stock:p.stock, fab:p.fab, fabT:p.fabT}; if(typeof e.intT === 'number') r.intT = e.intT; }
+      etat.batiments.push(r);
     }
   }
   for(const p of J.projectiles){
@@ -9703,6 +9784,15 @@ function fabriquerInstantane(){
     if(a && a.t !== hoteReseau.alertes[id]){ hoteReseau.alertes[id] = a.t; etat.nouveautes.push(['alerte', {camp:id, x:Math.round(a.x), y:Math.round(a.y)}]); }
   }
   if(enPause !== hoteReseau.pause){ hoteReseau.pause = enPause; etat.nouveautes.push(['pause', {oui:enPause}]); }
+  // Défense antimissile (20 novembre 2026, cahier § 6) : état d'interception de chaque camp humain distant, quand il
+  // change, et de nouveau avec un instantané complet demandé (arrivée ou retour d'un invité).
+  for(const id of campsDistants()){
+    const d = interceptionPourReseau(id); if(!d) continue;
+    const cle = JSON.stringify(d);
+    // (T : heure de jeu de l'envoi, hors de la comparaison ; l'invité attend que son affichage l'atteigne.)
+    if(cle !== hoteReseau.interceptions[id] || hoteReseau.interceptionForcee){ hoteReseau.interceptions[id] = cle; etat.nouveautes.push(['interception', Object.assign({T:temps}, d)]); }
+  }
+  hoteReseau.interceptionForcee = false;
   if(temps - hoteReseau.mineraiT >= RESEAU.mineraiT){
     hoteReseau.mineraiT = temps;
     const r = noeuds.map(n => Math.round(n.reste)), cle = r.join(',');
@@ -9713,7 +9803,20 @@ function fabriquerInstantane(){
 // Camps tenus par un humain distant (ni l'ordinateur, ni le joueur local de l'hôte).
 function campsDistants(){ return campsEnJeu().filter(id => !camps[id].ia && id !== campLocal()); }
 const hoteReseau = {dernierEnvoi:-1, alertes:{}, pause:false, mineraiT:-99, minerai:'', nouveautes:[], octets:0, envois:0,
-  ordres:{recus:0, acceptes:0, refuses:0, motifs:{}}};
+  ordres:{recus:0, acceptes:0, refuses:0, motifs:{}}, interceptions:{}, interceptionForcee:false};
+// État d'interception d'un camp pour l'événement « interception » (20 novembre 2026, cahier § 6), ou null s'il n'en a
+// pas : 8 propositions et 8 résultats au plus (les plus récents), champs simples. Fonction pure (lecture seule).
+const MAX_INTERCEPTIONS_RESEAU = 8;
+function interceptionPourReseau(id){
+  const C = camps[id], E = C && C.interception;
+  if(!E) return null;
+  const P = Object.values(E.propositions).sort((a, b) => b.t0 - a.t0).slice(0, MAX_INTERCEPTIONS_RESEAU)
+    .map(p => ({cle:p.cle, galerie:p.galerie, tireur:p.tireur, gx:p.gx, gy:p.gy, t0:p.t0, depart:p.depart, n:p.n, reponse:p.reponse}));
+  const R = Object.values(E.resultats).sort((a, b) => (b.t == null ? -1 : b.t) - (a.t == null ? -1 : a.t)).slice(0, MAX_INTERCEPTIONS_RESEAU)
+    .map(r => ({cle:r.cle, galerie:r.galerie, tireur:r.tireur, n:r.n, missiles:r.missiles, horsZone:r.horsZone, sansMunition:r.sansMunition,
+      tires:r.tires, rencontres:r.rencontres, abattus:r.abattus, parAllie:r.parAllie, impactT:r.impactT, t:r.t}));
+  return {camp:id, propositions:P, resultats:R};
+}
 // Après chaque pas de simulation de l'hôte : un instantané toutes les RESEAU.periode s de jeu (force : tout de suite).
 // Instantané complet demandé par reseau.js (arrivée, retour ou rechargement d'un invité) : envoyé tout de suite,
 // même si le temps n'avance pas (pause, après la fin), sinon cet invité garderait un monde vide (défaut R2).
@@ -9726,6 +9829,7 @@ function ticHote(force){
   hoteReseau.dernierEnvoi = du && !force ? Math.max(hoteReseau.dernierEnvoi + RESEAU.periode, temps - RESEAU.periode) : temps;
   // Invité arrivé ou rechargé pendant une pause : l'état de pause lui est rappelé (sans annonce à l'écran).
   if(complet && enPause && hoteReseau.pause === enPause) hoteReseau.nouveautes.push(['pause', {oui:true, rappel:true}]);
+  if(complet || force) hoteReseau.interceptionForcee = true;   // état d'interception renvoyé avec le complet (défense en ligne)
   const etat = fabriquerInstantane(), nouveautes = etat.nouveautes;
   delete etat.nouveautes;
   try { const r = salonHote.envoyerEtat(etat); if(r && r.octets) hoteReseau.octets += r.octets; hoteReseau.envois++; }
@@ -9735,7 +9839,9 @@ function ticHote(force){
 // Ordre reçu d'un invité : camp = celui du siège (fixé par reseau.js d'après le sujet et le jeton), jamais celui
 // annoncé dans le message. Un refus « à dire » est renvoyé au seul camp de l'expéditeur.
 const CODES_ORDRES = {droit:'droit', attaqueDeplacement:'attaqueDep', arret:'arreter', ralliement:'rally', construire:'batir',
-  produire:'produire', retirer:'retirer', pouvoir:'pouvoir'};
+  produire:'produire', retirer:'retirer', pouvoir:'pouvoir',
+  // Galeries de tir et défense antimissile en ligne (20 novembre 2026) ; mêmes codes dans REGLAGES.typesOrdres (reseau.js).
+  fabriquerMissile:'fabMissile', tirGalerie:'tirGalerie', fabriquerMunition:'fabMunition', repondreInterception:'repInter'};
 const TYPES_ORDRES_RESEAU = Object.assign(Object.create(null), Object.fromEntries(Object.entries(CODES_ORDRES).map(([t, c]) => [c, t])));
 function ordreVersReseau(o){
   const code = Object.prototype.hasOwnProperty.call(CODES_ORDRES, o.type) ? CODES_ORDRES[o.type] : null;
@@ -9759,7 +9865,11 @@ function recevoirOrdreHote(camp, m){
   const o = ordreDepuisReseau(m);
   const r = o && camps[camp] ? executerOrdre(camp, o) : {ok:false, motif:'Ordre illisible.', code:'invalide'};
   if(r.ok) H.acceptes++; else { H.refuses++; H.motifs[r.code || r.motif] = (H.motifs[r.code || r.motif] || 0) + 1; }
-  if(!r.ok && r.genre) notifier(camp, r.motif, r.genre);
+  // Réponse d'interception refusée (code etat) alors que la batterie est debout : elle est arrivée après le départ
+  // (20 novembre 2026, cahier § 5) ; dit à l'invité, au lieu d'un refus muet.
+  if(!r.ok && o && o.type === 'repondreInterception' && o.oui === true && r.code === 'etat' && camps[camp] && batterieDe(camp))
+    notifier(camp, 'Réponse arrivée trop tard : le missile était déjà parti.', 'alerte');
+  else if(!r.ok && r.genre) notifier(camp, r.motif, r.genre);
   // Refus muets en solo mais utiles à un joueur distant, dont l'état affiché a un temps de retard (points dépensés,
   // recharge, camp éliminé entre-temps) : renvoyés par la voie des messages par camp.
   else if(!r.ok && REFUS_DITS_EN_LIGNE.includes(r.code)) notifier(camp, r.motif, 'info');
@@ -9767,7 +9877,8 @@ function recevoirOrdreHote(camp, m){
 }
 function brancherHote(salon){
   salonHote = salon;
-  Object.assign(hoteReseau, {dernierEnvoi:-1, alertes:{}, pause:enPause, mineraiT:-99, minerai:'', nouveautes:[], octets:0, envois:0, ordres:{recus:0, acceptes:0, refuses:0, motifs:{}}});
+  Object.assign(hoteReseau, {dernierEnvoi:-1, alertes:{}, pause:enPause, mineraiT:-99, minerai:'', nouveautes:[], octets:0, envois:0, ordres:{recus:0, acceptes:0, refuses:0, motifs:{}},
+    interceptions:{}, interceptionForcee:false});
   const H = mondes ? mondes.hote : null;
   dansMonde(H, () => { journalReseau = {effets:[], projectiles:[]}; });
   // Messages de la simulation pour les camps distants (le joueur local de l'hôte les voit déjà par notifier).
@@ -9814,11 +9925,15 @@ function confierCampAOrdinateur(camp, niveau){
 
 // ---------- Invité : tampon, application, lissage ----------
 // elim : camp -> {T0, T, n} tant que les instantanés appliqués de suite le disent éliminé (voir eliminationStable).
+// interceptions : événements « interception » reçus, en attente que l'affichage atteigne leur heure ; reponsesLocales :
+// cle -> {oui, t} réponses du joueur pas encore confirmées par l'hôte (défense en ligne, 20 novembre 2026).
 const invite = {tampon:[], courant:null, precedent:null, Ta:0, init:false, pause:false, index:new Map(), morts:false,
-  verifT:1, recus:0, appliques:0, recalages:0, extrapolations:0, reculs:0, resynchros:0, rejetes:0, jetes:0, ecarts:[], dernierRecu:0, elim:new Map()};
+  verifT:1, recus:0, appliques:0, recalages:0, extrapolations:0, reculs:0, resynchros:0, rejetes:0, jetes:0, ecarts:[], dernierRecu:0, elim:new Map(),
+  interceptions:[], reponsesLocales:{}};
 function reinitialiserInvite(){
   Object.assign(invite, {tampon:[], courant:null, precedent:null, Ta:0, init:false, pause:false, index:new Map(), morts:false,
-    verifT:1, recus:0, appliques:0, recalages:0, extrapolations:0, reculs:0, resynchros:0, rejetes:0, jetes:0, ecarts:[], dernierRecu:0, elim:new Map()});
+    verifT:1, recus:0, appliques:0, recalages:0, extrapolations:0, reculs:0, resynchros:0, rejetes:0, jetes:0, ecarts:[], dernierRecu:0, elim:new Map(),
+    interceptions:[], reponsesLocales:{}});
 }
 // Élimination sûre chez l'invité (défaut du 14 novembre 2026, troisième tour) : un seul instantané faux (forgé par un
 // joueur qui a le code, limite L3) ne suffit plus à afficher une défaite ou une victoire définitive.
@@ -9862,7 +9977,28 @@ function batimentRecu(b){
   r.angleT = bornerNb(b.angleT, -100, 100, 0); r.tirT = nombreOuNul(b.tirT);
   r.file = (Array.isArray(b.file) ? b.file : []).filter(t => aCle(UNITES, t)).slice(0, 32);
   r.rally = b.rally && estNombre(b.rally.x) && estNombre(b.rally.y) ? {x:bornerNb(b.rally.x, 0, LARG, 0), y:bornerNb(b.rally.y, 0, HAUT, 0)} : null;
+  r.gal = galerieRecue(b);
+  r.para = batterieRecue(b);
+  r.intT = r.para && estNombre(b.intT) ? bornerNb(b.intT, 0, 1e7, 0) : null;
   return r;
+}
+// État d'une Batterie Parasol reçu (20 novembre 2026, défense en ligne) : seulement pour une batterie, entiers 0-15
+// (au plus stockMax), fabT fini borné ; sinon null. Fonction pure.
+function batterieRecue(b){
+  const p = b.para, D = BATIMENTS[b.type];
+  if(!p || typeof p !== 'object' || !D || !D.defense || D.defense.genre !== 'parasol') return null;
+  const e = v => entierEntre(v, 0, D.defense.stockMax) ? v : 0;
+  return {stock:e(p.stock), fab:e(p.fab), fabT:bornerNb(p.fabT, 0, 255, 0)};
+}
+// État d'une galerie de tir reçu (20 novembre 2026, galeries en ligne, lot 1) : seulement pour un type de galerie,
+// entiers 0-15, temps finis bornés ; sinon null (l'invité garde alors un état « fermée, vide »). Fonction pure.
+function galerieRecue(b){
+  const g = b.gal, D = BATIMENTS[b.type];
+  if(!g || typeof g !== 'object' || !D || !D.galerie) return null;
+  const e15 = v => entierEntre(v, 0, 15) ? v : 0;
+  const t0 = estNombre(g.t0) ? bornerNb(g.t0, 0, 1e7, 0) : null;
+  const n = Math.min(e15(g.n), D.galerie.lanceurs || 1);   // jamais plus que de lanceurs (dates du cycle)
+  return {stock:e15(g.stock), fab:e15(g.fab), fabT:bornerNb(g.fabT, 0, 255, 0), t0, n:t0 === null ? 0 : n, tires:t0 === null ? 0 : Math.min(e15(g.tires), n)};
 }
 function projectileRecu(p){
   if(!p || !PROJECTILES_RESEAU.includes(p.genre) || !(p.arme == null || tablesReseau().ensembleArmes.has(p.arme))) return null;
@@ -9874,7 +10010,7 @@ function effetRecu(e){
   if(!e || !EFFETS_RESEAU.includes(e.type) || !estNombre(e.x) || !estNombre(e.y)) return null;
   const r = {type:e.type, x:e.x, y:e.y, duree:bornerNb(e.duree, 0, 60, 0), p1:entierEntre(e.p1, 0, 255) ? e.p1 : 0, p2:entierEntre(e.p2, 0, 255) ? e.p2 : 0};
   for(const k of ['x2', 'y2', 'h1', 'h2']){ const v = nombreOuNul(e[k]); if(v != null) r[k] = v; }
-  if((e.type === 'trait' || e.type === 'rayon') && (r.x2 == null || r.y2 == null)) return null;
+  if((e.type === 'trait' || e.type === 'rayon' || e.type === 'intercepteur') && (r.x2 == null || r.y2 == null)) return null;
   return r;
 }
 function campRecu(c){
@@ -9945,6 +10081,11 @@ function creerBatimentInvite(r){
   const b = {id:r.id, est:'batiment', type:r.type, def:D, camp:r.camp, c:r.c, r:r.r, x:(r.c + t/2)*TUILE, y:(r.r + t/2)*TUILE, rayon:t*TUILE/2,
     pvMax:r.pvMax, pv:r.pv, enCours:!!r.enCours, progres:r.progres, file:[], prodT:0, rally:null, mort:false,
     angleT:r.angleT, tirT:-99, recharge:0, scan:0, cible:null, rang:0, kills:0, dansAura:false, auraT:0, toucheT:-99, nom:null};
+  // Galerie de tir (20 novembre 2026, galeries en ligne, lot 1) : mêmes champs que creerBatiment, tenus ensuite par
+  // majBatimentInvite (état reçu) et majGaleriesInvite (galT, galN à chaque image).
+  if(D.galerie) Object.assign(b, {gal:{t0:null, cx:0, cy:0, n:0, tires:0, stock:0, fab:0, fabT:0}, galT:null, galN:0});
+  // Batterie Parasol (défense en ligne) : comme creerBatiment ; b.intT absent tant qu'elle n'a pas tiré.
+  if(D.defense && D.defense.genre === 'parasol') b.para = {stock:0, fab:0, fabT:0, autorise:{}};
   empreinteBatiment(b, true);
   ents.push(b); invite.index.set(b.id, b);
   return b;
@@ -9970,6 +10111,29 @@ function majBatimentInvite(b, r){
   b.blocage = b.bloque ? (population[b.camp] >= popMax ? 'effectif' : 'places') : null;
   if(!r.rally) b.rally = null;
   else if(!b.rally || b.rally.x !== r.rally.x || b.rally.y !== r.rally.y) b.rally = {x:r.rally.x, y:r.rally.y};
+  // Galerie de tir (lot 1) : état reçu recopié en place (b.gal garde son identité). Sans état (chantier) : fermée, vide.
+  if(b.gal){
+    const g = b.gal, q = r.gal;
+    g.stock = q ? q.stock : 0; g.fab = q ? q.fab : 0; g.fabT = q ? q.fabT : 0;
+    g.t0 = q ? q.t0 : null; g.n = q ? q.n : 0; g.tires = q ? q.tires : 0;
+  }
+  // Batterie Parasol (défense en ligne) : de même ; b.intT retiré quand il n'est plus transmis (caisson au repos).
+  if(b.para){
+    const p = b.para, q = r.para;
+    p.stock = q ? q.stock : 0; p.fab = q ? q.fab : 0; p.fabT = q ? q.fabT : 0;
+    if(r.intT != null) b.intT = r.intT; else delete b.intT;
+  }
+}
+// Invité, à chaque image (20 novembre 2026, galeries en ligne, lot 1) : ce que majGalerie tient chez l'hôte pour le
+// rendu et la fiche, déduit de l'heure du cycle reçue : b.galT = temps − t0 borné à [0, durée du cycle], null hors
+// cycle ; b.galN = nombre de missiles engagés.
+function majGaleriesInvite(){
+  for(const b of ents){
+    if(b.mort || !b.gal) continue;
+    const g = b.gal;
+    if(g.t0 === null || b.enCours){ b.galT = null; b.galN = 0; continue; }
+    b.galT = Math.max(0, Math.min(CYCLE_GALERIE.duree, temps - g.t0)); b.galN = g.n;
+  }
 }
 // Mort vue par l'invité (entité absente de l'instantané) : marquée morte pour que le rendu joue l'épave ou les
 // décombres à l'image suivante, effets de mort posés localement, retrait au pas d'après.
@@ -10103,6 +10267,8 @@ function avancerInvite(dt){
     I.precedent = I.courant; I.courant = s;
   }
   interpolerInvite(dt);
+  majGaleriesInvite();   // galeries de tir (20 novembre 2026) : sans galerie, ne fait rien
+  viderInterceptionsInvite();   // défense antimissile : sans événement reçu, ne fait rien
   // Projectiles et effets : vie locale (comme miseAJour), impact posé par l'invité lui-même.
   const P = projectiles;
   for(let i = 0; i < P.length; i++){
@@ -10130,7 +10296,62 @@ function recevoirEvenementInvite(ev){
     case 'pause': majPauseInvite(ev.oui === true); break;
     case 'minerai': if(Array.isArray(ev.r) && ev.r.length <= noeuds.length) ev.r.forEach((v, i) => { const n = noeuds[i]; if(n && estNombre(v)) n.reste = Math.max(0, Math.min(n.max || v, v)); }); break;
     case 'bilan': recevoirBilan(ev); break;
+    case 'interception': recevoirInterceptionInvite(ev); break;   // défense antimissile en ligne (20 novembre 2026)
   }
+}
+// ---------- Défense antimissile chez l'invité (20 novembre 2026, cahier § 6) ----------
+// Événement « interception » de l'hôte : seul celui du camp local est pris ; tout est contrôlé (8 propositions et
+// 8 résultats au plus, clé « id@heure », camps connus, nombres finis bornés, reponse null/vrai/faux). Il est appliqué
+// quand l'affichage de l'invité atteint son heure (T), pour que la fenêtre suive ce qui se voit. Limite acceptée
+// (L1) : l'événement est diffusé à tous, non chiffré ; la réponse d'un défenseur est lisible par un navigateur modifié.
+const RE_CLE_INTERCEPTION = /^\d{1,5}@[0-9.e+-]{1,26}$/;
+function interceptionRecue(ev){
+  if(!ev || ev.camp !== campLocal() || !aCle(camps, ev.camp)) return null;
+  const P = Array.isArray(ev.propositions) ? ev.propositions : null, R = Array.isArray(ev.resultats) ? ev.resultats : null;
+  if(!P || !R || P.length > MAX_INTERCEPTIONS_RESEAU || R.length > MAX_INTERCEPTIONS_RESEAU) return null;
+  const campOk = c => CAMPS_JOUEURS.includes(c) && aCle(camps, c);
+  const t = v => estNombre(v) ? bornerNb(v, 0, 1e7, 0) : null;
+  const e15 = v => entierEntre(v, 0, 15);
+  const propositions = {}, resultats = {};
+  for(const p of P){
+    if(!p || typeof p.cle !== 'string' || !RE_CLE_INTERCEPTION.test(p.cle) || !entierEntre(p.galerie, 1, 65535) || !campOk(p.tireur)) return null;
+    if(t(p.t0) === null || t(p.depart) === null || !e15(p.n) || !(p.reponse === null || p.reponse === true || p.reponse === false)) return null;
+    propositions[p.cle] = {cle:p.cle, camp:ev.camp, galerie:p.galerie, tireur:p.tireur, gx:bornerNb(p.gx, 0, LARG, 0), gy:bornerNb(p.gy, 0, HAUT, 0),
+      t0:t(p.t0), depart:t(p.depart), n:p.n, reponse:p.reponse};
+  }
+  const compteurs = ['n', 'missiles', 'horsZone', 'sansMunition', 'tires', 'rencontres', 'abattus', 'parAllie'];
+  for(const r of R){
+    if(!r || typeof r.cle !== 'string' || !RE_CLE_INTERCEPTION.test(r.cle) || !entierEntre(r.galerie, 1, 65535) || !campOk(r.tireur)) return null;
+    if(!compteurs.every(k => e15(r[k]))) return null;
+    if(!(r.impactT === null || estNombre(r.impactT)) || !(r.t === null || estNombre(r.t))) return null;
+    const x = {cle:r.cle, galerie:r.galerie, tireur:r.tireur, impactT:t(r.impactT), t:t(r.t)};
+    for(const k of compteurs) x[k] = r[k];
+    resultats[r.cle] = x;
+  }
+  return {T:estNombre(ev.T) ? ev.T : 0, propositions, resultats};
+}
+function recevoirInterceptionInvite(ev){
+  const d = interceptionRecue(ev); if(!d) return;
+  const L = invite.interceptions;
+  L.push(d); while(L.length > RESEAU.interceptionsMax) L.shift();
+  viderInterceptionsInvite();
+}
+// Applique, dans l'ordre, les événements dont l'heure est atteinte par l'affichage (tous, tant qu'il n'a pas commencé).
+function viderInterceptionsInvite(){
+  const L = invite.interceptions;
+  while(L.length && (!invite.init || L[0].T <= invite.Ta + 1e-6)) appliquerInterceptionInvite(L.shift());
+}
+// Remplace l'état d'interception du camp local. Une réponse du joueur pas encore confirmée par l'hôte (2 s au plus)
+// est gardée ; dès que l'hôte dit la même chose, elle est oubliée.
+function appliquerInterceptionInvite(d){
+  const C = camps[campLocal()]; if(!C) return;
+  const loc = invite.reponsesLocales, maintenant = performance.now();
+  for(const cle in loc){
+    const p = d.propositions[cle], l = loc[cle];
+    if(!p || p.reponse === l.oui || maintenant - l.t > 2000) delete loc[cle];
+    else p.reponse = l.oui;
+  }
+  C.interception = {propositions:d.propositions, resultats:d.resultats};
 }
 // Bilan de fin envoyé par l'hôte (défaut R8) : statistiques de chaque camp, entiers bornés ; l'écran de fin de
 // l'invité est refait avec les siennes.
@@ -10160,10 +10381,22 @@ function envoyerOrdreInvite(camp, ordre){
     : {ok:false, motif:'Pause réservée à l’hôte.', code:'reserve'};
   if(ordre.type === 'abandon'){ try { if(salonInvite) salonInvite.quitter(); } catch(err){} oublierSiegeInvite(); location.href = location.pathname + adresseSansSalon(); return {ok:true}; }
   if(ordre.type === 'alliance' || ordre.type === 'proposerTreve') return {ok:false, motif:'Réservé à l’hôte.', code:'reserve'};
-  // Galeries de tir (novembre 2026) : absentes en ligne ; ces ordres n'ont pas de code réseau, refus dit ici.
+  // Galeries de tir (novembre 2026) : sans le réglage de l'hôte, ces ordres sont refusés ici, en bloc.
   // Défense antimissile (19 novembre 2026) : même chose.
-  if(ordre.type === 'fabriquerMissile' || ordre.type === 'tirGalerie' || ordre.type === 'fabriquerMunition' || ordre.type === 'repondreInterception')
-    return {ok:false, motif:MOTIF_SANS_GALERIES, code:'galerie', genre:'info'};
+  // (20 novembre 2026, galeries en ligne : réglage coché, ces quatre ordres sont contrôlés sur l'état affiché par le
+  // même validerOrdre que le solo, refus dit tout de suite, puis envoyés ; l'hôte les valide de nouveau.)
+  let reponseLocale = null;
+  if(ordre.type === 'fabriquerMissile' || ordre.type === 'tirGalerie' || ordre.type === 'fabriquerMunition' || ordre.type === 'repondreInterception'){
+    if(!galeriesActives()) return {ok:false, motif:MOTIF_SANS_GALERIES, code:'galerie', genre:'info'};
+    let v;
+    try { v = validerOrdre(camp, ordre); } catch(err){ v = {motif:'Ordre illisible.', code:'invalide'}; }
+    if(v.motif) return {ok:false, motif:v.motif, code:v.code, genre:v.genre};
+    // Réponse d'interception : la proposition visée (celle en cours sans clé), notée localement après l'envoi.
+    if(ordre.type === 'repondreInterception'){
+      const E = camps[camp].interception;
+      reponseLocale = typeof ordre.cle === 'string' ? E.propositions[ordre.cle] : propositionOuverte(camp);
+    }
+  }
   // Refus que l'hôte rendrait sans genre (muets) mais lisibles dans l'état reçu (défaut 5 du troisième tour) : rendus
   // ici, comme en solo (ok:false, mêmes motifs), au lieu d'un « ok » sans effet. Le camp éliminé est dit au joueur.
   const C = camps[camp];
@@ -10179,6 +10412,12 @@ function envoyerOrdreInvite(camp, ordre){
   if(!m) return {ok:false, motif:'Ordre illisible.', code:'invalide'};
   const s = salonInvite ? salonInvite.envoyerOrdre(m) : 0;
   if(!s) return {ok:false, motif:'Trop d’ordres à la fois : ordre non envoyé.', code:'debit', genre:'alerte'};
+  // Défense en ligne (cahier § 6) : la réponse est notée tout de suite (affichage), puis confirmée ou corrigée par
+  // l'événement « interception » suivant de l'hôte (voir appliquerInterceptionInvite).
+  if(reponseLocale){
+    reponseLocale.reponse = ordre.oui === true;
+    invite.reponsesLocales[reponseLocale.cle] = {oui:ordre.oui === true, t:performance.now()};
+  }
   const retour = retourOrdreLocal(ordre);
   return retour ? {ok:true, envoye:s, retour} : {ok:true, envoye:s};
 }
@@ -10264,6 +10503,7 @@ function boucleReseau(dt, brut, ts){
   if(interfaceAJour || ts - interfaceT >= 100 || ts < interfaceT){
     interfaceAJour = false; interfaceT = ts;
     majBarre(); majPanneau(); majFabrique();
+    majFenetreDefense();   // défense antimissile en ligne (20 novembre 2026) : hôte et invité ; sans proposition, n'écrit rien
     if(modeReseau !== 'echo') majEtatReseau();
   }
 }
@@ -10286,6 +10526,8 @@ function chargerScriptReseau(){
 // L'écran montre la vue de l'invité : on joue I à la souris, ses ordres partent chez l'hôte.
 async function lancerEcho(params){
   modeReseau = 'echo'; echo.pret = false; echo.erreur = null;
+  // ?echo&galeries=1 : galeries de tir dans les deux mondes (20 novembre 2026, outil d'essai) ; sans lui, réglage décoché.
+  galeriesEnLigne = params.get('galeries') === '1';
   window.enregistrerVictoire = () => {};
   try {
     await chargerScriptReseau();
@@ -10316,7 +10558,7 @@ async function lancerEcho(params){
     const inv = await Reseau.rejoindre(hote.code, 'Invité', {versionJeu:VERSION_FICHIERS, memoriser:false});
     echo.salonHote = hote; echo.salonInvite = inv;
     brancherHote(hote); brancherInvite(inv);
-    const lance = hote.lancer({carte:CARTE.id, camps:publics}, {forcer:true});
+    const lance = hote.lancer({carte:CARTE.id, camps:publics, galeries:galeriesEnLigne}, {forcer:true});
     if(!lance || !lance.ok) throw new Error('lancement refusé : ' + JSON.stringify(lance));
     if(inv.camp && inv.camp !== 'I') console.warn('[Echo] siège de l’invité inattendu :', inv.camp);
     definirCampLocal('I');
@@ -10464,6 +10706,7 @@ function rendreSalon(){
     zone.innerHTML = `<h2>Héberger une partie</h2>
       <p class="note">Carte : <b>${echapper(CARTE.nom)}</b> (pour en changer, revenez à l’écran précédent). Les ordinateurs jouent en difficulté
       <select id="salonDiff">${Object.keys(DIFFICULTES).map(d => `<option value="${d}"${d === difficulte ? ' selected' : ''}>${{facile:'Facile', normal:'Normale', difficile:'Difficile', ultra:'Ultra'}[d] || d}</option>`).join('')}</select>.</p>
+      ${caseGaleriesSalon()}
       <label class="champ">Votre pseudonyme<input type="text" id="salonPseudo" maxlength="16" value="${echapper(lirePseudo())}" placeholder="Hôte" autocomplete="off"></label>
       <div class="raccourcis" id="salonRacc"></div><div class="emplacements">${lignes.join('')}</div>
       <p class="note">« Joueur (en attente) » : une place pour un ami, qui choisira Halden ou Karsk. Une place de joueur restée vide au lancement est fermée.</p>
@@ -10473,6 +10716,7 @@ function rendreSalon(){
     for(const [cle, nom] of RACCOURCIS_CAMPS){ const b = document.createElement('button'); b.type = 'button'; b.className = 'petit'; b.textContent = nom; b.onclick = () => appliquerRaccourciSalon(cle); racc.appendChild(b); }
     brancherSelectsSalon(zone);
     el('salonDiff').onchange = ev => { difficulte = ev.target.value; const d = el('difficulte'); if(d) d.value = difficulte; };
+    brancherCaseGaleriesSalon();
     el('bOuvrirSalon').onclick = ouvrirSalon;
     el('bSalonRetour').onclick = () => { enLigne.erreur = ''; enLigne.info = ''; afficherEscarmouche(); };
     return;
@@ -10496,6 +10740,7 @@ function rendreSalon(){
       <div class="boutons" style="margin-top:0"><button class="petit" id="bCopierLien" type="button">Copier le lien d’invitation</button>
       <input type="text" class="lienSalon" id="lienSalon" readonly value="${echapper(S.lien())}"></div>
       <p class="note">Serveur : ${echapper(S.serveur.nom || S.serveur.url)} · carte : ${echapper(CARTE.nom)} · ordinateurs en difficulté ${echapper(difficulte)}.</p>
+      ${caseGaleriesSalon()}
       <div class="raccourcis" id="salonRacc"></div><div class="emplacements">${lignes.join('')}</div>${notes}
       <div class="boutons"><button class="grand principal" id="bLancerSalon" type="button"${pb ? ' disabled' : ''}>Lancer la partie</button>
       <button class="grand" id="bFermerSalon" type="button">Fermer le salon</button></div>
@@ -10503,6 +10748,7 @@ function rendreSalon(){
     const racc = el('salonRacc');
     for(const [cle, nom] of RACCOURCIS_CAMPS){ const b = document.createElement('button'); b.type = 'button'; b.className = 'petit'; b.textContent = nom; b.onclick = () => appliquerRaccourciSalon(cle); racc.appendChild(b); }
     brancherSelectsSalon(zone);
+    brancherCaseGaleriesSalon();
     for(const b of zone.querySelectorAll('[data-expulser]')) b.onclick = () => { S.expulser(+b.dataset.expulser, 'Retiré par l’hôte.'); rendreSalon(); };
     el('bCopierLien').onclick = () => copierLienSalon(S.lien());
     el('bLancerSalon').onclick = () => lancerPartieSalon(el('bLancerSalon'));
@@ -10556,6 +10802,17 @@ function rendreSalon(){
     el('bPret').onclick = async () => { enLigne.erreur = ''; const r = await S.pret(!mien.pret); if(!r.accepte) enLigne.erreur = (aCle(MOTIFS_SALON, r.motif) ? MOTIFS_SALON[r.motif] : 'Refusé.'); rendreSalon(); };
     el('bQuitterSalon').onclick = async () => { const s = enLigne.salon; enLigne.salon = null; enLigne.info = 'Vous avez quitté le salon.'; try { await s.quitter(); } catch(err){} libererVerrouSiege(s.code); rendreSalon(); };
   }
+}
+// Case « Galeries de tir » de l'hôte (20 novembre 2026, galeries en ligne, lot 1), sur les deux écrans de préparation
+// (avant et après l'ouverture du salon), modifiable jusqu'au lancement ; transmise aux invités par S.lancer.
+const PHRASE_GALERIES_SALON = 'galeries, Batterie Parasol et radars, pour tous les camps, ordinateurs compris';
+function caseGaleriesSalon(){
+  return `<label class="champ" style="flex-direction:row;align-items:center;gap:.5em"><input type="checkbox" id="salonGaleries"${galeriesEnLigne ? ' checked' : ''}>
+    <span><b>Galeries de tir</b> <span class="note">(${echapper(PHRASE_GALERIES_SALON)})</span></span></label>`;
+}
+function brancherCaseGaleriesSalon(){
+  const c = el('salonGaleries');
+  if(c) c.onchange = () => { galeriesEnLigne = c.checked === true; };
 }
 function brancherSelectsSalon(zone){
   for(const s of zone.querySelectorAll('select[data-k]')) s.onchange = () => {
@@ -10622,7 +10879,9 @@ function lancerPartieSalon(bouton){
   const liste = listeDepuisSalon(S.listeSieges(), true);
   const empl = emplacementsCarte(CARTE), rep = empl.length >= liste.length ? repartirEmplacements(liste, empl) : null;
   const publics = liste.map((k, i) => ({id:k.id, faction:k.faction, equipe:k.equipe, couleur:COULEURS_CAMPS[k.id], ia:k.ia, emplacement:rep ? rep[i] : i, pseudo:k.pseudo}));
-  const r = S.lancer({carte:CARTE.id, empreinte:empreinteCarte(), camps:publics, difficulte});
+  // galeries : réglage de l'hôte (20 novembre 2026, galeries en ligne), lu par chaque invité dans demarrerInvite.
+  galeriesEnLigne = galeriesEnLigne === true;
+  const r = S.lancer({carte:CARTE.id, empreinte:empreinteCarte(), camps:publics, difficulte, galeries:galeriesEnLigne});
   if(!r || !r.ok){ enLigne.erreur = MOTIFS_SALON[r && r.erreur] || 'Lancement refusé.'; rendreSalon(); return; }
   lancerEnLigne(bouton, () => demarrerHote(S, liste, publics));
 }
@@ -10936,6 +11195,9 @@ function demarrerInvite(S, debut){
   if(!liste || !liste.some(k => k.id === S.camp)){ afficherInterruption('Description de la partie illisible.'); try { S.quitter(); } catch(err){} return; }
   surprise.demandee = false;
   appliquerChargeCollecteurs(COLLECTEUR_HABITUEL.capacite);   // en ligne : collecteurs habituels
+  // Galeries de tir (20 novembre 2026) : réglage de l'hôte, porté par les données de lancement (aussi au retour dans
+  // une partie en cours) ; toute autre valeur que true : faux.
+  galeriesEnLigne = !!debut && debut.galeries === true;
   preparerMondeInvite(liste, S.camp);
   const empl = emplacementsCarte(CARTE);
   for(const k of liste){ pouvoirsActifs[k.id] = true; pseudosEnLigne[k.id] = k.pseudo || null; if(empl[k.emplacement]) basesCarte[k.id] = empl[k.emplacement]; }
@@ -10963,7 +11225,9 @@ function demarrerInvite(S, debut){
   jouerMusique('calme');
   demarrerMinuteurReseau();
   message(CARTE.nom + ' : partie en ligne. Vous jouez le camp ' + nomCamp(S.camp).toLowerCase() + ' (' + FACTIONS[camps[S.camp].faction].nom + ').', 'succes');
+  if(galeriesEnLigne) message(MESSAGE_GALERIES_EN_LIGNE, 'info');
 }
+const MESSAGE_GALERIES_EN_LIGNE = 'Galeries de tir activées par l’hôte : chaque camp peut bâtir sa galerie, sa Batterie Parasol et ses radars.';
 function finInviteReseau(d){
   const motif = d && d.motif;
   // La partie est finie pour cet onglet : le verrou du siège est rendu (un autre onglet ne se croira pas doublon).

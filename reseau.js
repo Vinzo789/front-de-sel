@@ -75,7 +75,8 @@ const REGLAGES = {
   delaiAccueilMs:8000,       // délai de réponse de l'hôte à une arrivée
   pseudoMax:16,
   equipesMax:4,
-  typesOrdres:['aller', 'droit', 'attaqueDep', 'arreter', 'rally', 'batir', 'produire', 'retirer', 'pouvoir'],
+  // (20 novembre 2026, galeries de tir et défense antimissile en ligne : fabMissile, tirGalerie, fabMunition, repInter.)
+  typesOrdres:['aller', 'droit', 'attaqueDep', 'arreter', 'rally', 'batir', 'produire', 'retirer', 'pouvoir', 'fabMissile', 'tirGalerie', 'fabMunition', 'repInter'],
   // --- Défense contre les messages forgés (serveur public : n'importe qui peut publier) ---
   tailleRattrapageMax:262144,  // réponse de rattrapage (jusqu'à 200 événements)
   confirmationWillMs:2500,     // « parti » sans preuve (dernière volonté) : confirmé si aucun battement valable pendant ce délai
@@ -995,13 +996,28 @@ function qUnite(u){
     tir:horloge(u.tirT), rec:horloge(u.recolteT), rep:horloge(u.repareT),
   };
 }
+// Extension du bâtiment (20 novembre 2026, galeries de tir et défense antimissile en ligne ; CAHIER-GALERIES-EN-LIGNE.md
+// § 4) : bit 64 de l'octet de drapeaux, puis un octet x (bit 0 galerie b.gal, bit 1 batterie b.para, bit 2 cycle de
+// tir en cours, bit 3 intT présent). Galerie : u8 stock (4 bits bas) + fab (4 bits hauts), u8 fabT en secondes
+// entières arrondies vers le haut ; si cycle, u16 âge de t0 en 1/50 s et u8 n (bas) + tires (haut). Batterie : u8
+// stock/fab, u8 fabT ; si intT, u8 âge en 1/50 s (la pose du caisson dure 4,5 s : r3d-batiments.js,
+// CYCLE_INTERCEPTION.repos). Les heures quantifiées gardées pour la comparaison (memeBat) sont absolues, comme tirT :
+// le bâtiment n'est pas renvoyé à chaque instantané. Sans gal ni para : x = 0, rien d'écrit, octets d'avant.
+const nib = v => borne(Math.round(+v || 0), 0, 15);
+const secHaut = t => borne(Math.ceil((+t || 0) - 1e-6), 0, 255);   // (1e-6 : comme l'affichage de la fiche, ligneEtatGalerie)
 function qBatiment(b){
+  const g = b.gal && typeof b.gal === 'object' ? b.gal : null, p = b.para && typeof b.para === 'object' ? b.para : null;
+  const g0 = g ? horloge(g.t0) : -1, it = p ? horloge(b.intT) : -1;
   return {
     id:b.id & 0xFFFF, pvMax:u16r(b.pvMax), pv:qFrac(b.pv, b.pvMax), pr:qFrac01(b.progres), at:qAng(b.angleT),
     enC:!!b.enCours, bl:!!b.bloque,
     file:(b.file || []).slice(0, 255).map(t => indexDe('unites', t)), av:qFrac01(b.avancement),
     rally:b.rally ? [qPos(b.rally.x), qPos(b.rally.y)] : null, tir:horloge(b.tirT),
     type:indexDe('batiments', b.type), camp:indexDe('camps', b.camp), c:u8r(b.c), r:u8r(b.r),
+    x:(g ? 1 : 0) | (p ? 2 : 0),
+    gs:g ? nib(g.stock) | (nib(g.fab) << 4) : 0, gf:g ? secHaut(g.fabT) : 0, g0,
+    gn:g && g0 >= 0 ? nib(g.n) | (nib(g.tires) << 4) : 0,
+    ps:p ? nib(p.stock) | (nib(p.fab) << 4) : 0, pf:p ? secHaut(p.fabT) : 0, it,
   };
 }
 function quantifierEtat(etat){
@@ -1017,12 +1033,15 @@ const memeUnite = (a, b) => a.x === b.x && a.y === b.y && a.a === b.a && a.at ==
 const statBat = (a, b) => a.type === b.type && a.camp === b.camp && a.pvMax === b.pvMax && a.c === b.c && a.r === b.r;
 function memeBat(a, b){
   if(a.pv !== b.pv || a.pr !== b.pr || a.at !== b.at || a.enC !== b.enC || a.bl !== b.bl || a.av !== b.av || a.tir !== b.tir) return false;
+  // Extension (galerie, batterie : 20 novembre 2026)
+  if(a.x !== b.x || a.gs !== b.gs || a.gf !== b.gf || a.g0 !== b.g0 || a.gn !== b.gn || a.ps !== b.ps || a.pf !== b.pf || a.it !== b.it) return false;
   if(a.file.length !== b.file.length) return false;
   for(let i = 0; i < a.file.length; i++) if(a.file[i] !== b.file[i]) return false;
   if(!a.rally !== !b.rally) return false;
   return !a.rally || (a.rally[0] === b.rally[0] && a.rally[1] === b.rally[1]);
 }
 const age = (h, tq) => (h >= 0 && tq - h >= 0 && tq - h <= 255) ? tq - h : -1;
+const age16 = (h, tq) => (h >= 0 && tq - h >= 0 && tq - h <= 65535) ? tq - h : -1;   // cycle d'une galerie (17,5 s = 875)
 
 function ecrireUnite(w, q, nouveau, tq){
   const at = age(q.tir, tq), ar = age(q.rec, tq), ap = age(q.rep, tq);
@@ -1040,12 +1059,20 @@ function ecrireUnite(w, q, nouveau, tq){
 }
 function ecrireBatiment(w, q, nouveau, tq){
   const at = age(q.tir, tq);
-  const dr = (q.enC ? 1 : 0) | (q.file.length ? 2 : 0) | (q.rally ? 4 : 0) | (at >= 0 ? 8 : 0) | (q.bl ? 16 : 0) | (nouveau ? 32 : 0);
+  const ag = (q.x & 1) ? age16(q.g0, tq) : -1, ai = (q.x & 2) ? age(q.it, tq) : -1;
+  const x = q.x | (ag >= 0 ? 4 : 0) | (ai >= 0 ? 8 : 0);
+  const dr = (q.enC ? 1 : 0) | (q.file.length ? 2 : 0) | (q.rally ? 4 : 0) | (at >= 0 ? 8 : 0) | (q.bl ? 16 : 0) | (nouveau ? 32 : 0) | (x ? 64 : 0);
   w.u16(q.id); w.u8(q.pv); w.u8(q.pr); w.u8(q.at); w.u8(dr);
   if(nouveau){ w.u8(q.type); w.u8(q.camp); w.u8(q.c); w.u8(q.r); w.u16(q.pvMax); }
   if(q.file.length){ w.u8(q.file.length); for(const t of q.file) w.u8(t); w.u8(q.av); }
   if(q.rally){ w.u16(q.rally[0]); w.u16(q.rally[1]); }
   if(at >= 0) w.u8(at);
+  // Extension (20 novembre 2026), après tous les champs d'avant : voir qBatiment.
+  if(x){
+    w.u8(x);
+    if(x & 1){ w.u8(q.gs); w.u8(q.gf); if(x & 4){ w.u16(ag); w.u8(q.gn); } }
+    if(x & 2){ w.u8(q.ps); w.u8(q.pf); if(x & 8) w.u8(ai); }
+  }
 }
 
 // Cœur de l'encodeur : `q` = état quantifié, `baseQ` = base quantifiée (null → complet).
@@ -1189,6 +1216,20 @@ function decoder(octets, base){
       if(dr & 2){ const nf = L.u8(); for(let k = 0; k < nf; k++) b.file.push(nomDe('unites', L.u8())); b.avancement = L.u8()/255; }
       if(dr & 4) b.rally = {x:dPos(L.u16()), y:dPos(L.u16())};
       if(dr & 8) b.tirT = ageVers(L.u8());
+      // Extension (20 novembre 2026) : galerie (b.gal), batterie (b.para, b.intT). Absente : ni l'un ni l'autre.
+      if(dr & 64){
+        const x = L.u8();
+        if(x & 1){
+          const s = L.u8(), f = L.u8();
+          b.gal = {stock:s & 15, fab:s >> 4, fabT:f, t0:null, n:0, tires:0};
+          if(x & 4){ b.gal.t0 = ageVers(L.u16()); const n = L.u8(); b.gal.n = n & 15; b.gal.tires = n >> 4; }
+        }
+        if(x & 2){
+          const s = L.u8(), f = L.u8();
+          b.para = {stock:s & 15, fab:s >> 4, fabT:f};
+          b.intT = x & 8 ? ageVers(L.u8()) : null;
+        }
+      }
       if(!(bi && bi.bats.has(id))) nouveauxB.push(id);
       bats.set(id, b);
     }
