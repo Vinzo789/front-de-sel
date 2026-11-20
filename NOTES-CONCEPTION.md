@@ -984,6 +984,25 @@ carte à l'autre par l'adresse (`?reserves=`, `?collecte=100`).
   `chargeCollecteurs`, `appliquerChargeCollecteurs` (appelée au lancement de
   chaque partie : escarmouche, mission, invité), `initInterfaceReserves`.
 
+### Nom du jeu (20 novembre 2026, `?v=39`)
+Le propriétaire a renommé le jeu « Ordre and Command : IA RISE » (il
+s'appelait « Front de Sel »). Sa première idée, « Conquer and Command IA
+RISE », a été écartée : c'était le nom d'une série existante, mots inversés.
+- **Changé** : titre de l'onglet, titre du menu (sur deux lignes), bandeau en
+  partie (« ORDRE AND COMMAND », faute de place), phrase d'erreur de
+  chargement, page d'entrée `index.html`, titre de l'onglet d'une partie
+  hébergée, titre du `README.md`.
+- **Gardé sous l'ancien nom, exprès** : l'adresse de la page et le dépôt
+  (`front-de-sel`), le fichier `front-de-sel.html`, les clés de mémoire du
+  navigateur (`frontDeSel.*` : progression des campagnes, réglages, siège en
+  ligne), le sel des salons en ligne (`reseau.js`), les titres des morceaux
+  de musique, les commentaires du code et ces notes. Les changer casserait
+  les liens partagés, la progression enregistrée et la compatibilité des
+  parties en ligne.
+- **Vérifié** : menu affiché (le titre tient dans la boîte), duel de
+  référence `7d442efb` inchangé, console sans erreur. Non vérifié : à la
+  souris ; le bandeau en partie sur un écran large.
+
 ### Commandes
 
 Souris pour sélectionner et ordonner, molette ou touches + et − (rangée

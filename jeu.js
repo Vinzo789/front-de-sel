@@ -10956,9 +10956,9 @@ function demarrerMinuteurReseau(){
 }
 document.addEventListener('visibilitychange', () => {
   if(modeReseau !== 'hote' || !enJeu) return;
-  if(document.hidden){ enLigne.cacheT = performance.now(); document.title = 'Front de Sel — partie hébergée en cours'; }
+  if(document.hidden){ enLigne.cacheT = performance.now(); document.title = 'Ordre and Command : IA RISE — partie hébergée en cours'; }
   else {
-    document.title = enLigne.titre || 'Front de Sel';
+    document.title = enLigne.titre || 'Ordre and Command : IA RISE';
     if(enLigne.cacheT && performance.now() - enLigne.cacheT > 2000) message('La partie a continué pendant que cet onglet était caché : ne le fermez pas, elle tourne sur votre navigateur.', 'info');
     enLigne.cacheT = 0;
   }

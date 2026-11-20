@@ -1,4 +1,7 @@
-# Front de Sel
+# Ordre and Command : IA RISE
+
+(Nom du jeu depuis le 20 novembre 2026 ; il s'appelait « Front de Sel », nom que gardent
+l'adresse de la page, le dépôt et les fichiers.)
 
 Jeu de stratégie en temps réel en 3D, jouable dans le navigateur, sans
 installation. Univers original : en 2034, sur la côte de Varenne, le Groupe

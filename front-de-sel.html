@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Front de Sel — prototype</title>
+<title>Ordre and Command : IA RISE — prototype</title>
 <style>
 :root{
   --fond:#14181c; --panneau:#111519; --bord:#3a4550; --texte:#e8e3d6; --doux:#9aa3a8;
@@ -203,6 +203,8 @@ input[type=range]{width:80px;accent-color:var(--accent);vertical-align:middle}
 .cache{display:none!important}
 .boite{max-width:980px;width:100%;margin:auto}
 .boite h1{font-size:44px;letter-spacing:.2em;margin:0;color:var(--accent)}
+/* Nom du jeu (20 novembre 2026) : « Ordre and Command : IA RISE », la seconde partie sur sa propre ligne. */
+.boite h1 .serie{display:block;font-size:.5em;letter-spacing:.42em;color:var(--texte);margin-top:4px}
 .boite .sous{color:var(--doux);margin:4px 0 18px;letter-spacing:.08em}
 .recit{line-height:1.6;font-size:15px;max-width:780px}
 .recit p{margin:0 0 10px}
@@ -322,7 +324,7 @@ select{font:inherit;background:var(--bouton);color:var(--texte);border:1px solid
 <canvas id="calque"></canvas>
 
 <div id="barre" class="cache">
-  <div class="titre">FRONT DE SEL</div>
+  <div class="titre">ORDRE AND COMMAND</div>
   <div><span class="lib">Réserves</span><b id="hRes">0</b></div>
   <div><span class="lib">Points</span><b id="hPts">0</b></div>
   <div><span class="lib">Effectifs</span><b id="hPop">0</b></div>
@@ -350,7 +352,7 @@ select{font:inherit;background:var(--bouton);color:var(--texte);border:1px solid
 <!-- ===================== MENUS ===================== -->
 <div id="menu" class="voile">
  <div class="boite">
-  <h1>FRONT DE SEL</h1>
+  <h1 aria-label="Ordre and Command : IA RISE">ORDRE AND COMMAND<span class="serie">IA RISE</span></h1>
   <div class="sous" id="sousTitre">STRATÉGIE EN TEMPS RÉEL · CÔTE DE VARENNE, 2034</div>
   <div class="reglages">
    <label>Difficulté
@@ -503,7 +505,7 @@ if(/[?&]mission=/.test(location.search)){
  <button id="bFermerAide" class="petit" style="margin-top:16px">Reprendre</button></div></div>
 
 <div id="erreur3d" class="voile cache"><div class="boite"><h1 style="font-size:28px">Rendu 3D indisponible</h1>
- <p class="recit">Front de Sel charge sa bibliothèque 3D (three.js) depuis Internet au démarrage.
+ <p class="recit">Ordre and Command : IA RISE charge sa bibliothèque 3D (three.js) depuis Internet au démarrage.
  Vérifiez la connexion, puis rechargez la page. Si le problème persiste, le navigateur ne prend peut-être pas en charge WebGL.</p></div></div>
 <div id="fin" class="voile cache"><div class="boite fin" id="finContenu"></div></div>
 <!-- Mode Surprises : cinématique (bandes noires, sous-titres) et proposition d'alliance -->
@@ -521,33 +523,33 @@ if(/[?&]mission=/.test(location.search)){
      L'ORDRE COMPTE : chaque fichier s'appuie sur ceux qui le précèdent (jeu.js en dernier).
      onerror : un fichier absent est ignoré sans bruit ; le jeu démarre sans lui quand il est facultatif
      (musique, post-traitement, envahisseurs, vignettes), sinon jeu.js affiche le message « Rendu 3D indisponible ». -->
-<script src="musique.js?v=38" onerror="void 0"></script>
-<script src="cartes.js?v=38" onerror="void 0"></script>
-<script src="campagnes/campagnes.js?v=38" onerror="void 0"></script>
-<script src="campagnes/halden-1.js?v=38" onerror="void 0"></script>
-<script src="campagnes/halden-2.js?v=38" onerror="void 0"></script>
-<script src="campagnes/halden-3.js?v=38" onerror="void 0"></script>
-<script src="campagnes/halden-4.js?v=38" onerror="void 0"></script>
-<script src="campagnes/karsk-1.js?v=38" onerror="void 0"></script>
-<script src="campagnes/karsk-2.js?v=38" onerror="void 0"></script>
-<script src="campagnes/karsk-3.js?v=38" onerror="void 0"></script>
-<script src="campagnes/karsk-4.js?v=38" onerror="void 0"></script>
-<script src="r3d-scene.js?v=38" onerror="void 0"></script>
-<script src="r3d-post.js?v=38" onerror="void 0"></script>
-<script src="r3d-unites.js?v=38" onerror="void 0"></script>
-<script src="r3d-batiments.js?v=38" onerror="void 0"></script>
-<script src="r3d-effets.js?v=38" onerror="void 0"></script>
-<script src="r3d-aliens.js?v=38" onerror="void 0"></script>
+<script src="musique.js?v=39" onerror="void 0"></script>
+<script src="cartes.js?v=39" onerror="void 0"></script>
+<script src="campagnes/campagnes.js?v=39" onerror="void 0"></script>
+<script src="campagnes/halden-1.js?v=39" onerror="void 0"></script>
+<script src="campagnes/halden-2.js?v=39" onerror="void 0"></script>
+<script src="campagnes/halden-3.js?v=39" onerror="void 0"></script>
+<script src="campagnes/halden-4.js?v=39" onerror="void 0"></script>
+<script src="campagnes/karsk-1.js?v=39" onerror="void 0"></script>
+<script src="campagnes/karsk-2.js?v=39" onerror="void 0"></script>
+<script src="campagnes/karsk-3.js?v=39" onerror="void 0"></script>
+<script src="campagnes/karsk-4.js?v=39" onerror="void 0"></script>
+<script src="r3d-scene.js?v=39" onerror="void 0"></script>
+<script src="r3d-post.js?v=39" onerror="void 0"></script>
+<script src="r3d-unites.js?v=39" onerror="void 0"></script>
+<script src="r3d-batiments.js?v=39" onerror="void 0"></script>
+<script src="r3d-effets.js?v=39" onerror="void 0"></script>
+<script src="r3d-aliens.js?v=39" onerror="void 0"></script>
 <!-- Vignettes des boutons (images des modèles 3D) : facultatif, des pictogrammes neutres le remplacent. -->
-<script src="r3d-vignettes.js?v=38" onerror="void 0"></script>
+<script src="r3d-vignettes.js?v=39" onerror="void 0"></script>
 <!-- Multijoueur (reseau.js) : aucun effet au chargement (ni connexion, ni minuteur) ; la bibliothèque MQTT
      n'est téléchargée qu'au moment d'héberger ou de rejoindre une partie. -->
-<script src="reseau.js?v=38" onerror="void 0"></script>
-<script src="jeu.js?v=38" onerror="void 0"></script>
+<script src="reseau.js?v=39" onerror="void 0"></script>
+<script src="jeu.js?v=39" onerror="void 0"></script>
 <!-- Outils de test (verif-missions-moteur.js) : chargés seulement avec ?verif ou &verif dans l'adresse. -->
 <script>
 if(/[?&]verif(=|&|$)/.test(location.search)){
-  const s = document.createElement('script'); s.src = 'verif-missions-moteur.js?v=38'; document.body.appendChild(s);
+  const s = document.createElement('script'); s.src = 'verif-missions-moteur.js?v=39'; document.body.appendChild(s);
 }
 </script>
 </body>
