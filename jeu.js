@@ -6918,6 +6918,14 @@ function bornerCamera(){
 // vue (la barre du haut couvre tout le bord supérieur : sans cette bande, impossible de remonter).
 // Jamais pendant une pause, un dialogue, une cinématique, ni quand le curseur a quitté la fenêtre.
 const BORD_DEFILEMENT = 15, BORD_INTERFACE = 6, SORTIE_DEFILEMENT = 4;   // px, px, secondes
+// Animation du fond de l'écran d'accueil : réglage du joueur, mémorisé, désactivé par défaut (voir boucle).
+const CLE_ANIMATION_MENU = 'frontDeSel.animationMenu';
+let animationMenu = false, menuFixeN = 0, menuFixeT = 0;
+try { animationMenu = localStorage.getItem(CLE_ANIMATION_MENU) === 'oui'; } catch(err){ /* sans mémorisation */ }
+function reglerAnimationMenu(oui){
+  animationMenu = !!oui; menuFixeN = 0;
+  try { localStorage.setItem(CLE_ANIMATION_MENU, animationMenu ? 'oui' : 'non'); } catch(err){ /* sans mémorisation */ }
+}
 const CLE_DEFILEMENT = 'frontDeSel.defilementBord';
 let defilementBord = true;
 try { defilementBord = localStorage.getItem(CLE_DEFILEMENT) !== 'non'; } catch(err){ /* sans mémorisation */ }
@@ -8983,9 +8991,19 @@ function boucle(ts){
       verifierDebriefing();   // aussi appelé par miseAJour : afficherDebriefing ne passe qu'une fois (partieFinie)
     }
   } else if(window.R3D && R3D.pret){
-    // Fond animé derrière le menu
-    R3D.vue.x = LARG/2 + Math.sin(ts/9000)*500; R3D.vue.y = 1250;
-    R3D.majCamera(); R3D.Batiments.sync(ents, noeuds, ts/1000, dt); R3D.rendre(ts/1000, dt);
+    // Fond derrière le menu. Animé (la vue glisse, les drapeaux bougent) seulement si le joueur l'a demandé
+    // sur l'écran d'accueil ; sinon une image fixe, redessinée une fois par seconde au plus (elle suit ainsi
+    // un changement de taille de la fenêtre sans faire travailler la carte graphique en continu).
+    // (21 novembre 2026, demande du propriétaire : animation désactivée par défaut.)
+    if(animationMenu){
+      R3D.vue.x = LARG/2 + Math.sin(ts/9000)*500; R3D.vue.y = 1250;
+      R3D.majCamera(); R3D.Batiments.sync(ents, noeuds, ts/1000, dt); R3D.rendre(ts/1000, dt);
+      menuFixeN = 0;
+    } else if(menuFixeN < 3 || ts - menuFixeT > 1000 || ts < menuFixeT){
+      menuFixeN++; menuFixeT = ts;
+      R3D.vue.x = LARG/2; R3D.vue.y = 1250;
+      R3D.majCamera(); R3D.Batiments.sync(ents, noeuds, 0, 0); R3D.rendre(0, 0);
+    }
     if(!briefingPret) activerCommencer();   // première image rendue : le briefing peut être validé
   }
   majMusique(Math.min(0.25, brut));
@@ -9416,6 +9434,7 @@ function lancement(){
   const listeQualite = el('qualite');
   if(listeQualite){ listeQualite.value = qualiteGraphique; listeQualite.onchange = () => changerQualiteMenu(listeQualite.value); }
   // Deux cases pour un même réglage : menu d'accueil et fenêtre Commandes en jeu (13 novembre 2026).
+  { const c = el('animationMenu'); if(c){ c.checked = animationMenu; c.onchange = () => reglerAnimationMenu(c.checked); } }
   const casesBord = ['defilementBord', 'defilementBord2'].map(el).filter(Boolean);
   for(const c of casesBord){
     c.checked = defilementBord;
