@@ -5424,6 +5424,7 @@ let signaturePanneau = null;   // null : le panneau vide (aide de départ) est c
 // le navigateur à recalculer la page).
 function ecrireTexte(n, t){ if(n){ t = String(t); if(n.textContent !== t) n.textContent = t; } }
 function majBarre(){
+  majChoixDifficulte();
   const C = camps[campJoueur];
   ecrireTexte(el('hRes'), Math.floor(C.reserves));
   ecrireTexte(el('hPts'), Math.floor(C.points));
@@ -9392,6 +9393,7 @@ function lancement(){
   el('texteCommandes').innerHTML = TEXTE_COMMANDES;
   el('texteCommandes2').innerHTML = TEXTE_COMMANDES;
   el('bPause').onclick = () => ordonner({type:'pause'});
+  { const s = el('choixDifficulte'); if(s) s.onchange = () => { changerDifficulte(s.value); s.blur(); }; }
   el('bAide').onclick = () => { if(!enPause) ordonner({type:'pause', oui:true}); el('aide').classList.remove('cache'); };
   el('bFermerAide').onclick = () => { el('aide').classList.add('cache'); if(enPause) ordonner({type:'pause', oui:false}); };
   el('bAbandon').onclick = abandonner;
@@ -9757,6 +9759,31 @@ function brancherHote(salon){
   salon.on('ordre', ({camp, ordre}) => dansMonde(H, () => recevoirOrdreHote(camp, ordre)));
   // Invité absent depuis 120 s (60 s avant le 16 novembre 2026, décision du propriétaire) : son camp passe à l'ordinateur.
   salon.on('campConfie', ({camp}) => dansMonde(H, () => { if(camps[camp]) confierCampAOrdinateur(camp, difficulte); }));
+}
+// Difficulté changée en cours de partie (20 novembre 2026, demande du propriétaire) : escarmouche contre
+// l'ordinateur seulement (ni mission, ni partie en ligne). Le réglage vaut pour tous les ordinateurs et prend
+// effet tout de suite : revenu, rythme et taille des vagues, façon de réfléchir. Chacun garde l'armée et la
+// base qu'il a déjà ; le vaisseau du mode Surprises, lui, garde la force fixée à son arrivée.
+function difficulteReglable(){ return enJeu && !MISSION && modeReseau === null && !window.MODE_DEMO && !partieFinie; }
+function changerDifficulte(niveau){
+  if(!difficulteReglable() || !DIFFICULTES[niveau] || niveau === difficulte) return false;
+  difficulte = niveau;
+  const dk = DIFFICULTES[niveau];
+  for(const id of campsEnJeu()){
+    const C = camps[id];
+    if(!C || !C.ia || C.elimine) continue;
+    const E = etatIA(id);
+    E.niveau = niveau; E.revenu = dk.revenu; E.premiereVague = dk.premiereVague; E.vague = dk.vague;
+  }
+  message('Difficulté : ' + ({facile:'Facile', normal:'Normale', difficile:'Difficile', ultra:'Ultra'})[niveau] + '.');
+  return true;
+}
+// Liste déroulante de la barre du haut : visible seulement quand le réglage est permis.
+function majChoixDifficulte(){
+  const s = el('choixDifficulte'); if(!s) return;
+  const voir = difficulteReglable();
+  if(s.hidden === voir) s.hidden = !voir;
+  if(voir && s.value !== difficulte && document.activeElement !== s) s.value = difficulte;
 }
 // Camp confié à l'ordinateur en cours de partie (invité parti ; outils de test).
 function confierCampAOrdinateur(camp, niveau){

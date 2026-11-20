@@ -1553,6 +1553,15 @@ développement, le 11 novembre 2026 :
 
 ## Choix faits sans le propriétaire, à valider
 
+- (`?v=42`, 20 novembre 2026, demande du propriétaire) **Difficulté réglable en cours de partie**, en escarmouche
+  contre l'ordinateur seulement (ni mission, ni en ligne) : liste déroulante à côté du bouton Pause
+  (`changerDifficulte`, `jeu.js`). Choix faits sans lui : le jeu n'a pas de menu Pause, la liste est donc dans la
+  barre du haut ; un seul réglage pour tous les ordinateurs ; le vaisseau du mode Surprises garde la force fixée à
+  son arrivée ; l'écran de fin ne dit pas que la difficulté a changé. Vérifié par appels directs (passage à Ultra
+  puis à Facile, 2 minutes simulées sans erreur, refus en ligne, duel de référence `7d442efb` inchangé) ; jamais
+  essayé à la souris, et l'allure de la liste n'a pas été vue à l'écran.
+- (`?v=41`, 20 novembre 2026, demande du propriétaire) Bouclier du vaisseau-mère doublé (3 000 / 4 000 / 5 000).
+
 - (`?v=40`, 20 novembre 2026, deux demandes du propriétaire) **Missiles des galeries à 1 200 de dégâts** : l'Aiguille
   passe de 600 à 1 200 ; le Brisant de 330 à 600 par missile, soit 1 200 pour la salve de deux (choix fait sans lui :
   « 1 200 sur la zone » compris comme le total de la salve ; à valider). Rien d'autre n'a été adapté, à sa demande :
