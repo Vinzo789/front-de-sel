@@ -952,6 +952,38 @@ Règles complètes : `travaux/galerie/CAHIER-DES-CHARGES.md`, § 11.
   Zénith (haute altitude), écran radar d'altitude. Modèles prêts dans
   `travaux/galerie/r3d-batiments-d.js`.
 
+### Réglages de l'escarmouche : réserves de départ, charge des collecteurs (21 novembre 2026, `?v=38`)
+Demandes du propriétaire. Deux listes sur l'écran d'escarmouche, sous
+« Galeries de tir » ; aucune mémorisation dans le navigateur, gardées d'une
+carte à l'autre par l'adresse (`?reserves=`, `?collecte=100`).
+- **Réserves de départ** : 0 à 2 400 par paliers de 200, puis 2 500 (qui
+  n'est pas un multiple de 200) ; 1 000 par défaut, comme avant. La même
+  somme pour tous les camps, ordinateurs compris. Les missions gardent leurs
+  propres réserves. En ligne, le choix de l'hôte s'applique (même fonction de
+  lancement) : non essayé.
+- **Charge des collecteurs** : 50 (habituel) ou 100 par voyage. À 100, le
+  chargement par seconde double aussi (25 au lieu de 12,5) : la navette garde
+  son rythme, le revenu de tous les camps double. Escarmouche solo
+  seulement : campagnes et parties en ligne restent à 50 (décision du
+  propriétaire pour les campagnes ; choix fait sans lui pour le jeu en ligne).
+- **Mesuré à 100** (duels d'ordinateurs, 900 s, 42 parties) : Difficile bat
+  Normale en 4 à 7 minutes au lieu de 10 à 15 ; les galeries sont rarement
+  utilisées (16 duels Difficile contre Difficile : Halden n'en bâtit aucune ;
+  14 parties Ultra contre Difficile : aucun tir). L'ordinateur n'est réglé
+  que pour 50 ; à 100, les parties d'essai ne sont pas jouées.
+- **Vérifié** (volet masqué, simulation) : à 50, pages neuves, duel
+  `7d442efb` et quatre camps `8e338d28`, `testerDefense()` 47 sur 47 et
+  6 sur 6 en parties, `testerGaleries()` 59 sur 59 et 15 sur 15 en parties ;
+  parties lancées à 0, 600, 1 400 et 2 500 de réserves ; à 100, charge et
+  chargement doublés dans la partie, puis retour à 50 ; lancement d'hôte et
+  mission `halden-1` avec `?collecte=100&reserves=2500` dans l'adresse :
+  collecteurs à 50, réserves de la mission ; console sans erreur.
+- **Non vérifié** : à la souris ; en ligne entre deux postes ; une partie
+  entière jouée à 100 par un humain.
+- **Code** : `jeu.js`, `RESERVES_DEPART_CHOIX`, `reservesDepart`,
+  `chargeCollecteurs`, `appliquerChargeCollecteurs` (appelée au lancement de
+  chaque partie : escarmouche, mission, invité), `initInterfaceReserves`.
+
 ### Commandes
 
 Souris pour sélectionner et ordonner, molette ou touches + et − (rangée

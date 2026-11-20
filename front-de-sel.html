@@ -262,6 +262,7 @@ select{font:inherit;background:var(--bouton);color:var(--texte);border:1px solid
 .surprises{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--bord);border-radius:8px;padding:9px 14px;
   background:#1b2126;max-width:620px;margin:0 0 14px;cursor:pointer;font-size:14px}
 .surprises input{margin-top:3px;accent-color:var(--accent)}
+.surprises.reserves{align-items:center;justify-content:space-between}
 .surprises .expl{display:block;color:var(--doux);font-size:13px;margin-top:2px}
 #cine{position:fixed;inset:0;z-index:15;cursor:default}
 #cine .bande{position:absolute;left:0;right:0;height:11vh;background:#000}
@@ -415,6 +416,10 @@ select{font:inherit;background:var(--bouton);color:var(--texte);border:1px solid
     <span><b>Mode Surprises</b><span class="expl" id="explSurprises">Un événement imprévu peut bouleverser la partie.</span></span></label>
    <label class="surprises"><input type="checkbox" id="modeGaleries">
     <span><b>Galeries de tir</b><span class="expl" id="explGaleries">Vous pouvez bâtir une galerie enterrée qui tire des missiles n’importe où sur la carte. Une fois finie, elle est intouchable, sauf pendant ses 17,5 secondes de tir. Contre elle : la Batterie Parasol et ses radars, qui tentent d’abattre les missiles. Parties en ligne : sans galeries.</span></span></label>
+   <label class="surprises reserves"><span><b>Réserves de départ</b><span class="expl">Ce que chaque camp possède en début de partie, ordinateurs compris. De 0 à 2 500.</span></span>
+    <select id="reservesDepart" aria-label="Réserves de départ"></select></label>
+   <label class="surprises reserves"><span><b>Charge des collecteurs</b><span class="expl">Ce qu’un collecteur rapporte par voyage. À 100, le revenu de tous les camps double : parties plus courtes. Parties en ligne : toujours 50.</span></span>
+    <select id="chargeCollecteurs" aria-label="Charge des collecteurs"><option value="50">50 (habituel)</option><option value="100">100</option></select></label>
    <h3 class="titreCartes">Camps et alliances</h3>
    <div class="raccourcis" id="raccourcisCamps"></div>
    <div class="emplacements" id="emplacementsCamps"></div>
@@ -516,33 +521,33 @@ if(/[?&]mission=/.test(location.search)){
      L'ORDRE COMPTE : chaque fichier s'appuie sur ceux qui le précèdent (jeu.js en dernier).
      onerror : un fichier absent est ignoré sans bruit ; le jeu démarre sans lui quand il est facultatif
      (musique, post-traitement, envahisseurs, vignettes), sinon jeu.js affiche le message « Rendu 3D indisponible ». -->
-<script src="musique.js?v=37" onerror="void 0"></script>
-<script src="cartes.js?v=37" onerror="void 0"></script>
-<script src="campagnes/campagnes.js?v=37" onerror="void 0"></script>
-<script src="campagnes/halden-1.js?v=37" onerror="void 0"></script>
-<script src="campagnes/halden-2.js?v=37" onerror="void 0"></script>
-<script src="campagnes/halden-3.js?v=37" onerror="void 0"></script>
-<script src="campagnes/halden-4.js?v=37" onerror="void 0"></script>
-<script src="campagnes/karsk-1.js?v=37" onerror="void 0"></script>
-<script src="campagnes/karsk-2.js?v=37" onerror="void 0"></script>
-<script src="campagnes/karsk-3.js?v=37" onerror="void 0"></script>
-<script src="campagnes/karsk-4.js?v=37" onerror="void 0"></script>
-<script src="r3d-scene.js?v=37" onerror="void 0"></script>
-<script src="r3d-post.js?v=37" onerror="void 0"></script>
-<script src="r3d-unites.js?v=37" onerror="void 0"></script>
-<script src="r3d-batiments.js?v=37" onerror="void 0"></script>
-<script src="r3d-effets.js?v=37" onerror="void 0"></script>
-<script src="r3d-aliens.js?v=37" onerror="void 0"></script>
+<script src="musique.js?v=38" onerror="void 0"></script>
+<script src="cartes.js?v=38" onerror="void 0"></script>
+<script src="campagnes/campagnes.js?v=38" onerror="void 0"></script>
+<script src="campagnes/halden-1.js?v=38" onerror="void 0"></script>
+<script src="campagnes/halden-2.js?v=38" onerror="void 0"></script>
+<script src="campagnes/halden-3.js?v=38" onerror="void 0"></script>
+<script src="campagnes/halden-4.js?v=38" onerror="void 0"></script>
+<script src="campagnes/karsk-1.js?v=38" onerror="void 0"></script>
+<script src="campagnes/karsk-2.js?v=38" onerror="void 0"></script>
+<script src="campagnes/karsk-3.js?v=38" onerror="void 0"></script>
+<script src="campagnes/karsk-4.js?v=38" onerror="void 0"></script>
+<script src="r3d-scene.js?v=38" onerror="void 0"></script>
+<script src="r3d-post.js?v=38" onerror="void 0"></script>
+<script src="r3d-unites.js?v=38" onerror="void 0"></script>
+<script src="r3d-batiments.js?v=38" onerror="void 0"></script>
+<script src="r3d-effets.js?v=38" onerror="void 0"></script>
+<script src="r3d-aliens.js?v=38" onerror="void 0"></script>
 <!-- Vignettes des boutons (images des modèles 3D) : facultatif, des pictogrammes neutres le remplacent. -->
-<script src="r3d-vignettes.js?v=37" onerror="void 0"></script>
+<script src="r3d-vignettes.js?v=38" onerror="void 0"></script>
 <!-- Multijoueur (reseau.js) : aucun effet au chargement (ni connexion, ni minuteur) ; la bibliothèque MQTT
      n'est téléchargée qu'au moment d'héberger ou de rejoindre une partie. -->
-<script src="reseau.js?v=37" onerror="void 0"></script>
-<script src="jeu.js?v=37" onerror="void 0"></script>
+<script src="reseau.js?v=38" onerror="void 0"></script>
+<script src="jeu.js?v=38" onerror="void 0"></script>
 <!-- Outils de test (verif-missions-moteur.js) : chargés seulement avec ?verif ou &verif dans l'adresse. -->
 <script>
 if(/[?&]verif(=|&|$)/.test(location.search)){
-  const s = document.createElement('script'); s.src = 'verif-missions-moteur.js?v=37'; document.body.appendChild(s);
+  const s = document.createElement('script'); s.src = 'verif-missions-moteur.js?v=38'; document.body.appendChild(s);
 }
 </script>
 </body>

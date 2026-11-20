@@ -14,6 +14,8 @@ la bibliothèque 3D three.js est chargée au démarrage.
 - Deux campagnes de quatre missions.
 - Escarmouche contre un à trois ordinateurs, sur cinq cartes, avec des équipes
   libres et quatre niveaux de difficulté.
+- Réglages de l'escarmouche : réserves de départ (de 0 à 2 500) et charge des
+  collecteurs (50 ou 100 par voyage).
 - Mode « Surprises », à cocher sur l'écran de l'escarmouche.
 - « Galeries de tir », à cocher sur le même écran (escarmouche contre
   l'ordinateur seulement) : un abri enterré d'où sortent des lanceurs de

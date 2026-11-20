@@ -151,6 +151,7 @@ const UNITES = {
   // champ de minerai ; dechargement : secondes passées au dépôt. Champs tenus : u.charge (0 à capacite),
   // u.recolteT (instant du dernier prélèvement, horloge temps : anime le bras ou la benne).
   collecteur:{nom:'Collecteur', cout:400, temps:16, pv:520, vitesse:58, rayon:15, forme:'collecteur', blindage:'leger',
+    // (capacite et chargement : valeurs habituelles ; l'escarmouche solo peut les doubler, voir appliquerChargeCollecteurs.)
     collecteur:true, capacite:50, chargement:12.5, dechargement:2.5,   // réglé pour un revenu proche de celui des ouvriers (voir compte rendu)
     desc:'Véhicule de récolte, sans arme : votre seule source de revenu. Fait seul la navette entre le champ de minerai et le dépôt ou le QG. Robuste, mais protégez-le des raids.'},
   // Civil (Régie des eaux de Varenne, ou toute faction dans une mission)
@@ -7473,6 +7474,7 @@ function verifierDebriefing(){
 
 // Départ d'une mission : camps, IA, entités, objectifs, déclencheurs.
 function demarrerMission(){
+  appliquerChargeCollecteurs(COLLECTEUR_HABITUEL.capacite);   // campagne : collecteurs habituels, quel que soit le choix d'escarmouche
   const M = MISSION, R = M.reserves || {};
   const facJ = FACTIONS[M.joueur] ? M.joueur : 'halden';
   const facI = FACTIONS[M.adversaire] ? M.adversaire : (facJ === 'halden' ? 'karsk' : 'halden');
@@ -7728,10 +7730,12 @@ function memoriserCarte(id){ try { localStorage.setItem(CLE_CARTE, id); } catch(
 // Recharge la page sur l'écran de l'escarmouche, avec la carte demandée (réglages du menu conservés).
 function rechargerAvecCarte(id){
   const p = new URLSearchParams(location.search);
-  for(const k of ['mission', 'campagne', 'demo', 'surprises', 'galeries']) p.delete(k);
+  for(const k of ['mission', 'campagne', 'demo', 'surprises', 'galeries', 'reserves', 'collecte']) p.delete(k);
   p.set('carte', id); p.set('diff', difficulte);
   const c = el('modeSurprises'); if(c && c.checked && !p.has('surprise')) p.set('surprises', '1');
   const g = el('modeGaleries'); if(g && g.checked) p.set('galeries', '1');   // galeries de tir (novembre 2026)
+  if(reservesDepart !== RESERVES_DEPART_DEFAUT) p.set('reserves', String(reservesDepart));   // réserves de départ
+  if(chargeCollecteurs === 100) p.set('collecte', '100');   // charge des collecteurs
   location.href = location.pathname + '?' + p.toString();
 }
 function construireChoixCarte(){
@@ -8165,6 +8169,49 @@ function initInterfaceSurprises(params){
 // Option « Galeries de tir » (novembre 2026) : case à cocher de l'écran d'escarmouche, sur le modèle de
 // « Mode Surprises » (aucune mémorisation dans le navigateur ; gardée d'une carte à l'autre par le
 // paramètre d'adresse ?galeries=1, qui sert aussi aux essais automatiques). Appelé une fois, au lancement.
+// Réserves de départ de l'escarmouche (21 novembre 2026, demande du propriétaire) : de 0 à 2 500, par paliers de
+// 200 (2 500 n'est pas un multiple de 200 : c'est le dernier choix, après 2 400). Les mêmes pour tous les camps,
+// ordinateurs compris ; 1 000 par défaut, comme avant. Liste déroulante de l'écran d'escarmouche, gardée d'une carte
+// à l'autre par le paramètre d'adresse ?reserves=, sans mémorisation dans le navigateur. Les missions gardent leurs
+// propres réserves ; en ligne, c'est le choix de l'hôte qui vaut (il lance la partie par demarrer).
+const RESERVES_DEPART_DEFAUT = 1000;
+const RESERVES_DEPART_CHOIX = (() => { const L = []; for(let v = 0; v < 2500; v += 200) L.push(v); L.push(2500); return L; })();
+let reservesDepart = RESERVES_DEPART_DEFAUT;
+// Valeur de départ valide la plus proche d'un texte ou d'un nombre ; la valeur par défaut si ce n'en est pas un. Pure.
+function reservesDepartValides(v){
+  const n = typeof v === 'number' ? v : (typeof v === 'string' && /^\d+$/.test(v) ? parseInt(v, 10) : NaN);
+  return RESERVES_DEPART_CHOIX.includes(n) ? n : RESERVES_DEPART_DEFAUT;
+}
+// Charge des collecteurs (21 novembre 2026, décision du propriétaire) : 50 par voyage (habituel) ou 100, au choix sur
+// l'écran d'escarmouche ; gardé d'une carte à l'autre par ?collecte=100. À 100, le chargement par seconde double
+// aussi (25 au lieu de 12,5) : la navette garde son rythme, 4 s au champ, et le revenu double pour tous les camps
+// (mesuré sur des duels d'ordinateurs : parties de 4 à 7 minutes au lieu de 10 à 15, galeries rarement utilisées).
+// Escarmouche solo seulement : les campagnes et les parties en ligne restent à 50. Le choix est écrit dans la
+// table de l'unité au lancement de chaque partie (appliquerChargeCollecteurs), jamais ailleurs.
+const COLLECTEUR_HABITUEL = Object.freeze({capacite:UNITES.collecteur.capacite, chargement:UNITES.collecteur.chargement});
+const CHARGES_COLLECTEURS = [50, 100];
+let chargeCollecteurs = COLLECTEUR_HABITUEL.capacite;
+function appliquerChargeCollecteurs(charge){
+  const k = CHARGES_COLLECTEURS.includes(charge) ? charge/COLLECTEUR_HABITUEL.capacite : 1;
+  UNITES.collecteur.capacite = COLLECTEUR_HABITUEL.capacite*k;
+  UNITES.collecteur.chargement = COLLECTEUR_HABITUEL.chargement*k;
+}
+function initInterfaceReserves(params){
+  if(params.get('reserves') !== null) reservesDepart = reservesDepartValides(params.get('reserves'));
+  if(params.get('collecte') === '100') chargeCollecteurs = 100;
+  const k = el('chargeCollecteurs');
+  if(k){ k.value = String(chargeCollecteurs); k.onchange = () => { chargeCollecteurs = k.value === '100' ? 100 : COLLECTEUR_HABITUEL.capacite; }; }
+  const c = el('reservesDepart');
+  if(!c) return;
+  c.innerHTML = '';
+  for(const v of RESERVES_DEPART_CHOIX){
+    const o = document.createElement('option');
+    o.value = String(v); o.textContent = v.toLocaleString('fr-FR') + (v === RESERVES_DEPART_DEFAUT ? ' (habituel)' : '');
+    c.appendChild(o);
+  }
+  c.value = String(reservesDepart);
+  c.onchange = () => { reservesDepart = reservesDepartValides(c.value); };
+}
 function initInterfaceGaleries(params){
   if(params.get('galeries') === '1') optionGaleries = true;
   const c = el('modeGaleries');
@@ -9178,6 +9225,8 @@ function repartirEmplacements(liste, empl){
 }
 // options.campLocal (en ligne) : camp du joueur de ce poste ; sans options (solo), le joueur est J.
 function demarrer(facJ, config, options){
+  // Charge des collecteurs : le choix de l'écran en escarmouche solo ; en ligne (options.campLocal), 50.
+  appliquerChargeCollecteurs(options && options.campLocal ? COLLECTEUR_HABITUEL.capacite : chargeCollecteurs);
   const diff = DIFFICULTES[difficulte];
   const empl = emplacementsCarte(CARTE);
   let liste = Array.isArray(config) ? config : configurationDuel(facJ);
@@ -9189,7 +9238,7 @@ function demarrer(facJ, config, options){
   campJoueur = options && options.campLocal && liste.some(k => k.id === options.campLocal) ? options.campLocal : 'J';
   liste.forEach((k, i) => {
     camps[k.id] = {id:k.id, faction:k.faction, equipe:k.equipe, couleur:k.couleur || COULEURS_CAMPS[k.id], ia:!!k.ia,
-      elimine:false, elimineT:null, emplacement:null, reserves:1000, points:0, recharges:{}};
+      elimine:false, elimineT:null, emplacement:null, reserves:reservesDepart, points:0, recharges:{}};
     pouvoirsActifs[k.id] = true;
     if(k.ia){
       const E = etatIA(k.id);
@@ -9350,6 +9399,7 @@ function lancement(){
   noteUltra();
   initInterfaceSurprises(params);
   initInterfaceGaleries(params);
+  initInterfaceReserves(params);
   if(QUALITES.includes(params.get('qualite'))) qualiteGraphique = params.get('qualite');
   const listeQualite = el('qualite');
   if(listeQualite){ listeQualite.value = qualiteGraphique; listeQualite.onchange = () => changerQualiteMenu(listeQualite.value); }
@@ -10829,6 +10879,7 @@ function demarrerInvite(S, debut){
   const liste = campsDuDebut(debut);
   if(!liste || !liste.some(k => k.id === S.camp)){ afficherInterruption('Description de la partie illisible.'); try { S.quitter(); } catch(err){} return; }
   surprise.demandee = false;
+  appliquerChargeCollecteurs(COLLECTEUR_HABITUEL.capacite);   // en ligne : collecteurs habituels
   preparerMondeInvite(liste, S.camp);
   const empl = emplacementsCarte(CARTE);
   for(const k of liste){ pouvoirsActifs[k.id] = true; pseudosEnLigne[k.id] = k.pseudo || null; if(empl[k.emplacement]) basesCarte[k.id] = empl[k.emplacement]; }
