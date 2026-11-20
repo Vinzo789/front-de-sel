@@ -4,7 +4,9 @@
    Camps : Halden, Karsk et la Régie des eaux (camp neutre « neutre »). Types : qg, caserne,
    usine, relais, depot, aeroport (Halden et Karsk), station et entrepot (Régie), tourelle
    (Halden), bunker (Karsk) et batterie sol-air (les deux) ; les défenses fixes portent une arme
-   animée (anim « arme » : suit b.angleT, recul et lueur de départ via b.tirT).
+   animée (anim « arme » : suit b.angleT, recul et lueur de départ via b.tirT). Escarmouche, option
+   « Galeries de tir » (novembre 2026) : galeries aiguille (Halden) et terrier (Karsk), Batterie
+   Parasol (parasol) et Radar de veille (radar) pour les deux camps (bloc « DÉFENSE ANTIMISSILE »).
 
    Principe : chaque modèle (type × camp) est construit UNE fois par un
    « bâtisseur » qui fusionne des primitives en quelques géométries à couleurs
@@ -951,6 +953,9 @@
   // Teinte foncée d'accompagnement (≈ rapport accentF / accent des palettes d'origine).
   const FONCES = {};
   function foncer(hex){ return FONCES[hex] || (FONCES[hex] = '#' + new THREE.Color(hex).multiplyScalar(0.47).getHexString()); }
+  // Teinte intermédiaire (t = 0 : a ; t = 1 : b), pour une couleur de camp délavée (toile de la
+  // Batterie Parasol, novembre 2026).
+  function melange(a, b, t){ return '#' + new THREE.Color(a).lerp(new THREE.Color(b), t).getHexString(); }
   // Variante d'un camp : seuls les camps Halden et Karsk portent une couleur propre ; le camp
   // neutre, les envahisseurs et tout camp sans couleur gardent l'aspect de leur faction.
   function variante(campId){
@@ -2274,12 +2279,15 @@
   // modèle est réduit de 10 % (reduireModele), à la demande du propriétaire.
   // Rien d'un silo ni d'un toit ouvrant : l'entrée est horizontale, dans le flanc de la butte.
   // Animation « galerie » (voir majBatiment), pilotée par deux champs que le moteur pose à chaque pas :
-  //   b.galT : secondes écoulées depuis l'ordre de tir (0 à 16), null ou absent quand elle est fermée ;
+  //   b.galT : secondes écoulées depuis l'ordre de tir (0 à 17,5), null ou absent quand elle est fermée ;
   //   b.galN : nombre de lanceurs engagés dans le cycle (absent : tous).
   // Rôles : 'rideau' (s'enroule dans le linteau) et 'chariot' (coulisse vers le sud ; enfant : berceau
   // qui se dresse ; son « eclair » : le missile, escamoté une fois parti). Les instants du cycle
   // (CYCLE_GALERIE) doivent rester ceux du moteur (jeu.js).
-  const CYCLE_GALERIE = {ouvert:3, sorti:6, dresse:8, ecart:0.6, rabattu:10.5, rentre:13.5, ferme:16};
+  // Novembre 2026 (défense antimissile, cahier des charges § 11.3) : cycle allongé de 1,5 s pour laisser
+  // au défenseur le temps de décider. Les missiles sont dressés à 8 s comme avant, puis attendent sur
+  // leur berceau jusqu'au départ (9,5 s, puis 10,1 s pour le second) ; tout ce qui suit est décalé de 1,5 s.
+  const CYCLE_GALERIE = {ouvert:3, sorti:6, dresse:8, depart:9.5, ecart:0.6, rabattu:12, rentre:15, ferme:17.5};
   function galerie(m, P, K){
     const B = m.statique, n = K ? 2 : 1, voies = n === 2 ? [-12, 12] : [0];
     const L = n === 2 ? 29 : 17.5;            // demi-largeur de l'avant-corps et du tablier
@@ -2431,12 +2439,312 @@
     if(t < 0 || t >= C.ferme){ g.t = -1; g.porte = g.sortie = g.levee = 0; return g; }
     g.porte = lissG(0, C.ouvert, t) - lissG(C.rentre, C.ferme, t);
     g.sortie = lissG(C.ouvert, C.sorti, t) - lissG(C.rabattu, C.rentre, t);
-    g.levee = lissG(C.sorti, C.dresse, t) - lissG(C.dresse + C.ecart, C.rabattu, t);
+    // (les berceaux se rabattent après le dernier départ possible : depart + ecart)
+    g.levee = lissG(C.sorti, C.dresse, t) - lissG(C.depart + C.ecart, C.rabattu, t);
     return g;
   }
 
+  // =================================================================
+  //  DÉFENSE ANTIMISSILE (novembre 2026, escarmouche, option « Galeries de tir »)
+  // =================================================================
+  // Modèles validés par le propriétaire le 19 novembre 2026 (maquette travaux/galerie/r3d-batiments-d.js),
+  // un par camp :
+  //   « Batterie Parasol » (type parasol, 2 × 2 cases = 80 × 80) : antimissile de courte portée ;
+  //   « Radar de veille »  (type radar, 1 × 1 case = 40 × 40) : jusqu'à trois par camp.
+  // (La « Batterie Zénith » et le missile lourd de la maquette appartiennent au lot B : non repris ici.)
+  // Air de famille voulu : chaque intercepteur dépasse de son alvéole par une coiffe conique à la
+  // couleur du camp (bleu Halden, rouge Karsk). C'est ce qui les sépare de la batterie mixte (canon,
+  // quatre ogives orange, 1 × 1 case) et des galeries (un engin long couché sur rails, butte de terre).
+  // Animation « lanceur » (voir majBatiment), pilotée par deux champs que le moteur pose
+  // (cahier des charges § 11.6) :
+  //   b.intT   : heure de jeu du dernier tir d'intercepteur de la batterie (absent : au repos) ;
+  //   b.angleT : direction du caisson (repère du jeu : 0 = est, π/2 = sud), comme les défenses fixes.
+  // Le pivot (affût) tourne vers b.angleT ; son enfant (caisson, d'axe +X) se lève de elevRepos à
+  // elevTir ; son « eclair » est l'intercepteur de l'alvéole de tir : il file le long de l'axe
+  // (course), puis disparaît jusqu'à la fin du cycle : r3d-effets.js (effet « intercepteur ») prend alors
+  // le relais, au bout de cette course. Les dates ci-dessous comptent depuis b.intT ; depart + vol
+  // doit rester le DEPART_INTERCEPTEUR de r3d-effets.js. (Novembre 2026 : la maquette comptait depuis
+  // un ordre donné à l'avance ; le moteur ne connaît que l'heure du tir, d'où un cycle resserré.)
+  const CYCLE_INTERCEPTION = {pointe:0.7, depart:0.8, vol:0.45, tenu:3.2, repos:4.5};
+  const _poseL = {levee:0, vol:0, parti:false};
+  function poseLanceur(t){
+    // (t non numérique ou hors cycle : repos ; une valeur non numérique donnerait des matrices corrompues)
+    const g = _poseL, C = CYCLE_INTERCEPTION;
+    if(!Number.isFinite(t) || t < 0 || t >= C.repos){ g.levee = g.vol = 0; g.parti = false; return g; }
+    g.levee = lissG(0, C.pointe, t) - lissG(C.tenu, C.repos, t);
+    g.vol = Math.max(0, Math.min(1, (t - C.depart)/C.vol));
+    g.parti = t >= C.depart + C.vol;
+    return g;
+  }
+  // Intercepteur d'axe +X, bouche de l'alvéole à l'origine. Sa coiffe (cône à la couleur du camp, centrée
+  // en xn) dépasse comme celles de ses voisins ; le corps, l'empennage et la flamme (canal lumineux)
+  // sont en retrait : cachés dans le caisson tant qu'il n'est pas parti.
+  // r, long : rayon et longueur du corps ; dn, hn : diamètre et hauteur de la coiffe ; lf : flamme ;
+  // env : envergure d'une ailette (r + env doit tenir dans l'alvéole).
+  function intercepteur(r, long, xn, dn, hn, lf, corps, coiffe, aile, env){
+    const M = new Bati(0);
+    M.piece('opaque', gCone(12), coiffe, xn, 0, 0, dn, hn, dn, 0, 0, -Math.PI/2, {ao:0});
+    const xc = xn - hn/2, xq = xc - long;      // col de la coiffe, culot
+    M.cylH('opaque', corps, (xc + xq)/2, 0, 0, r, long, 'x', 12);
+    M.cylH('opaque', '#22262a', xq + 0.5, 0, 0, r + 0.06, 1, 'x', 12);
+    for(const [y, z, sy, sz] of [[1, 0, env, 0.22], [-1, 0, env, 0.22], [0, 1, 0.22, env], [0, -1, 0.22, env]])
+      M.boiteC('opaque', aile, xq + 1.7, y*(r + env/2), z*(r + env/2), 2.8, sy, sz, 0, {ao:0});
+    // Flamme : cœur clair et court au culot, panache orange plus long
+    M.piece('emis', gCone(8), '#fff0c0', xq - lf*0.25, 0, 0, 2.3*r, lf*0.5, 2.3*r, 0, 0, Math.PI/2, {ao:0});
+    M.piece('emis', gCone(8), '#ff9a3a', xq - lf*0.6, 0, 0, 1.9*r, lf*0.8, 1.9*r, 0, 0, Math.PI/2, {ao:0});
+    return M;
+  }
+
+  // --------------------------------------------------- BATTERIE PARASOL (les deux camps)
+  // Antimissile de courte portée. Aire de tir ronde (Halden) ou octogonale (Karsk) peinte comme la
+  // toile d'un parasol : huit secteurs à deux tons, huit « baleines ». Au centre, un affût orientable
+  // porte un caisson incliné vers le ciel : douze alvéoles (4 × 3) pour Halden, six gros tubes
+  // (3 × 2) sous cadres pour Karsk. Petit poste de tir à l'angle nord-ouest. Emprise 80 × 80.
+  function parasol(m, P, K){
+    const B = m.statique, h0 = 1.5;
+    const beton = K ? P.beton : '#b4b0a4', beton2 = K ? P.beton2 : '#98958a';
+    const coque = K ? P.olive : P.panneau, coque2 = K ? P.oliveF : P.panneau2, sombre = K ? '#3a3a30' : P.acierF;
+    const acier = K ? '#4a4a3a' : P.acier, noir = K ? '#15150f' : '#1b2024';
+    dalle(B, P, 37, h0);
+    // ---- Aire de tir
+    const rp = 25, hp = K ? 2.6 : 3.1, ys = hp + 0.05;
+    if(K) B.cyl('opaque', beton, 0, h0, 0, rp, hp - h0, 8, {plat:true, effile:0.95, ao:0.35});
+    else {
+      B.cyl('opaque', beton2, 0, h0, 0, rp, 0.8, 32, {ao:0.3});
+      B.cyl('emis', P.accent, 0, h0 + 0.8, 0, rp - 0.2, 0.35, 32, {ao:0});
+      B.cyl('opaque', beton, 0, h0 + 1.15, 0, rp - 0.6, hp - h0 - 1.15, 32, {ao:0});
+    }
+    // (un secteur sur deux est teinté à la couleur du camp, délavée : la toile se lit même dézoomée)
+    const rs = K ? rp*0.95 - 1.4 : rp - 2.2, ta = K ? '#958d75' : '#d6d4cc', tb = melange(P.accent, K ? '#8a826d' : '#c2c1b9', K ? 0.45 : 0.36);
+    for(let k = 0; k < 8; k++){
+      const a0 = k*Math.PI/4, a1 = a0 + Math.PI/4, c0 = Math.cos(a0), s0 = Math.sin(a0);
+      B.tri('opaque', k % 2 ? ta : tb, [0, ys, 0], [Math.cos(a1)*rs, ys, Math.sin(a1)*rs], [c0*rs, ys, s0*rs]);
+      B.boiteC('opaque', K ? P.accent : P.ligne, c0*(rs + 12)/2, ys + 0.05, s0*(rs + 12)/2, rs - 12, 0.1, K ? 1.2 : 0.9, -a0, {ao:0});   // baleine
+      B.boiteC('opaque', K ? P.ligne : P.accent, c0*(rs - 0.9), ys + 0.07, s0*(rs - 0.9), 1.8, 0.14, K ? 2.6 : 2.2, -a0, {ao:0});      // embout
+    }
+    if(!K){
+      // Poste de tir (angle nord-ouest) : cabine à baies vitrées, toit graphite à rive bleue, antenne
+      B.boite('opaque', P.panneau, -35, h0, -35, -20, 9.4, -24.5);
+      B.boite('vitre', P.vitre, -33.6, 5.4, -24.5, -24.6, 8, -24.2);
+      B.boite('vitre', P.vitre, -20, 5.4, -33.4, -19.7, 8, -27);
+      B.boite('metal', P.acier, -23.6, h0, -24.5, -20.8, 7.4, -24.25, {ao:0});
+      B.boite('opaque', P.toit, -35.5, 9.4, -35.5, -19.5, 10, -24, {ao:0});
+      B.boite('opaque', P.accent, -35.5, 10, -25.6, -19.5, 10.25, -24, {ao:0});
+      B.decal(-29.5, 10.08, -31, 7.5, 7.5, R_EMBLEME);
+      B.cyl('metal', P.acierC, -21.5, 10, -33.5, 0.28, 7, 6, {ao:0});
+      B.boite('metal', '#b9c0c4', -34, 10, -34.5, -31, 11.6, -32);
+      B.poutre('metal', P.acierF, -21, h0 + 0.35, -24, -15.5, h0 + 0.35, -18, 1.3);           // chemin de câbles
+      // Groupe d'énergie (angle nord-est)
+      B.boite('opaque', P.panneau2, 21, h0, -35, 35, 7.6, -26.5);
+      B.boite('opaque', P.toit, 20.7, 7.6, -35.3, 35.3, 8.1, -26.2, {ao:0});
+      for(let x = 22.5; x < 33; x += 2.3) B.boite('metal', P.acierC, x, 3, -26.5, x + 1.3, 6.6, -26.2, {ao:0});
+      B.boite('emis', '#7dff9a', 33.2, 6.7, -26.5, 34.4, 7.1, -26.3, {ao:0});
+      B.cyl('metal', P.acierF, 31.5, 8.1, -32, 0.9, 3.4, 8); B.cyl('metal', '#2a2f33', 31.5, 11.5, -32, 1.15, 0.4, 8, {ao:0});
+      B.poutre('metal', P.acierF, 22, h0 + 0.35, -26, 16, h0 + 0.35, -19.5, 1.3);
+      // Recharges (angle sud-ouest) : trois conteneurs d'intercepteurs sur un râtelier
+      B.boite('metal', P.acierF, -35.6, h0, 24.4, -21.4, h0 + 0.7, 35.1, {ao:0});
+      for(const [z, y] of [[25, h0 + 0.7], [30.2, h0 + 0.7], [27.6, h0 + 4.9]]){
+        B.boite('opaque', P.panneau, -35, y, z, -22, y + 4.2, z + 4.4, {ao:0.15});
+        B.boite('opaque', P.accent, -22, y + 0.3, z + 0.3, -21.75, y + 3.9, z + 4.1, {ao:0});
+        B.boite('opaque', P.accent, -30.5, y + 4.2, z, -28.5, y + 4.3, z + 4.4, {ao:0});
+      }
+      // Aire de rechargement (angle sud-est) : bandes de danger, lampadaire, bornes
+      B.decal(28, h0 + 0.06, 30.5, 14, 3.5, R_DANGER);
+      lampadaire(B, 32.5, 23, 13, P.lumiere, P.acierC, h0);
+      for(const [x, z] of [[21.5, 34.6], [34.6, 34.6]]) B.boite('opaque', '#d2cfc6', x - 0.8, h0, z - 0.8, x + 0.8, h0 + 1.9, z + 0.8, {ao:0.2});
+    } else {
+      // Poste de tir (angle nord-ouest) : casemate basse sous tôle ondulée, fentes d'observation, sacs
+      B.boite('opaque', P.beton2, -35, h0, -35, -21, 6.6, -25, {ao:0.35});
+      B.boite('opaque', noir, -33, 4.3, -25, -23, 5.5, -24.85, {ao:0});
+      B.boite('opaque', noir, -21, 4.3, -33, -20.85, 5.5, -27, {ao:0});
+      B.boite('opaque', P.accent, -35.1, 5.9, -25.12, -20.88, 6.6, -24.9, {ao:0});
+      toleOndulee(B, 'metal', P.tole, P.tole2, -36, -36, -20, -24, 6.6);
+      sacs(B, -36, -22.8, -24.5, -22.8, 2, h0);
+      B.cyl('metal', sombre, -22.5, 7.4, -33, 0.3, 8, 6, {ao:0});
+      for(const [dx, dz] of [[2.4, 1], [-3, 2.6], [-1, -2.6]]) B.poutre('metal', '#2a2a24', -22.5, 14.8, -33, -22.5 + dx, 7.5, -33 + dz, 0.14);
+      // Dépôt sous filet de camouflage (angle nord-est)
+      caisse(B, 25, h0, -31, 3.2, P.olive, 0.1); caisse(B, 30.5, h0, -30, 3, P.olive, -0.15); caisse(B, 27.5, h0, -27, 2.6, P.bois, 0.3);
+      for(const [x, z] of [[21, -35], [35, -35], [21, -24.5], [35, -24.5]]) B.cyl('opaque', P.bois, x, h0, z, 0.35, 6.2, 6, {ao:0.2});
+      B.nappe('filet', 20.4, -35.6, 35.6, -23.9, 6, 5, (x, z) => h0 + 6.3 + Math.sin(x*0.9)*0.4 + Math.cos(z*0.8)*0.4 - (Math.abs(x - 28) > 7 || z < -35 || z > -24.5 ? 1.3 : 0), FILET);
+      // Tubes de rechange sur tréteaux (angle sud-ouest)
+      for(const x of [-33, -24.5]) B.boite('opaque', P.bois, x - 0.5, h0, 24.5, x + 0.5, h0 + 1.6, 35.2, {ao:0.2});
+      for(const z of [27, 32.6]){
+        B.cylH('opaque', P.olive, -28.5, h0 + 4.35, z, 2.75, 15, 'x', 12);
+        B.cylH('opaque', P.accent, -22.4, h0 + 4.35, z, 2.9, 1.4, 'x', 12);
+        B.cylH('metal', noir, -20.95, h0 + 4.35, z, 2.3, 0.2, 'x', 12);
+      }
+      // Fûts et caisses (angle sud-est)
+      fut(B, 31, h0, 31, P.olive); fut(B, 33.6, h0, 28.4, P.rouille); fut(B, 28.2, h0, 32.8, P.olive);
+      caisse(B, 23.5, h0, 31.5, 2.8, P.olive, 0.2);
+      // Merlon de sacs de sable en fer à cheval sur le pourtour de l'aire, ouvert au sud
+      const rm = rp*0.95 - 3.2;
+      for(const k of [3, 4, 5, 6, 7, 0]){
+        const a0 = k*Math.PI/4 + 0.08, a1 = (k + 1)*Math.PI/4 - 0.08;
+        sacs(B, Math.cos(a0)*rm, Math.sin(a0)*rm, Math.cos(a1)*rm, Math.sin(a1)*rm, 2, hp - 0.1);
+      }
+    }
+    m.corps = [-18, -18, 18, 18, 21];
+    m.points = [[0, 16, 0], [-28, 9, -30], [12, 7, 10]];
+    // ---- Affût (pivot) : couronne, flasques des tourillons, armoire arrière
+    const T = new Bati(0);
+    T.cyl('metal', acier, 0, 0, 0, 12.6, 1.2, 20, {ao:0});
+    T.cyl('metal', sombre, 0, 1.2, 0, 10.6, 0.7, 20, {ao:0});
+    for(const s of [-1, 1]){
+      T.boite('metal', coque, -4.4, 1.9, s*9.7, 3.8, 9.8, s*11.3, {ao:0.15});
+      T.boite('opaque', P.accent, -4.5, 8.5, s*9.65, 3.9, 9.3, s*11.35, {ao:0});
+      T.poutre('metal', sombre, -10, 2.1, s*10.5, -3.6, 8.2, s*10.5, 1.2);
+      T.poutre('metal', sombre, 8.5, 2.1, s*10.5, 3.2, 6.6, s*10.5, 1);
+    }
+    T.boite('metal', coque2, -11.4, 1.9, -5.5, -6.4, 6, 5.5, {ao:0.15});
+    T.boite('metal', noir, -11.6, 2.7, -4.6, -11.4, 5.2, 4.6, {ao:0});
+    T.boite('emis', K ? '#ffcf7a' : '#7dff9a', -6.4, 4.8, -4.8, -6.25, 5.4, -3.6, {ao:0});
+    T.boite('metal', sombre, 3.6, 1.9, -2.2, 8.4, 3.8, 2.2, {ao:0});
+    // ---- Caisson (enfant, d'axe +X, articulé aux tourillons) et intercepteur de l'alvéole de tir
+    const C = new Bati(0);
+    let ex, ey, ez, M;
+    if(!K){
+      C.boite('opaque', coque, -5, -1.5, -9, 15.2, 10.5, 9, {ao:0.12});
+      C.boite('metal', noir, 15.2, -1.2, -8.7, 15.45, 10.2, 8.7, {ao:0});                          // fond des alvéoles
+      for(let i = 0; i <= 4; i++){ const z = -8.5 + i*4.25; C.boite('opaque', coque2, 15.2, -1.5, z - 0.32, 16.1, 10.5, z + 0.32, {ao:0}); }
+      for(let j = 0; j <= 3; j++){ const y = -1.5 + j*4; C.boite('opaque', coque2, 15.2, Math.max(-1.5, y - 0.32), -9, 16.1, Math.min(10.5, y + 0.32), 9, {ao:0}); }
+      for(let j = 0; j < 3; j++) for(let i = 0; i < 4; i++){
+        if(i === 2 && j === 1) continue;       // alvéole de tir : sa coiffe est celle de l'intercepteur
+        C.piece('opaque', gCone(12), P.accent, 15.8, 0.5 + j*4, -6.375 + i*4.25, 3.3, 3, 3.3, 0, 0, -Math.PI/2, {ao:0});
+      }
+      for(const x of [-2.2, 10.6]) C.boite('metal', coque2, x - 0.35, -1.75, -9.25, x + 0.35, 10.75, 9.25, {ao:0});   // ceintures de renfort
+      C.boite('opaque', P.accent, 2.6, -1.56, -9.08, 6.2, 10.58, 9.08, {ao:0});                    // large bande de camp
+      C.boite('metal', noir, -5.3, -0.4, -8, -5, 9.4, 8, {ao:0});                                  // déflecteur arrière
+      for(let y = 1; y < 9.4; y += 2.1) C.boite('metal', coque2, -5.55, y - 0.3, -8, -5.3, y + 0.3, 8, {ao:0});
+      ex = 15.5; ey = 4.5; ez = 2.125;
+      M = intercepteur(1.4, 9, 0.3, 3.3, 3, 9.8, '#eef0f1', P.accent, '#2f353b', 1.2);
+    } else {
+      const tz = [-5.9, 0, 5.9], ty = [1.5, 7.4], rt = 2.75;
+      C.boite('metal', sombre, -5, -2, -8.8, 14.6, -1.1, 8.8, {ao:0});                             // berceau
+      for(let j = 0; j < 2; j++) for(let i = 0; i < 3; i++){
+        const y = ty[j], z = tz[i];
+        C.cylH('opaque', coque, 5.25, y, z, rt, 20.5, 'x', 14);
+        C.cylH('opaque', P.accent, 12.9, y, z, rt + 0.12, 1.8, 'x', 14);
+        C.cylH('metal', noir, 15.45, y, z, rt - 0.4, 0.25, 'x', 14);
+        C.cylH('metal', coque2, -5.2, y, z, rt - 0.7, 0.5, 'x', 10);
+        if(!(i === 2 && j === 1)) C.piece('opaque', gCone(12), P.accent, 15.9, y, z, 4.5, 3.2, 4.5, 0, 0, -Math.PI/2, {ao:0});
+      }
+      for(const x of [-1.6, 9.4]){
+        for(const s of [-1, 1]) C.boite('metal', coque2, x - 0.5, -2, s*8.65, x + 0.5, 10.8, s*9.35, {ao:0});
+        C.boite('metal', coque2, x - 0.5, 10.15, -9.35, x + 0.5, 10.8, 9.35, {ao:0});
+        C.boite('metal', coque2, x - 0.5, 4.1, -8.7, x + 0.5, 4.8, 8.7, {ao:0});
+      }
+      ex = 15.5; ey = 7.4; ez = 5.9;
+      M = intercepteur(1.85, 8.5, 0.4, 4.5, 3.2, 10.2, '#7a7852', P.accent, P.accentF, 0.7);
+    }
+    for(const s of [-1, 1]) C.cylH('metal', sombre, 0, 0, s*9.45, 2.3, 0.6, 'z', 12);                // tourillons
+    C.boite('metal', sombre, 5.5, -2.6, -2, 9, -1.5, 2, {ao:0});
+    // Affût, caisson et intercepteur agrandis d'un quart (kL) : le lanceur doit se lire au zoom du jeu.
+    const kL = 1.25;
+    for(const X of [T, C, M]) reduireBati(X, kL);
+    m.anims.push({type:'lanceur', x:0, y:hp, z:0, bati:T, elevRepos:0.66, elevTir:1.08, course:(K ? 60 : 70)*kL, hMax:hp + (8.2 + 20)*kL,
+      enfant:{x:0, y:8.2*kL, z:0, bati:C, eclair:{x:ex*kL, y:ey*kL, z:ez*kL, bati:M}}});
+  }
+  function parasolHalden(m, P){ parasol(m, P, false); }
+  function parasolKarsk(m, P){ parasol(m, P, true); }
+
+  // --------------------------------------------------- RADAR DE VEILLE (les deux camps)
+  // Une grande antenne tournante, fragile d'aspect, sur une emprise d'une seule case (40 × 40).
+  // Halden : abri technique bas, mâtereau fin, grand panneau plat incliné, face claire cerclée de
+  // bleu. Karsk : pylône en treillis haubané, antenne cintrée à lattes (« grillagée ») à rive rouge,
+  // cornet au bout de deux bras, baraque de tôle. À ne pas confondre avec l'antenne relais de Halden
+  // (2 × 2 cases, pylône de 95 de haut, paraboles) ni avec le petit radar de la batterie mixte
+  // (panneau de 8 de large) : celle-ci fait 24 de large, à 20 du sol.
+  function radarVeille(m, P, K){
+    const B = m.statique, h0 = 1.5, sombre = K ? '#3a3a30' : P.acierF;
+    dalle(B, P, 17, h0);
+    const R = new Bati(0);
+    let mx, mz, hm;
+    if(!K){
+      mx = -2; mz = -6; hm = 20.5;
+      // Abri technique, toit graphite à rive bleue
+      B.boite('opaque', P.panneau, -13, h0, -13.5, 9, 8, -1.5, {ao:0.25});
+      B.boite('opaque', P.toit, -13.4, 8, -13.9, 9.4, 8.5, -1.1, {ao:0});
+      B.boite('opaque', P.accent, -13.4, 8.5, -2.7, 9.4, 8.75, -1.1, {ao:0});
+      B.boite('emis', P.lumiere, -12, 6.5, -1.5, 3, 7, -1.3, {ao:0});
+      B.boite('metal', P.acier, 4.5, h0, -1.5, 7.7, 6.8, -1.25, {ao:0});
+      B.boite('metal', '#b9c0c4', 4.4, 8.5, -12.6, 8.4, 10.3, -9.2);
+      B.boiteC('feux', '#ff3626', 6.4, 10.8, -10.9, 1, 1, 1);
+      B.decal(-9, 8.56, -8.4, 6, 6, R_EMBLEME);
+      // Mâtereau fin et ses trois jambes de force
+      B.cyl('metal', sombre, mx, 8.5, mz, 2.3, 1, 10, {ao:0});
+      B.cyl('metal', P.acierC, mx, 9.5, mz, 0.85, hm - 9.5, 8, {ao:0});
+      for(let k = 0; k < 3; k++){ const a = k*2.094 + 0.5; B.poutre('metal', P.acier, mx + Math.cos(a)*4.6, 8.6, mz + Math.sin(a)*4.6, mx, 15.5, mz, 0.4); }
+      // Armoire électrique, chemin de câbles, bornes
+      B.boite('metal', '#d7dcdf', -13, h0, 6, -7.5, 6.4, 11.5);
+      B.boite('emis', '#7dff9a', -12.2, 5, 11.5, -11.2, 5.6, 11.65, {ao:0});
+      B.boite('metal', P.acierF, -11, h0 + 0.05, -1.5, -9.6, h0 + 0.6, 6, {ao:0});
+      for(const [x, z] of [[14, 14], [14, -14], [2, 14]]) B.boite('opaque', '#d2cfc6', x - 0.8, h0, z - 0.8, x + 0.8, h0 + 1.9, z + 0.8, {ao:0.2});
+      m.corps = [-13, -13.5, 9, -1.5, 9];
+      // Antenne : panneau plat incliné vers le ciel (face +X), dos sombre raidi, barre au sommet
+      const t = 0.2, ct = Math.cos(t), st = Math.sin(t), px = 1.7, py = 6.2;
+      R.cyl('metal', sombre, 0, 0, 0, 1.7, 1.3, 10, {ao:0});
+      R.boite('metal', sombre, -1.3, 1.3, -1.7, 1.1, 5, 1.7, {ao:0});
+      R.boite('metal', P.acier, -3.4, 3, -3.4, -0.6, 8, 3.4, {ao:0.1});
+      const hP = 10, lP = 22;                                                              // face rayonnante : hauteur, largeur
+      R.piece('opaque', gBoite(), P.accent, px - 0.25*ct, py - 0.25*st, 0, 0.6, hP + 1, lP + 1, 0, 0, t, {ao:0});      // cadre à la couleur du camp
+      R.piece('opaque', gBoite(), '#8f9aa3', px + 0.1*ct, py + 0.1*st, 0, 0.6, hP, lP, 0, 0, t, {ao:0});                // fond des joints
+      // Modules rayonnants (7 × 3 dalles claires séparées par des joints) : la face ne se lit pas comme un écran nu
+      const nu = 7, nv = 3, j = 0.45, lu = (lP - j*(nu + 1))/nu, lv = (hP - j*(nv + 1))/nv;
+      for(let b = 0; b < nv; b++) for(let a = 0; a < nu; a++){
+        const z = -lP/2 + j + lu/2 + a*(lu + j), v = -hP/2 + j + lv/2 + b*(lv + j);
+        R.piece('opaque', gBoite(), (a + b) % 2 ? '#eef1f2' : '#e2e7ea', px + 0.44*ct - v*st, py + 0.44*st + v*ct, z, 0.14, lv, lu, 0, 0, t, {ao:0});
+      }
+      R.piece('metal', gBoite(), sombre, px - 0.62*ct, py - 0.62*st, 0, 0.5, hP + 0.2, lP + 0.2, 0, 0, t, {ao:0});    // dos
+      for(const z of [-7.5, 0, 7.5]) R.piece('metal', gBoite(), P.acier, px - 1.1*ct, py - 1.1*st, z, 0.7, hP + 0.2, 0.8, 0, 0, t, {ao:0});
+      R.piece('metal', gBoite(), P.acierC, px - st*(hP/2 + 1.3), py + ct*(hP/2 + 1.3), 0, 0.45, 0.45, 14, 0, 0, t, {ao:0});
+      for(const z of [-5, 5]) R.piece('metal', gBoite(), P.acierC, px - st*(hP/2 + 0.8), py + ct*(hP/2 + 0.8), z, 0.3, 1.2, 0.3, 0, 0, t, {ao:0});
+    } else {
+      mx = 3; mz = -5; hm = 19.5;
+      // Pylône en treillis sur massif de béton, quatre haubans
+      B.boite('opaque', P.beton2, mx - 4.6, h0, mz - 4.6, mx + 4.6, h0 + 1.1, mz + 4.6, {ao:0.3});
+      treillis(B, 'metal', [P.olive, P.olive, P.oliveF, P.accent], mx, mz, h0 + 1.1, hm - 0.6, 7.2, 3.2, 4, 0.5);
+      B.boiteC('metal', sombre, mx, hm - 0.3, mz, 4.4, 0.6, 4.4, 0, {ao:0});
+      for(const [x, z] of [[-15, -15], [15, -15], [15, 9], [-9, -1]]){
+        B.poutre('metal', '#2a2a24', x, h0 + 0.8, z, mx, hm - 3, mz, 0.16);
+        B.boite('opaque', P.beton2, x - 1.1, h0, z - 1.1, x + 1.1, h0 + 0.9, z + 1.1, {ao:0.2});
+      }
+      // Baraque de l'opérateur : tôle ondulée, bandeau rouge ; fûts, caisse, câble
+      B.boite('opaque', P.tole, -14.5, h0, 3, -4, 6.6, 12.5, {ao:0.3});
+      B.boite('opaque', P.accent, -14.6, 5.5, 12.4, -3.9, 6.3, 12.6, {ao:0});
+      B.boite('opaque', '#15150f', -11.5, h0, 12.5, -8.6, 5, 12.58, {ao:0});
+      toleOndulee(B, 'metal', P.tole, P.tole2, -15.2, 2.4, -3.4, 13.1, 6.6);
+      sacs(B, -3, 4, -3, 13, 2, h0);
+      fut(B, 9, h0, 11, P.rouille); fut(B, 11.8, h0, 12.6, P.olive); caisse(B, 4.5, h0, 12, 2.4, P.olive, 0.2);
+      B.poutre('metal', '#2a2a24', -4, h0 + 0.3, 6, mx - 2.5, h0 + 1.2, mz + 3.5, 0.5);
+      B.decal(9.5, h0 + 0.06, 2.5, 6, 6, R_EMBLEME);
+      m.corps = [-6, -10, 9, 12.5, 8];
+      // Antenne : réflecteur cintré à lattes (creux vers +X), longerons, cornet au bout de deux bras
+      const F4 = 38, xr = z => 0.9 + z*z/F4, yb = 1.8, yt = 11;
+      R.cyl('metal', sombre, 0, 0, 0, 1.6, 1.2, 8, {ao:0});
+      R.boite('metal', P.oliveF, -1.1, 1.2, -1.3, 1.1, 6, 1.3, {ao:0});
+      R.boite('metal', P.oliveF, -3.6, 1.2, -1.6, -1.1, 4.2, 1.6, {ao:0});
+      // (cadre rouge : rives haute et basse, lattes des deux bouts ; l'antenne olive se détache du sable, même dézoomée)
+      for(let i = -6; i <= 6; i++){
+        const z = i*2, bout = Math.abs(i) === 6;
+        R.boiteC('opaque', bout ? P.accent : i % 2 ? P.olive : '#7b7950', xr(z), (yb + yt)/2, z, bout ? 0.5 : 0.3, yt - yb, 1.25, Math.atan(2*z/F4), {ao:0});
+      }
+      for(const [y, c, e] of [[yb, P.accent, 0.8], [(yb + yt)/2, P.oliveF, 0.5], [yt, P.accent, 1]])
+        for(let i = -6; i < 6; i++) R.poutre('opaque', c, xr(i*2) - 0.1, y, i*2, xr(i*2 + 2) - 0.1, y, i*2 + 2, e);
+      for(const s of [-1, 1]){
+        R.poutre('metal', sombre, xr(4), yb, s*4, 9.5, 6, 0, 0.35);
+        R.poutre('metal', sombre, -1, 2.2, s*1, xr(9) - 0.3, 6.4, s*9, 0.4);
+      }
+      R.boiteC('opaque', P.accent, 9.9, 6, 0, 2, 1.8, 2.6, 0, {ao:0});
+    }
+    m.points = [[mx, hm + 5, mz], [0, 7, 4]];
+    m.anims.push({type:'rotation', vitesse:K ? 0.8 : 1.15, x:mx, y:hm, z:mz, bati:R});
+  }
+  function radarHalden(m, P){ radarVeille(m, P, false); }
+  function radarKarsk(m, P){ radarVeille(m, P, true); }
+
   const FABRIQUES = {
     aiguille:{halden:galerieHalden}, terrier:{karsk:galerieKarsk},
+    parasol:{halden:parasolHalden, karsk:parasolKarsk}, radar:{halden:radarHalden, karsk:radarKarsk},
     qg:{halden:qgHalden, karsk:qgKarsk}, caserne:{halden:caserneHalden, karsk:caserneKarsk},
     usine:{halden:usineHalden, karsk:usineKarsk}, relais:{halden:relaisHalden, karsk:relaisHalden},
     depot:{halden:depotKarsk, karsk:depotKarsk},
@@ -2491,6 +2799,7 @@
     for(const a of m.anims){
       if(a.geos) for(const c in a.geos) if(!CANAUX_NUIT[c]) m.hMax = Math.max(m.hMax, a.y + a.geos[c].boundingBox.max.y);
       if(a.enfant && a.enfant.geos) for(const c in a.enfant.geos) m.hMax = Math.max(m.hMax, a.y + a.enfant.y + a.enfant.geos[c].boundingBox.max.y);
+      if(a.hMax) m.hMax = Math.max(m.hMax, a.hMax);   // caisson incliné de la Batterie Parasol (sa boîte englobante est mesurée couché)
     }
     m.echafaudage = fabriquerEchafaudage(m);
     return (MODELES[cle] = m);
@@ -2616,6 +2925,9 @@
         eclair = new THREE.Group(); eclair.position.set(E.x, E.y, E.z); eclair.scale.setScalar(0.001);
         enfant.add(eclair); ajouter(eclair, E.geos);
       }
+      // Batterie Parasol : pose de repos dès l'instanciation (le fantôme de placement n'est pas animé par
+      // majBatiment : sans cela, son caisson resterait couché et son intercepteur invisible).
+      if(a.type === 'lanceur'){ p.rotation.y = -Math.PI/2; if(enfant) enfant.rotation.z = a.elevRepos; if(eclair) eclair.scale.setScalar(1); }
       return {def:a, pivot:p, enfant, eclair};
     });
     return {groupe:g, meshes, anims};
@@ -2798,7 +3110,28 @@
           a.pivot.visible = actif && g.t >= 0 && !s.chantier;
           a.pivot.position.z = d.z + d.course*(actif ? g.sortie : 0);
           if(a.enfant) a.enfant.rotation.x = -d.levee*(actif ? g.levee : 0);
-          if(a.eclair) a.eclair.scale.setScalar(actif && g.t >= CYCLE_GALERIE.dresse + CYCLE_GALERIE.ecart*d.rang ? 0.001 : 1);
+          if(a.eclair) a.eclair.scale.setScalar(actif && g.t >= CYCLE_GALERIE.depart + CYCLE_GALERIE.ecart*d.rang ? 0.001 : 1);
+        }
+      }
+      else if(d.type === 'lanceur'){
+        // Batterie Parasol : le pivot suit b.angleT, le caisson se lève pour tirer (b.intT = heure du
+        // tir), l'intercepteur file le long de son axe puis disparaît jusqu'à la fin du cycle.
+        const p = poseLanceur(temps - b.intT), ang = Number.isFinite(b.angleT) ? b.angleT : Math.PI/2;
+        const elev = d.elevRepos + (d.elevTir - d.elevRepos)*p.levee;
+        a.pivot.rotation.y = -ang;
+        if(a.enfant) a.enfant.rotation.z = elev;
+        if(a.eclair){
+          const E = d.enfant.eclair, dist = d.course*p.vol*p.vol;
+          a.eclair.position.x = E.x + dist;
+          a.eclair.scale.setScalar(p.parti || s.chantier ? 0.001 : 1);
+          // Départ : flammes à la bouche de l'alvéole, puis fumée le long du premier élan
+          if(dt > 0 && p.vol > 0 && p.vol < 0.75 && !s.chantier){
+            const ce = Math.cos(elev), se = Math.sin(elev), u = E.x + dist*0.45;
+            const lx = d.enfant.x + u*ce - E.y*se, ly = d.enfant.y + u*se + E.y*ce, lz = d.enfant.z + E.z;
+            const wx = b.x + d.x + lx*Math.cos(ang) - lz*Math.sin(ang), wy = b.y + d.z + lx*Math.sin(ang) + lz*Math.cos(ang);
+            if(p.vol < 0.4) feu(wx, wy, H + d.y + ly, 0.7);
+            fumee(wx, wy, H + d.y + ly, 0.6);
+          }
         }
       }
       else if(d.type === 'arme'){

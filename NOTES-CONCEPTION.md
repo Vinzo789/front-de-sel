@@ -881,6 +881,77 @@ détruire que pendant qu'il tire. Option C retenue : une version par camp.
   charges, étude préalable, page d'aperçu `apercu.html` et son serveur
   (`serveur_apercu.py`, port 8768 : enregistre des images du rendu).
 
+### Défense antimissile, lot A (20 novembre 2026, `?v=37`, escarmouche solo, case « Galeries de tir »)
+Idée du propriétaire (19 novembre 2026) ; visuels validés par lui le même jour
+(`travaux/galerie/images/defense-planche-*.jpg`, `maquette-defense.html`).
+Règles complètes : `travaux/galerie/CAHIER-DES-CHARGES.md`, § 11.
+- **Batterie Parasol** (600 réserves, 25 s, après l'usine, une par camp) : peut
+  abattre en vol un missile de galerie qui vise sa zone (rayon de 14 cases,
+  cercle en pointillés). Munitions à fabriquer d'avance dans sa fiche
+  (120 réserves, 30 s, 4 au plus) ; une munition par tir, réussi ou non.
+- **Radar de veille** (250 réserves, 14 s, trois au plus) : chances
+  d'interception 25 % sans radar, puis 42, 58 et 75 %.
+- **Fenêtre d'interception** (en haut à droite) : dès l'ordre de tir adverse,
+  9,5 s avant le départ ; « Intercepter (I) », « Laisser passer (L) », puis
+  « Annuler (L) ». Sans réponse, le missile passe. Le résultat s'affiche au
+  même endroit, avec un petit écran radar, vers la 3e seconde du vol.
+- **Ordinateur** (Normale et au-dessus, sans triche) : il bâtit sa propre
+  galerie d'abord, puis batterie, radars (1, 2 ou 3 selon le niveau) et
+  munitions dès qu'un adversaire a une galerie ; tout de suite s'il a déjà
+  subi un tir. Il autorise l'interception quand il a une munition.
+- **Corrections du 20 novembre 2026** (constats de trois relecteurs,
+  `travaux/galerie/etude/controle-lot-a.txt`) : deux galeries adverses à la
+  suite donnent une seule fenêtre qui dit « 2 galeries » et dont la réponse
+  vaut pour toutes ; le caisson reste levé entre les deux tirs d'une salve ;
+  entre alliés, le second défenseur ne tire qu'à la rencontre manquée du
+  premier (son intercepteur ne trahit plus l'issue) ; l'ordinateur ne rebâtit
+  plus sans fin un radar détruit (60 s d'attente, autre place, deux
+  reconstructions au plus) ; il bâtit sa galerie avant sa défense ; petits
+  textes (zone en cases, paliers des radars, phrase après l'impact). Puis un
+  relecteur indépendant, en lecture seule, sur ces corrections : rien de
+  bloquant, règle d'or confirmée, quatre constats corrigés (avec le pas de
+  temps variable du jeu réel, l'allié ne tirait qu'une fois sur deux : essai
+  à pas irrégulier ajouté ; accord de l'allié relu à son tour ; galerie de
+  l'ordinateur détruite ; fiche de résultat effacée trop tôt). Ces quatre
+  dernières corrections n'ont pas été relues par un tiers, seulement
+  rejouées par les essais.
+- **Vérifié le 20 novembre 2026** (volet masqué, simulation) : case décochée,
+  pages neuves, premier appel : partie à quatre camps `8e338d28` (appel exact
+  plus haut) et duel `7d442efb` par
+  `avecGraine(4242, () => { partieOrdinateurs([{id:'J',faction:'halden',equipe:'A',niveau:'difficile'},{id:'I',faction:'karsk',equipe:'B',niveau:'normal'}], 300); return empreinteEtat(); })` ;
+  `testerDefense()` 47 sur 47, `testerDefense('parties')` 6 sur 6,
+  `avecGraine(7, () => testerGaleries())` 59 sur 59,
+  `testerGaleries('parties')` 15 sur 15 (la 3e partie se joue de nouveau avec
+  la défense de l'ordinateur, graine 24) ; console sans erreur. Vraie partie
+  d'escarmouche lancée par l'écran : batterie, trois radars, deux munitions
+  par les vrais ordres, salve adverse de deux missiles, clic sur
+  « Intercepter » : deux missiles abattus, QG intact (réserves gonflées et
+  assaut de l'ordinateur retenu pour l'essai ; au premier essai, son armée
+  avait rasé la batterie avant le départ).
+- **Non vérifié** : le jeu à la souris ; les missions `halden-1` et `karsk-4`
+  n'ont pas été rejouées après les corrections (elles l'avaient été la veille,
+  aucune galerie n'y existe) ; l'allure des deux intercepteurs d'une salve vue
+  de près.
+- **Choix faits sans le propriétaire, à valider** : fenêtre complète plutôt
+  que ligne compacte ; sans réponse, le missile passe ; « Laisser passer » est
+  définitif pour le cycle ; une réponse vaut pour toutes les galeries
+  ouvertes ; une munition par missile ; touches I et L ; noms « Batterie
+  Parasol » et « Radar de veille » ; une batterie par camp ; radars sans
+  portée ; chiffres ci-dessus ; cycle de la galerie porté de 16 à 17,5 s ;
+  l'ordinateur bâtit sa galerie avant sa défense ; la fenêtre reste affichée
+  pendant un dialogue du mode Surprises ; une batterie finie pendant
+  l'ouverture d'une galerie ne reçoit pas de proposition pour ce cycle.
+- **Limites connues** : entre alliés, l'intercepteur du second défenseur
+  n'a que 1,5 s de vol (il apparaît au bout de sa course pendant que le
+  caisson se lève encore), et la rencontre a lieu environ 0,5 s avant
+  l'impact ; un ordinateur sans galerie qui subit un tir en
+  fin de partie n'a pas toujours le temps de bâtir sa batterie (relevé :
+  NH-NK graines 7 et 8, DH-DK 22) ; Ultra n'est couvert par aucune partie
+  d'essai de la défense.
+- **Lot B, pas commencé** : missile lourd dans la même galerie, Batterie
+  Zénith (haute altitude), écran radar d'altitude. Modèles prêts dans
+  `travaux/galerie/r3d-batiments-d.js`.
+
 ### Commandes
 
 Souris pour sélectionner et ordonner, molette ou touches + et − (rangée

@@ -52,6 +52,7 @@
   const MAX_BOMBES = 24;
   const MAX_MISSILES = 4;      // missiles de frappe de précision
   const MAX_MISSILES_GAL = 8;  // missiles des galeries de tir en vol, par modèle (novembre 2026)
+  const MAX_INTERCEPTEURS = 8; // intercepteurs de la Batterie Parasol en vol, par camp (novembre 2026)
   const MAX_ONDES = 14;        // ondes de choc au sol
   const MAX_ORDRES = 8;        // retours d'ordre
   const MAX_MARQUEURS = 4;     // zones de pouvoir
@@ -1178,6 +1179,7 @@
   const ROQ = 0, AIR = 1, BOM = 2, PLA = 3;
   const DEPART_SOL = [0, 9, 9, 13];           // hauteur de départ par défaut d'un tireur terrestre, par genre
   let meshRoquettes = null, meshMissilesAir = null, meshBombes = null, meshMissiles = null, meshAiguilles = null, meshBrisants = null;
+  let meshIntH = null, meshIntK = null;   // intercepteurs de la Batterie Parasol, Halden et Karsk (novembre 2026)
   const etats = new Map();            // objet projectile du moteur -> état visuel
   const libres = [];                  // états recyclés (pas d'objet créé par tir une fois la réserve constituée)
   const missiles = new Map();         // objet effet 'missile' -> état visuel
@@ -1243,6 +1245,10 @@
     // de Karsk, plus court et trapu. Mêmes proportions que les missiles posés sur les lanceurs (r3d-batiments.js).
     meshAiguilles = instances(geoProjectile(30, 2.1, {corps:'#e6eaee', nez:'#2f353b', bande:'#3fa7ff', ailettes:'#2f353b'}), mat, MAX_MISSILES_GAL, true);
     meshBrisants = instances(geoProjectile(24, 2.6, {corps:'#6f6d49', nez:'#9c2f24', bande:'#e2533f', ailettes:'#4a4930'}), mat, MAX_MISSILES_GAL, true);
+    // Intercepteurs de la Batterie Parasol (novembre 2026) : petits et vifs, mêmes couleurs que ceux posés
+    // dans le caisson (r3d-batiments.js, parasol) : clair à coiffe bleue (Halden), olive à coiffe rouge (Karsk).
+    meshIntH = instances(geoProjectile(14, 1.5, {corps:'#eef0f1', nez:'#3fa7ff', bande:'#3fa7ff', ailettes:'#2f353b'}), mat, MAX_INTERCEPTEURS, false);
+    meshIntK = instances(geoProjectile(13, 1.9, {corps:'#7a7852', nez:'#e2533f', bande:'#e2533f', ailettes:'#4a4930'}), mat, MAX_INTERCEPTEURS, false);
   }
   function finInstances(m, n){ m.count = n; m.visible = n > 0; if(n > 0) m.instanceMatrix.needsUpdate = true; }
 
@@ -1564,6 +1570,13 @@
     const dt = dtMis;
     st.t += dt;
     const k = Math.min(1, st.t / st.duree);
+    // Missile de galerie abattu (défense antimissile, novembre 2026) : il disparaît du ciel après abattuA
+    // secondes de vol (champ posé par le moteur), ou quand l'intercepteur qui le visait éclate (st.abattu).
+    // L'éclat est celui de l'intercepteur ; s'il n'y en a pas (st.vise faux), on le fait ici.
+    if(st.abattu || (nombre(e.abattuA) && st.t >= e.abattuA)){
+      if(!st.vise && st.modele && k < 1){ posMissile(st, k, vTmp); eclatEnLAir(vTmp.x, vTmp.y, vTmp.z); }
+      missiles.delete(e); return;
+    }
     const plein = st.modele === 1 ? nAig >= MAX_MISSILES_GAL : st.modele === 2 ? nBri >= MAX_MISSILES_GAL : nMis >= MAX_MISSILES;
     if(k >= 1 || plein){ if(k >= 1) missiles.delete(e); return; }
     if(st.modele){
@@ -1645,7 +1658,152 @@
     }
     if(!st) st = {t:0, duree, modele:0, sx:e.x - 320, sy:H + 680, sz:e.y - 220, ex:e.x, ey:H, ez:e.y, acc:0};
     st.px = st.sx; st.py = st.sy; st.pz = st.sz;
+    st.abattu = false; st.vise = false;      // défense antimissile (voir majUnMissile et les intercepteurs)
     missiles.set(e, st);
+  }
+
+  // ----- Intercepteurs de la Batterie Parasol (défense antimissile, novembre 2026) -----
+  // Effet du moteur (cahier des charges § 11.6) : effet('intercepteur', {x0, y0, x, y, h, duree, camp, reussi}),
+  // posé au tir de la batterie (x0, y0) ; la rencontre a lieu au bout de duree secondes, au point (x, y) à
+  // la hauteur h. La batterie lève son caisson et pousse son intercepteur hors de l'alvéole
+  // (r3d-batiments.js, anim « lanceur ») ; ici, il prend le relais au bout de cette course
+  // (DEPART_INTERCEPTEUR après le tir) et file vers le missile de galerie. Le point de rencontre est celui
+  // où le missile DESSINÉ (posMissile) se trouvera à la fin de l'effet : le moteur ne connaît pas la cloche
+  // du dessin, et l'intercepteur éclaterait à côté du missile. Sans missile trouvé : le point du moteur.
+  // Réussite : éclat en l'air, le missile disparaît. Échec : il frôle le missile, file encore un instant
+  // et s'éteint dans une petite bouffée ; le missile poursuit sa route.
+  const DEPART_INTERCEPTEUR = 1.25;    // = depart + vol de CYCLE_INTERCEPTION, dans r3d-batiments.js
+  const ELEV_INTERCEPTEUR = 1.08;      // élévation du caisson levé (elevTir de la Batterie Parasol)
+  const BOUCHE_INTERCEPTEUR = 33, AVANCE_BOUCHE = 5, COURSE_INTERCEPTEUR = 82;   // bouche de l'alvéole, course hors du caisson
+  const intercepteurs = new Map();     // objet effet 'intercepteur' -> état visuel
+  const vI = new THREE.Vector3(), vJ = new THREE.Vector3();
+  function nouvelIntercepteur(e){
+    if(!(nombre(e.x0) && nombre(e.y0) && nombre(e.x) && nombre(e.y))) return;
+    const duree = e.duree > 0 ? +e.duree : 3;
+    let karsk = false;
+    try { karsk = typeof camps !== 'undefined' && !!camps[e.camp] && camps[e.camp].faction === 'karsk'; } catch(err){ karsk = false; }
+    // Sortie du caisson : vers le point annoncé (b.angleT du moteur), à l'élévation du caisson levé
+    const az = Math.atan2(e.y - e.y0, e.x - e.x0), ce = Math.cos(ELEV_INTERCEPTEUR), se = Math.sin(ELEV_INTERCEPTEUR);
+    const ux = Math.cos(az)*ce, uy = se, uz = Math.sin(az)*ce;
+    const bx = e.x0 + Math.cos(az)*AVANCE_BOUCHE, bz = e.y0 + Math.sin(az)*AVANCE_BOUCHE, by = sol(e.x0, e.y0) + BOUCHE_INTERCEPTEUR;
+    const sx = bx + ux*COURSE_INTERCEPTEUR, sy = by + uy*COURSE_INTERCEPTEUR, sz = bz + uz*COURSE_INTERCEPTEUR;
+    const h = nombre(e.h) && e.h > 0 ? +e.h : 300;
+    intercepteurs.set(e, {t:0, duree, t0:Math.min(DEPART_INTERCEPTEUR, duree*0.5), karsk, reussi:e.reussi === true,
+      pret:false, arrive:false, cible:null, ux, uy, uz, sx, sy, sz, cx:sx, cy:sy, cz:sz,
+      ex:e.x, ey:sol(e.x, e.y) + h, ez:e.y, ox:0, oy:0, oz:0, vx:0, vy:0, vz:0, acc:0, px:sx, py:sy, pz:sz});
+  }
+  // Recherche, parmi les missiles de galerie en vol, de celui qui sera le plus près du point annoncé à la
+  // fin de l'effet (rappel fixe, état dans les variables ci-dessous).
+  let _mMeilleur = null, _mDist = 0, _mDans = 0, _mX = 0, _mZ = 0;
+  function candidatMissile(stm){
+    if(!stm.modele || stm.abattu) return;
+    posMissile(stm, Math.min(0.98, (stm.t + _mDans)/stm.duree), vJ);
+    const d = Math.hypot(vJ.x - _mX, vJ.z - _mZ);
+    if(d < _mDist){ _mDist = d; _mMeilleur = stm; }
+  }
+  function viserIntercepteur(st){
+    st.pret = true;
+    _mMeilleur = null; _mDist = 260; _mDans = st.duree - st.t; _mX = st.ex; _mZ = st.ez;
+    if(missiles.size) missiles.forEach(candidatMissile);
+    const m = _mMeilleur; _mMeilleur = null;
+    if(m){
+      posMissile(m, Math.min(0.98, (m.t + _mDans)/m.duree), vJ);
+      st.ex = vJ.x; st.ey = vJ.y; st.ez = vJ.z; st.cible = m;
+      if(st.reussi) m.vise = true;     // l'éclat sera celui de l'intercepteur
+    }
+    if(!st.reussi){
+      // Échec : il passe à côté (de flanc et un peu au-dessus), sans toucher. L'écart (ox, oy, oz) n'est ajouté
+      // que sur la fin du vol (majUnIntercepteur) : jusque-là il vise le missile, comme pour une réussite, et
+      // l'image ne dit pas l'issue avant la rencontre (constat du contrôle, 20 novembre 2026).
+      const hx = st.ex - st.sx, hz = st.ez - st.sz, l = Math.hypot(hx, hz) || 1;
+      st.ox = -hz/l*16; st.oz = hx/l*16; st.oy = 8;
+    }
+    // Point de contrôle de la courbe : dans l'axe du caisson, pour que la trajectoire prolonge la course
+    const L = Math.hypot(st.ex - st.sx, st.ey - st.sy, st.ez - st.sz);
+    st.cx = st.sx + st.ux*L*0.45; st.cy = st.sy + st.uy*L*0.45; st.cz = st.sz + st.uz*L*0.45;
+  }
+  // Position (out) et direction (dir, non normalisée) à la fraction k de la courbe (Bézier de degré 2).
+  function posIntercepteur(st, k, out, dir){
+    const a = (1 - k)*(1 - k), b = 2*k*(1 - k), c = k*k;
+    out.set(a*st.sx + b*st.cx + c*st.ex, a*st.sy + b*st.cy + c*st.ey, a*st.sz + b*st.cz + c*st.ez);
+    if(dir) dir.set(2*(1 - k)*(st.cx - st.sx) + 2*k*(st.ex - st.cx), 2*(1 - k)*(st.cy - st.sy) + 2*k*(st.ey - st.cy), 2*(1 - k)*(st.cz - st.sz) + 2*k*(st.ez - st.cz));
+    return out;
+  }
+  // Éclat en l'air (missile détruit) : explosion à hauteur, sans poussière au sol, gerbe d'étincelles.
+  function eclatEnLAir(x, y, z){
+    if(!(nombre(x) && nombre(y) && nombre(z))) return;
+    const H = sol(x, z);
+    EX.x = x; EX.y = z; EX.h = Math.max(31, y - H); EX.r = 24; EX.grande = false; EX.batiment = false;
+    explosion(EX);
+    solCourant = H;
+    for(let j=nb(10);j>0;j--){ dirAlea(); emettre(G.etincelle, x, y, z, DX*140, DY*140 + 30, DZ*140, 3); }
+    for(let j=nb(4);j>0;j--) emettre(G.fumeeGrise, x + alea(-8, 8), y + alea(-4, 4), z + alea(-8, 8), alea(-10, 10), alea(-4, 6), alea(-10, 10), alea(16, 24));
+  }
+  let nIH = 0, nIK = 0, dtInt = 0;
+  function majIntercepteurs(dt){
+    nIH = nIK = 0; dtInt = dt;
+    if(intercepteurs.size) intercepteurs.forEach(majUnIntercepteur);
+    finInstances(meshIntH, nIH); finInstances(meshIntK, nIK);
+  }
+  function majUnIntercepteur(st, e){
+    const dt = dtInt;
+    st.t += dt;
+    if(!st.pret) viserIntercepteur(st);
+    if(st.t < st.t0) return;                      // encore dans le caisson (dessiné par r3d-batiments.js)
+    const vol = Math.max(0.05, st.duree - st.t0);
+    if(!st.arrive && st.t >= st.duree){
+      st.arrive = true;
+      posIntercepteur(st, 1, vI, vDir);
+      vI.x += st.ox; vI.y += st.oy; vI.z += st.oz;
+      if(st.reussi){
+        if(st.cible) st.cible.abattu = true;
+        eclatEnLAir(vI.x, vI.y, vI.z);
+        intercepteurs.delete(e); return;
+      }
+      // Échec : il garde sa vitesse d'arrivée (dérivée de la courbe rapportée au temps de vol)
+      st.vx = vDir.x/vol; st.vy = vDir.y/vol; st.vz = vDir.z/vol;
+      st.ex = vI.x; st.ey = vI.y; st.ez = vI.z;
+    }
+    if(st.arrive){
+      const s = st.t - st.duree;
+      if(s > 0.5){
+        solCourant = sol(st.px, st.pz);
+        emettre(G.fumeeGrise, st.px, st.py, st.pz, 0, 4, 0, 10);
+        intercepteurs.delete(e); return;
+      }
+      vI.set(st.ex + st.vx*s, st.ey + st.vy*s, st.ez + st.vz*s);
+      vDir.set(st.vx, st.vy, st.vz);
+    } else {
+      // Accélération : il part vite (au bout de sa course) et file de plus en plus vite
+      const k = (st.t - st.t0)/vol, kk = k*(0.7 + 0.3*k);
+      posIntercepteur(st, kk, vI, vDir);
+      if(kk > 0.8){ const w = (kk - 0.8)/0.2, ww = w*w; vI.x += st.ox*ww; vI.y += st.oy*ww; vI.z += st.oz*ww; }
+    }
+    if(vDir.lengthSq() < 1e-8) vDir.set(st.ux, st.uy, st.uz);
+    vDir.normalize();
+    const plein = st.karsk ? nIK >= MAX_INTERCEPTEURS : nIH >= MAX_INTERCEPTEURS;
+    if(!plein){
+      qTmp.setFromUnitVectors(axeX, vDir);
+      mTmp.compose(vI, qTmp, unite);
+      if(st.karsk) meshIntK.setMatrixAt(nIK++, mTmp); else meshIntH.setMatrixAt(nIH++, mTmp);
+    }
+    if(dt > 0){
+      const qx = vI.x - vDir.x*8, qy = vI.y - vDir.y*8, qz = vI.z - vDir.z*8;
+      solCourant = sol(vI.x, vI.z);
+      emettre(G.propulseur, qx, qy, qz, -vDir.x*24, -vDir.y*24, -vDir.z*24, alea(9, 13));
+      emettre(G.halo, qx, qy, qz, 0, 0, 0, 13, 0.3);
+      // Traînée : espacement régulier quel que soit le débit d'images
+      const pas = 3*Q.pas;
+      st.acc += Math.hypot(vI.x - st.px, vI.y - st.py, vI.z - st.pz) / pas;
+      let j = 0;
+      while(st.acc >= 1 && j < 30){
+        st.acc -= 1; j++;
+        const recul = st.acc * pas;
+        emettre(G.traineeMissile, qx - vDir.x*recul, qy - vDir.y*recul, qz - vDir.z*recul, alea(-3, 3), alea(-2, 3), alea(-3, 3), alea(8, 11));
+      }
+      if(st.acc > 1) st.acc = 1;
+    }
+    st.px = vI.x; st.py = vI.y; st.pz = vI.z;
   }
 
   // =====================================================================
@@ -1941,7 +2099,7 @@
 
   // Types d'effets mis en scène ici. Tout autre type est ignoré sans erreur : inconnu, ou rendu par un
   // autre module ('rayon', 'chargeSol' et 'bouclier' appartiennent à r3d-aliens.js).
-  const CONNUS = {explosion:1, trait:1, eclair:1, fumee:1, ordre:1, missile:1};
+  const CONNUS = {explosion:1, trait:1, eclair:1, fumee:1, ordre:1, missile:1, intercepteur:1};
   function nouvelEffet(e){
     switch(e.type){
       case 'explosion': explosion(e); break;
@@ -1950,6 +2108,7 @@
       case 'fumee': fumee(e); break;
       case 'ordre': ajouterOrdre(e.x, e.y, e.couleur); break;
       case 'missile': nouveauMissile(e); break;
+      case 'intercepteur': nouvelIntercepteur(e); break;   // défense antimissile (novembre 2026)
     }
   }
 
@@ -2195,6 +2354,8 @@
       orbesAdd.n = 0; orbesNorm.n = 0;
       majProjectiles(projs, dt);
       finOrbes(orbesAdd); finOrbes(orbesNorm);
+      // (intercepteurs avant les missiles : celui qui éclate fait disparaître son missile dès cette image)
+      majIntercepteurs(dt);
       majMissiles(dt);
       majMarqueurs(dt);
       majEmetteurs(dt);

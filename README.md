@@ -18,7 +18,8 @@ la bibliothèque 3D three.js est chargée au démarrage.
 - « Galeries de tir », à cocher sur le même écran (escarmouche contre
   l'ordinateur seulement) : un abri enterré d'où sortent des lanceurs de
   missiles. Fermé, il est intouchable ; on ne peut le détruire que pendant les
-  16 secondes où il tire.
+  17,5 secondes où il tire. Pour s'en défendre : la Batterie Parasol et ses
+  radars de veille, qui tentent d'abattre les missiles en vol.
 - Escarmouche en ligne, de 2 à 4 joueurs (voir plus bas).
 
 Le bouton « Commandes », en jeu, donne la liste des touches. La touche F11 du

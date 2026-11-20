@@ -99,6 +99,12 @@ input[type=range]{width:80px;accent-color:var(--accent);vertical-align:middle}
 #boutonsFab button.fab.grise img,#boutonsFab button.fab.grise .nom,#boutonsFab button.fab.grise .c{opacity:.42}
 #boutonsFab button.fab.grise img{filter:grayscale(.85)}
 #boutonsFab button.fab.actif{outline:2px solid var(--accent);outline-offset:-2px}
+/* Plus de 8 boutons (onglet Bâtiments avec l'option « Galeries de tir » et la défense antimissile, 19 novembre 2026 :
+   Halden 10, Karsk 9) : 5 colonnes au lieu de 4, mêmes deux rangées, nom un peu plus petit. Classe posée par
+   construireFabrique seulement dans ce cas : sans elle, l'affichage est exactement celui d'avant. */
+#boutonsFab.cinq{grid-template-columns:repeat(5,minmax(0,1fr));gap:4px}
+#boutonsFab.cinq button.fab .nom{font-size:10.5px;padding:8px 3px 5px;letter-spacing:-.15px;hyphens:auto}
+#boutonsFab.cinq button.fab .c{font-size:10.5px;padding:1px 4px}
 /* Infobulle de la barre de construction (au survol d'un bouton) */
 #infobulle{position:fixed;z-index:30;width:300px;pointer-events:none;background:rgba(12,15,18,.97);border:1px solid #4a5763;border-radius:8px;
   box-shadow:0 8px 24px rgba(0,0,0,.55);font-size:12.5px;line-height:1.4;overflow:hidden}
@@ -115,6 +121,55 @@ input[type=range]{width:80px;accent-color:var(--accent);vertical-align:middle}
 #mini{position:fixed;right:0;bottom:0;width:256px;height:184px;background:var(--panneau);border-top:1px solid var(--bord);
   border-left:1px solid var(--bord);padding:8px;z-index:5}
 #miniCv{display:block;cursor:pointer;border:1px solid #2a3238}
+
+/* ---------- Défense antimissile (19 novembre 2026) : fenêtre d'interception ----------
+   Reprise de la maquette validée par le propriétaire (travaux/galerie/maquette-defense.html, classe « .def ») :
+   en haut à droite, sous la barre, seule zone libre du jeu (messages au centre, bandeau des camps à gauche,
+   minicarte et barre de construction en bas). Même pâte que la radio des missions. Cachée (classe « cache »)
+   tant qu'il n'y a ni proposition ni résultat à montrer : toujours, case « Galeries de tir » décochée. */
+#defense{position:fixed;top:54px;right:10px;width:300px;z-index:6;background:rgba(10,13,16,.93);border:1px solid var(--bord);
+  border-left:4px solid var(--alerte);border-radius:6px;padding:8px 11px 10px;font-size:13px;line-height:1.35;
+  box-shadow:0 6px 18px rgba(0,0,0,.42)}
+#defense.reussie{border-left-color:var(--ok)}
+#defense.partielle{border-left-color:var(--accent)}
+#defense.neutre{border-left-color:var(--doux)}
+#defense .tete{display:flex;align-items:baseline;gap:8px;margin-bottom:6px}
+#defense .tete .titre{font-size:14.5px;font-weight:700;color:#ffd3c8;white-space:nowrap}
+#defense.resultat .tete .titre{color:var(--texte)}
+#defense .tete .tch{margin-left:auto;font-size:11px;color:var(--doux);white-space:nowrap}
+#defense .sousTitre{margin:-3px 0 6px;color:#ffb4a0;font-size:12.5px}
+#defense .compte{display:flex;align-items:baseline;gap:8px}
+#defense .compte .sec{margin-left:auto;font-size:23px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+#defense .jauge{height:6px;background:#2a3036;border-radius:3px;overflow:hidden;margin:5px 0 9px}
+#defense .jauge i{display:block;height:100%;width:100%;background:var(--alerte);border-radius:3px}
+#defense .rang{display:flex;align-items:center;gap:7px;min-height:22px}
+#defense .rang .lib{color:var(--doux)}
+#defense .rang b{margin-left:auto;font-variant-numeric:tabular-nums;font-size:15px}
+#defense .rang b.gros{font-size:21px;line-height:1.1;color:var(--accent)}
+#defense .rang b.zero{color:var(--alerte)}
+#defense .rang.sous{color:var(--doux);font-size:12px;min-height:18px;margin:-2px 0 4px}
+#defense .pips{display:inline-flex;gap:3px;align-items:center}
+#defense .pips i{display:block;width:9px;height:9px;border-radius:50%;border:1.5px solid #6b767e}
+#defense .pips i.on{background:var(--accent);border-color:var(--accent)}
+#defense .pips.mun{margin-left:auto}
+#defense .pips.mun i{width:5px;height:12px;border-radius:2px 2px 1px 1px;border:1px solid #6b767e}
+#defense .pips.mun i.on{background:#cfd6da;border-color:#cfd6da}
+#defense .pips.mun + b{margin-left:0}
+#defense .boutons{display:flex;flex-wrap:nowrap;gap:8px;margin-top:9px}
+#defense .boutons button{flex:1;height:40px;padding:0 4px;font-size:13.5px;font-weight:600;white-space:nowrap}
+#defense .boutons button .tch{font-weight:400;opacity:.72;margin-left:2px}
+#defense .boutons button.etroit{flex:none;width:96px}
+#defense .regle{color:var(--doux);font-size:11.5px;line-height:1.35;margin-top:8px;text-wrap:balance}
+#defense .raison{color:#ffb4a0;font-size:12px;line-height:1.35;margin-top:8px;text-wrap:balance}
+#defense .ecranRadar{display:block;width:100%;height:auto;border-radius:4px;border:1px solid #1f3a2b}
+#defense .ecranRadar text{font:10px "Segoe UI",system-ui,sans-serif;paint-order:stroke;stroke:#06100b;stroke-width:2.6px;stroke-linejoin:round}
+#defense .verdict{font-size:20px;font-weight:700;line-height:1.15;margin-top:8px}
+#defense .verdict.ok{color:var(--ok)}
+#defense .verdict.ko{color:var(--alerte)}
+#defense .verdict.mi{color:var(--accent)}
+#defense .verdict.attente{color:var(--doux);font-size:15px;font-weight:600}
+#defense .impact{font-size:15px;font-weight:700;color:#ffd3c8;margin-top:1px}
+#defense .suite{color:#d9d4c7;font-size:12.5px;margin:4px 0 3px;text-wrap:balance}
 
 /* ---------- Mission : objectifs et radio ---------- */
 #objectifs{position:fixed;top:54px;left:10px;width:340px;z-index:6;background:rgba(10,13,16,.84);border:1px solid var(--bord);
@@ -281,6 +336,7 @@ select{font:inherit;background:var(--bouton);color:var(--texte);border:1px solid
 </div>
 <div id="bandeauCamps" class="cache"></div>
 <div id="messages"></div>
+<div id="defense" class="cache" aria-label="Défense antimissile"></div>
 <div id="objectifs" class="cache"><div class="tete" id="objTete">OBJECTIFS<span id="objNouveau"></span><span class="fleche">▾</span></div><div id="objListe"></div></div>
 <div id="radio" class="cache"><div class="qui" id="radioQui"></div><div class="texte" id="radioTexte"></div><div class="suite" id="radioSuite"></div></div>
 <div id="panneau" class="cache" oncontextmenu="return false"><div id="infos"></div><div id="actions"></div>
@@ -358,7 +414,7 @@ select{font:inherit;background:var(--bouton);color:var(--texte);border:1px solid
    <label class="surprises"><input type="checkbox" id="modeSurprises">
     <span><b>Mode Surprises</b><span class="expl" id="explSurprises">Un événement imprévu peut bouleverser la partie.</span></span></label>
    <label class="surprises"><input type="checkbox" id="modeGaleries">
-    <span><b>Galeries de tir</b><span class="expl" id="explGaleries">Vous pouvez bâtir une galerie enterrée qui tire des missiles n’importe où sur la carte. Une fois finie, elle est intouchable, sauf pendant ses 16 secondes de tir. Parties en ligne : sans galeries.</span></span></label>
+    <span><b>Galeries de tir</b><span class="expl" id="explGaleries">Vous pouvez bâtir une galerie enterrée qui tire des missiles n’importe où sur la carte. Une fois finie, elle est intouchable, sauf pendant ses 17,5 secondes de tir. Contre elle : la Batterie Parasol et ses radars, qui tentent d’abattre les missiles. Parties en ligne : sans galeries.</span></span></label>
    <h3 class="titreCartes">Camps et alliances</h3>
    <div class="raccourcis" id="raccourcisCamps"></div>
    <div class="emplacements" id="emplacementsCamps"></div>
@@ -460,33 +516,33 @@ if(/[?&]mission=/.test(location.search)){
      L'ORDRE COMPTE : chaque fichier s'appuie sur ceux qui le précèdent (jeu.js en dernier).
      onerror : un fichier absent est ignoré sans bruit ; le jeu démarre sans lui quand il est facultatif
      (musique, post-traitement, envahisseurs, vignettes), sinon jeu.js affiche le message « Rendu 3D indisponible ». -->
-<script src="musique.js?v=36" onerror="void 0"></script>
-<script src="cartes.js?v=36" onerror="void 0"></script>
-<script src="campagnes/campagnes.js?v=36" onerror="void 0"></script>
-<script src="campagnes/halden-1.js?v=36" onerror="void 0"></script>
-<script src="campagnes/halden-2.js?v=36" onerror="void 0"></script>
-<script src="campagnes/halden-3.js?v=36" onerror="void 0"></script>
-<script src="campagnes/halden-4.js?v=36" onerror="void 0"></script>
-<script src="campagnes/karsk-1.js?v=36" onerror="void 0"></script>
-<script src="campagnes/karsk-2.js?v=36" onerror="void 0"></script>
-<script src="campagnes/karsk-3.js?v=36" onerror="void 0"></script>
-<script src="campagnes/karsk-4.js?v=36" onerror="void 0"></script>
-<script src="r3d-scene.js?v=36" onerror="void 0"></script>
-<script src="r3d-post.js?v=36" onerror="void 0"></script>
-<script src="r3d-unites.js?v=36" onerror="void 0"></script>
-<script src="r3d-batiments.js?v=36" onerror="void 0"></script>
-<script src="r3d-effets.js?v=36" onerror="void 0"></script>
-<script src="r3d-aliens.js?v=36" onerror="void 0"></script>
+<script src="musique.js?v=37" onerror="void 0"></script>
+<script src="cartes.js?v=37" onerror="void 0"></script>
+<script src="campagnes/campagnes.js?v=37" onerror="void 0"></script>
+<script src="campagnes/halden-1.js?v=37" onerror="void 0"></script>
+<script src="campagnes/halden-2.js?v=37" onerror="void 0"></script>
+<script src="campagnes/halden-3.js?v=37" onerror="void 0"></script>
+<script src="campagnes/halden-4.js?v=37" onerror="void 0"></script>
+<script src="campagnes/karsk-1.js?v=37" onerror="void 0"></script>
+<script src="campagnes/karsk-2.js?v=37" onerror="void 0"></script>
+<script src="campagnes/karsk-3.js?v=37" onerror="void 0"></script>
+<script src="campagnes/karsk-4.js?v=37" onerror="void 0"></script>
+<script src="r3d-scene.js?v=37" onerror="void 0"></script>
+<script src="r3d-post.js?v=37" onerror="void 0"></script>
+<script src="r3d-unites.js?v=37" onerror="void 0"></script>
+<script src="r3d-batiments.js?v=37" onerror="void 0"></script>
+<script src="r3d-effets.js?v=37" onerror="void 0"></script>
+<script src="r3d-aliens.js?v=37" onerror="void 0"></script>
 <!-- Vignettes des boutons (images des modèles 3D) : facultatif, des pictogrammes neutres le remplacent. -->
-<script src="r3d-vignettes.js?v=36" onerror="void 0"></script>
+<script src="r3d-vignettes.js?v=37" onerror="void 0"></script>
 <!-- Multijoueur (reseau.js) : aucun effet au chargement (ni connexion, ni minuteur) ; la bibliothèque MQTT
      n'est téléchargée qu'au moment d'héberger ou de rejoindre une partie. -->
-<script src="reseau.js?v=36" onerror="void 0"></script>
-<script src="jeu.js?v=36" onerror="void 0"></script>
+<script src="reseau.js?v=37" onerror="void 0"></script>
+<script src="jeu.js?v=37" onerror="void 0"></script>
 <!-- Outils de test (verif-missions-moteur.js) : chargés seulement avec ?verif ou &verif dans l'adresse. -->
 <script>
 if(/[?&]verif(=|&|$)/.test(location.search)){
-  const s = document.createElement('script'); s.src = 'verif-missions-moteur.js?v=36'; document.body.appendChild(s);
+  const s = document.createElement('script'); s.src = 'verif-missions-moteur.js?v=37'; document.body.appendChild(s);
 }
 </script>
 </body>

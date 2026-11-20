@@ -790,8 +790,16 @@ function partieOrdinateurs(liste, duree, opts){
   const compta = Object.fromEntries(ids.map(id => [id, {depart:camps[id].reserves, collecte:0, charge:0, dechargements:0, secours:0, depenses:0, unites:0, commandes:0, renforts:0}]));
   // Instruments (remis en place à la fin).
   const orig = {majCollecteur:window.majCollecteur, commander:window.commander, construireBatiment:window.construireBatiment, revenuSecours:window.revenuSecours, creerUnite:window.creerUnite, activerPouvoir:window.activerPouvoir,
-    commanderMissile:window.commanderMissile};
+    commanderMissile:window.commanderMissile, commanderMunition:window.commanderMunition};
   let enProduction = 0;
+  // Défense antimissile (19 novembre 2026) : le prix des munitions d'interception compte aussi. Option décochée,
+  // commanderMunition n'est jamais appelée : rien ne change.
+  window.commanderMunition = function(b){
+    const C = b && camps[b.camp], r0 = C ? C.reserves : 0;
+    const ok = orig.commanderMunition.apply(this, arguments);
+    if(C && compta[b.camp]) compta[b.camp].depenses += r0 - C.reserves;
+    return ok;
+  };
   // Galeries de tir (novembre 2026) : le prix des missiles compte dans les dépenses (contrôle anti-triche).
   // Option décochée, commanderMissile n'est jamais appelée : rien ne change.
   window.commanderMissile = function(b){
@@ -1110,11 +1118,12 @@ function partieGaleriesSurveillee(liste, duree, graine){
   try { res = partieRejouable(() => avecGraine(graine, () => partieGaleries(liste, duree))); }
   finally { window.miseAJour = mj; }
   // Ce que chaque ordinateur a fait de ses occasions (journal daté) : contre-tir dans les 3 s, pouvoir dans
-  // les 16 s, ou retenue notée dans les 3 s (le contre-tir est alors refusé par la règle du tir ordinaire).
+  // la durée d'ouverture (CYCLE_GALERIE.duree : 17,5 s depuis le 19 novembre 2026, 16 s avant), ou retenue notée
+  // dans les 3 s (le contre-tir est alors refusé par la règle du tir ordinaire).
   for(const o of S.occasions){
     const J = (etatsIA[o.camp] && etatsIA[o.camp].galerie || {journal:[]}).journal;
     const dans = (quoi, s) => J.some(l => l.quoi === quoi && l.cibleId === o.cibleId && l.t >= o.t - 0.1 && l.t <= o.t + s);
-    o.contreFait = dans('contreTir', 3); o.retenue = dans('retenue', 3); o.pouvoirFait = dans('ripostePouvoir', 16);
+    o.contreFait = dans('contreTir', 3); o.retenue = dans('retenue', 3); o.pouvoirFait = dans('ripostePouvoir', CYCLE_GALERIE.duree);
   }
   const ripostes = {};
   for(const id of Object.keys(res.galeries)){
@@ -1939,8 +1948,9 @@ function testerGaleries(quoi, numero){
       V('cycle : ordres de tir acceptés, stock engagé en entier, galerie ouverte dès t = 0', rJ.ok && rI.ok && debut.J[0] === 0 && debut.J[1] === 1 && debut.J[2] === 0
         && debut.I[0] === 0 && debut.I[1] === 2 && debut.I[2] === 0, debut);
       V('cycle : alerte Espace posée chez l’adversaire sur la galerie qui s’ouvre', alerteI && alerteJ, {alerteI:alertes.I, alerteJ:alertes.J});
-      V('cycle J : départ à 8 s, impact à 13 s', pret(departs('J'), [8]) && pret(iJ.map(z => r2(z.t - t0)), [13]), {departs:departs('J'), impacts:iJ.map(z => r2(z.t - t0))});
-      V('cycle I : départs à 8 et 8,6 s, impacts à 13 et 13,6 s', pret(departs('I'), [8, 8.6]) && pret(iI.map(z => r2(z.t - t0)), [13, 13.6]),
+      // (Cycle allongé de 1,5 s le 19 novembre 2026 : départs à 9,5 et 10,1 s, fermeture à 17,5 s ; avant 8, 8,6 et 16.)
+      V('cycle J : départ à 9,5 s, impact à 14,5 s', pret(departs('J'), [9.5]) && pret(iJ.map(z => r2(z.t - t0)), [14.5]), {departs:departs('J'), impacts:iJ.map(z => r2(z.t - t0))});
+      V('cycle I : départs à 9,5 et 10,1 s, impacts à 14,5 et 15,1 s', pret(departs('I'), [9.5, 10.1]) && pret(iI.map(z => r2(z.t - t0)), [14.5, 15.1]),
         {departs:departs('I'), impacts:iI.map(z => r2(z.t - t0))});
       const effOk = id => journal.effets.filter(e => e.type === 'missile' && e.p.galerie && e.p.camp === id).every(e => e.p.duree === 5 && e.p.x0 === (id === 'J' ? gJ : gI).x && e.p.y0 === (id === 'J' ? gJ : gI).y)
         && marqueurs(id).length === departs(id).length && marqueurs(id).every(m => m.p.duree === 5 && m.p.r === (id === 'J' ? gJ : gI).def.galerie.rayon);
@@ -1949,7 +1959,7 @@ function testerGaleries(quoi, numero){
       V('cycle : impact = explosionZone missileGalerie, auteur {camp, est:galerie, galerie:true}, bord 0,5',
         iJ.concat(iI).every(z => z.auteur.est === 'galerie' && z.auteur.galerie === true) && iJ.every(z => z.r === 70 && z.deg === 600) && iI.every(z => z.r === 95 && z.deg === 330),
         iJ.concat(iI).map(z => [z.auteur.camp, z.r, z.deg]));
-      V('cycle : fermeture à 16 s, b.galT suit le temps du cycle puis null, b.galN = n puis 0', Math.abs(fermeture.J - 16) <= EPS && Math.abs(fermeture.I - 16) <= EPS && suiviOk.J && suiviOk.I
+      V('cycle : fermeture à 17,5 s, b.galT suit le temps du cycle puis null, b.galN = n puis 0', Math.abs(fermeture.J - 17.5) <= EPS && Math.abs(fermeture.I - 17.5) <= EPS && suiviOk.J && suiviOk.I
         && gJ.galT === null && gI.galT === null && gJ.galN === 0 && gI.galN === 0 && galerieFermee(gJ) && galerieFermee(gI),
         {fermeture, suiviOk, ecarts:ecarts.slice(0, 4)});
       const dI = pvI - qI.pv, dJ = pvJ - qJ.pv;
@@ -2036,12 +2046,13 @@ function testerGaleries(quoi, numero){
       const p2 = gJ.pv; explosionZone(gJ.x, gJ.y, 80, 200, 'roquette', u2); const dZone = p2 - gJ.pv;
       V('ouverte : vulnérable (peutCibler, infliger, explosionZone)', peutCibler(u2, gJ) && dInf === 100 && dZone > 0, {peutCibler:peutCibler(u2, gJ), infliger:dInf, zone:r1(dZone)});
       u2.mort = true;
-      // Grêle de I à 380 px : une salve tirée à 11,5 s (arrivée avant la fermeture) porte ; une salve tirée à 15 s
-      // est encore en vol à la fermeture (16 s) et se perd.
+      // Grêle de I à 380 px : une salve tirée 4,5 s avant la fermeture (arrivée avant elle) porte ; une salve tirée
+      // 1 s avant la fermeture (17,5 s depuis le 19 novembre 2026 ; 11,5 et 15 s avec l'ancien cycle de 16 s) est
+      // encore en vol à la fermeture et se perd.
       const grele = unite('grele', 'I', gJ.x + 380, gJ.y); grele.recharge = 1e9;
-      while(temps - t0 < 11.5 - 1e-6) miseAJour(DT);
+      while(temps - t0 < CYCLE_GALERIE.duree - 4.5 - 1e-6) miseAJour(DT);
       const pvA = gJ.pv; tirer(grele, gJ);
-      while(temps - t0 < 15 - 1e-6) miseAJour(DT);
+      while(temps - t0 < CYCLE_GALERIE.duree - 1 - 1e-6) miseAJour(DT);
       const dAvant = pvA - gJ.pv;
       const pvB = gJ.pv; tirer(grele, gJ);
       while(gJ.gal.t0 !== null) miseAJour(DT);
@@ -2080,7 +2091,7 @@ function testerGaleries(quoi, numero){
       ecouter();
       executerOrdre(id, {type:'tirGalerie', id:g2.id, x:q2.x, y:q2.y});
       const t1 = temps, pvQ2 = q2.pv;
-      while(temps - t1 < 8.7 - 1e-6) miseAJour(DT);
+      while(temps - t1 < CYCLE_GALERIE.departs[1] + 0.1 - 1e-6) miseAJour(DT);   // juste après le dernier départ (8,7 s avec l'ancien cycle)
       infliger(g2, 1e6, tueur2);
       pas(8);
       const imp2 = journal.zones.filter(z => z.arme === 'missileGalerie').length;
@@ -2120,7 +2131,8 @@ function testerGaleries(quoi, numero){
       const p = trouverEmplacement('caserne', qg('I')), cas = creerBatiment('caserne', 'I', p.c, p.r, true); cas.pv = 100;
       executerOrdre('J', {type:'tirGalerie', id:gJ.id, x:cas.x, y:cas.y});
       let saut = 0, prec = camps.J.points;
-      for(let k = 0; k < Math.round(15/DT); k++){ const mortAvant = cas.mort; miseAJour(DT); if(cas.mort && !mortAvant) saut = camps.J.points - prec; prec = camps.J.points; }
+      // (Impact + 2,5 s : 15 s avec l'ancien cycle de 16 s.)
+      for(let k = 0; k < Math.round((CYCLE_GALERIE.departs[0] + CYCLE_GALERIE.vol + 2.5)/DT); k++){ const mortAvant = cas.mort; miseAJour(DT); if(cas.mort && !mortAvant) saut = camps.J.points - prec; prec = camps.J.points; }
       const p2 = trouverEmplacement('caserne', qg('I')), cas2 = creerBatiment('caserne', 'I', p2.c, p2.r, true); cas2.pv = 1;
       const tireur = unite('conscrit', 'J', cas2.x - 200, cas2.y), pts0 = camps.J.points;
       infliger(cas2, 50, tireur);
@@ -2190,8 +2202,8 @@ function testerGaleries(quoi, numero){
 
     // 1. Temps restant (tous niveaux) : Facile (pouvoirsIA, meilleurGroupe) et Ultra (meilleureZoneUltra).
     //    Galerie de I loin de sa base, un conscrit à côté : densité 3 (seuil du petit pouvoir) avec la galerie,
-    //    1 sans elle. À galT ≈ 3, la Frappe (impact à 1,2 s) peut la toucher ; à galT ≈ 14,5 (1,5 s restantes,
-    //    moins que 1,2 + 1), non.
+    //    1 sans elle. À galT ≈ 3, la Frappe (impact à 1,2 s) peut la toucher ; à 1,5 s de la fermeture (galT ≈ 16
+    //    depuis le cycle de 17,5 s du 19 novembre 2026, 14,5 avant ; moins que 1,2 + 1), non.
     {
       scene();
       const gI = poserLoin('I', 650);
@@ -2210,7 +2222,7 @@ function testerGaleries(quoi, numero){
       const g3 = meilleurGroupe('I', 1.2);
       pouvoirsIA(camps.K, [], []);
       const lance3 = (camps.K.recharges.frappe || 0) > 0;
-      while(gI.galT !== null && gI.galT < 14.5 - 1e-6) miseAJour(DT);
+      while(gI.galT !== null && gI.galT < CYCLE_GALERIE.duree - 1.5 - 1e-6) miseAJour(DT);
       if(u.mort) u = conscrit();
       const reste = r2(resteOuvertureGalerie(gI));
       const g14ancien = meilleurGroupe('I'), g14 = meilleurGroupe('I', 1.2);
@@ -2284,7 +2296,8 @@ function testerGaleries(quoi, numero){
     }
 
     // 4. Limite du contre-tir : Halden Difficile (K, un missile) contre la galerie de I ouverte depuis 2,3 s
-    //    (13 + 0,5 < 13,7 restantes) : tir ; depuis 2,7 s : pas de tir. Karsk (deux missiles) : 1,9 s au plus.
+    //    (14,5 + 0,5 < 15,2 restantes, cycle de 17,5 s ; 13 + 0,5 < 13,7 avec celui de 16 s) : tir ; depuis 2,7 s :
+    //    pas de tir. Karsk (deux missiles) : 1,9 s au plus. Limites inchangées par l'allongement du cycle.
     {
       const essai = (camp, a) => {
         scene();
@@ -2302,7 +2315,7 @@ function testerGaleries(quoi, numero){
     }
 
     // 5. Tir ordinaire (§ 9.3, correction de l'étape 1) : une galerie ouverte depuis 5 s n'est plus une cible
-    //    (refermée avant l'impact, 13 s plus tard) ; ouverte depuis 1 s, elle l'est.
+    //    (refermée avant l'impact, 14,5 s plus tard ; 13 s avec l'ancien cycle) ; ouverte depuis 1 s, elle l'est.
     {
       scene();
       const gI = poserLoin('I', 650);
@@ -2352,7 +2365,8 @@ function testerGaleries(quoi, numero){
         ecouter();
         executerOrdre('J', {type:'tirGalerie', id:gJ.id, x:u.x, y:u.y});
         const t0 = temps; let esquiveT = null;
-        while(temps - t0 < 14.5){ miseAJour(DT); if(esquiveT === null && u.ultraEsquive) esquiveT = r2(temps - t0); }
+        // (Impact + 1,5 s : 14,5 s avec l'ancien cycle de 16 s.)
+        while(temps - t0 < CYCLE_GALERIE.departs[0] + CYCLE_GALERIE.vol + 1.5){ miseAJour(DT); if(esquiveT === null && u.ultraEsquive) esquiveT = r2(temps - t0); }
         const r = {niveau:n, esquive:esquiveT, touche:Math.round(subi(u, parGalerie)), mort:u.mort};
         journal = null;
         return r;
@@ -2390,20 +2404,26 @@ function testerGaleries(quoi, numero){
        liste:[{id:'J', faction:'karsk', equipe:'A', niveau:'difficile'}, {id:'I', faction:'halden', equipe:'B', niveau:'normal'}]},
       {nom:'Ultra (J, Halden) contre Difficile (I, Karsk)', graine:11, sujets:['J'], riposte:null,
        liste:[{id:'J', faction:'halden', equipe:'A', niveau:'ultra'}, {id:'I', faction:'karsk', equipe:'B', niveau:'difficile'}]},
-      {nom:'Difficile (J, Halden) contre Difficile (I, Karsk)', graine:25, sujets:['J', 'I'], riposte:'contreTir',
+      {nom:'Difficile (J, Halden) contre Difficile (I, Karsk)', graine:24, sujets:['J', 'I'], riposte:'contreTir',
        liste:[{id:'J', faction:'halden', equipe:'A', niveau:'difficile'}, {id:'I', faction:'karsk', equipe:'B', niveau:'difficile'}]},
     ];
+    // Défense antimissile. Étape 4 (19 novembre 2026) : l'ordinateur bâtissait sa Batterie Parasol avant sa propre
+    // galerie, et aucune graine ne montrait plus les deux galeries et un contre-tir ; cette 3e partie se jouait donc
+    // sans la défense de l'ordinateur (sansDefenseIA). Correction du 20 novembre 2026 : la galerie passe avant la
+    // défense (sauf tir déjà subi), et la partie se joue de nouveau AVEC la défense. Graine 24 (au lieu de 25,
+    // qui ne montre plus de tir) : les deux galeries, des tirs des deux côtés, un contre-tir, et chez chacun une
+    // batterie et deux radars. sansDefense reste possible dans la liste, pour mesurer.
     const DUREE = 900;
     for(const P of parties){
       if(typeof numero === 'number' && parties.indexOf(P) !== numero) continue;
       const t0 = performance.now();
-      const r = partieGaleriesSurveillee(P.liste, DUREE, P.graine);
+      const r = P.sansDefense ? sansDefenseIA(() => partieGaleriesSurveillee(P.liste, DUREE, P.graine)) : partieGaleriesSurveillee(P.liste, DUREE, P.graine);
       const calcul = Math.round(performance.now() - t0);
       // Même partie, option décochée : temps de calcul par pas (comparaison seulement).
       optionGaleries = false;
       let sans;
       try { sans = avecGraine(P.graine, () => partieOrdinateurs(P.liste, DUREE)); } finally { optionGaleries = true; }
-      const nom = P.nom + ' (graine ' + P.graine + ', ' + DUREE + ' s)';
+      const nom = P.nom + ' (graine ' + P.graine + ', ' + DUREE + ' s' + (P.sansDefense ? ', sans la défense antimissile de l’ordinateur' : '') + ')';
       const bilan = P.sujets.map(id => { const g = r.galeries[id]; return {camp:id, chantier:g.chantier, commandes:g.commandes.length, tirs:g.tirsTotal, contreTirs:g.contreTirs, etat:g.etat}; });
       V('partie ' + nom + ' : ' + P.sujets.join(' et ') + (P.sujets.length > 1 ? ' bâtissent leur galerie, fabriquent et tirent' : ' bâtit sa galerie, fabrique et tire') + ' au moins une fois',
         !r.erreur && bilan.every(b => b.chantier != null && b.commandes >= 1 && b.tirs >= 1), {bilan, fin:r.temps + ' s, ' + r.issue});
@@ -2488,3 +2508,617 @@ function testerGaleries(quoi, numero){
   }
 }
 window.testerGaleries = testerGaleries;
+
+// ---------------------------------------------------------------------
+//  Défense antimissile, lot A (19 novembre 2026, cahier § 11.4 et 11.7) : parties d'ordinateurs mesurées, séries
+//  « avec ou sans la défense de l'ordinateur », et essais automatiques des règles (testerDefense). Outils de
+//  mesure seulement : rien ici ne change le comportement des outils plus haut.
+// ---------------------------------------------------------------------
+// L'ordinateur sans sa défense antimissile, le temps de fn (IA_DEFENSE vidé puis remis) : pour mesurer ce que
+// l'ajout change, galeries cochées dans les deux cas.
+function sansDefenseIA(fn){
+  const copie = Object.assign({}, IA_DEFENSE);
+  for(const k of Object.keys(IA_DEFENSE)) delete IA_DEFENSE[k];
+  try { return fn(); } finally { Object.assign(IA_DEFENSE, copie); }
+}
+window.sansDefenseIA = sansDefenseIA;
+// Une partie d'ordinateurs, option cochée, rejouable (graine et prochainId fixés), avec relevé par camp : galerie
+// (chantier, tirs), défense (chantiers datés de la batterie et des radars, munitions commandées, intercepteurs tirés
+// et réussis), triche (écart inexpliqué / unités sans commande / réserves finales), réserves minimales ; et les
+// fautes : une batterie posée par un ordinateur avant qu'aucune galerie hostile n'ait existé (il ne peut pas le
+// savoir), une munition commandée au-delà du stock visé, une défense chez Facile.
+// opts : {sansDefense:true} (l'ordinateur ne bâtit pas de défense). Ex. : partieDefense('DH-DK', 25, 900).
+function partieDefense(nom, graine, duree, opts){
+  opts = opts || {};
+  const liste = typeof nom === 'string' ? AFFRONTEMENTS_GALERIES[nom] : nom;
+  const eff = window.effet, cb = window.construireBatiment, mj = window.miseAJour, cm = window.commanderMunition;
+  const S = {inter:{}, missiles:{}, defense:{}, munitions:{}, vu:{}, resMin:{}, fautes:[]};
+  const faute = t => { if(S.fautes.length < 10) S.fautes.push('t=' + Math.round(temps) + ' ' + t); };
+  const camp = id => S.defense[id] || (S.defense[id] = {parasol:[], radar:[]});
+  window.effet = function(type, p){
+    if(type === 'intercepteur'){ const k = S.inter[p.camp] || (S.inter[p.camp] = {tires:0, reussis:0}); k.tires++; if(p.reussi) k.reussis++; }
+    if(type === 'missile' && p.galerie) S.missiles[p.camp] = (S.missiles[p.camp] || 0) + 1;
+    return eff.apply(this, arguments);
+  };
+  window.construireBatiment = function(id, type){
+    const b = cb.apply(this, arguments);
+    if(b && BATIMENTS[type].galerie) for(const v of campsEnJeu()) if(hostile(id, v)) S.vu[v] = true;
+    if(b && BATIMENTS[type].defense){
+      camp(id)[type].push(Math.round(temps));
+      if(type === 'parasol' && !S.vu[id]) faute(id + ' bâtit une batterie sans avoir vu de galerie hostile');
+      if(niveauIA(id) === 'facile') faute(id + ' (Facile) bâtit ' + type);
+    }
+    return b;
+  };
+  window.commanderMunition = function(b){
+    const avant = b && b.para ? b.para.stock + b.para.fab : 0, R = b && reglagesDefenseIA(b.camp);
+    const ok = cm.apply(this, arguments);
+    if(ok){ S.munitions[b.camp] = (S.munitions[b.camp] || 0) + 1; if(R && avant >= R.stockVise) faute(b.camp + ' commande une munition au-delà du stock visé'); }
+    return ok;
+  };
+  window.miseAJour = function(){
+    const r = mj.apply(this, arguments);
+    for(const id of campsEnJeu()){ const v = camps[id].reserves; if(!(id in S.resMin) || v < S.resMin[id]) S.resMin[id] = v; }
+    return r;
+  };
+  let r, vainqueur;
+  try {
+    const jouer = () => partieRejouable(() => avecGraine(graine, () => partieGaleries(liste, duree || 900)));
+    r = opts.sansDefense ? sansDefenseIA(jouer) : jouer();
+    vainqueur = vainqueurSerie(r);
+  } finally { window.effet = eff; window.construireBatiment = cb; window.miseAJour = mj; window.commanderMunition = cm; }
+  const campsR = {};
+  for(const id of Object.keys(r.galeries)){
+    const g = r.galeries[id], d = S.defense[id] || {parasol:[], radar:[]};
+    campsR[id] = {niveau:g.niveau, faction:g.faction, galerie:g.chantier == null ? null : g.chantier, tirs:g.tirs.length,
+      parasol:d.parasol, radars:d.radar, munitions:S.munitions[id] || 0, intercepteurs:S.inter[id] || {tires:0, reussis:0},
+      missilesTires:S.missiles[id] || 0, triche:r.triche[id], resMin:Math.round(S.resMin[id])};
+  }
+  return {nom:typeof nom === 'string' ? nom : 'liste', graine, duree:duree || 900, sansDefense:!!opts.sansDefense, fin:r.temps, vainqueur,
+    erreur:r.erreur, camps:campsR, fautes:S.fautes};
+}
+window.partieDefense = partieDefense;
+// Ligne courte d'une partie de partieDefense (lecture rapide).
+function ligneDefense(p){
+  return p.nom + ' g' + p.graine + (p.sansDefense ? ' (sans défense)' : '') + ' | ' + p.fin + ' s ' + (p.vainqueur || '—') + (p.erreur ? ' ERREUR ' + p.erreur : '') + ' | ' +
+    Object.entries(p.camps).map(([id, c]) => id + ' ' + c.niveau.slice(0, 4) + ' ' + c.faction.slice(0, 1).toUpperCase() + ' gal ' + (c.galerie == null ? '—' : c.galerie) +
+      ' tirs ' + c.tirs + ' para ' + (c.parasol.join('/') || '—') + ' rad ' + c.radars.length + ' mun ' + c.munitions + ' int ' + c.intercepteurs.reussis + '/' + c.intercepteurs.tires).join(' ; ') +
+    (p.fautes.length ? ' | FAUTES ' + p.fautes.join(' ; ') : '');
+}
+window.ligneDefense = ligneDefense;
+// Série « la défense affaiblit-elle l'ordinateur ? » : pour chaque affrontement et chaque graine, trois parties de
+// même graine : option décochée (reprise de SANS_GALERIES si elle a déjà été jouée), galeries cochées sans la
+// défense de l'ordinateur, puis avec. Par morceaux synchrones (une partie par travail), comme
+// preparerSeriesGaleries : preparerSerieDefense('d', ['DH-NK', 'DH-DK', 'UH-DK'], [1,2,3,4,5], 900), puis
+// avancerSerieDefense('d', 30000) jusqu'à reste 0 ; RESULTATS.d.bilan.
+function preparerSerieDefense(cle, noms, graines, duree){
+  const travaux = [];
+  for(const n of noms) for(const g of graines) for(const v of ['decochee', 'sansDefense', 'avecDefense']) travaux.push([n, g, v]);
+  RESULTATS[cle] = {etat:'en cours', duree:duree || 900, travaux, faits:0, total:travaux.length, parties:{}, lignes:[], bilan:null};
+  return travaux.length + ' parties à jouer';
+}
+window.preparerSerieDefense = preparerSerieDefense;
+function avancerSerieDefense(cle, limite){
+  const R = RESULTATS[cle], t0 = performance.now();
+  while(R.travaux.length && performance.now() - t0 < (limite || 30000)){
+    const [n, g, v] = R.travaux[0], k = n + ':' + g, P = R.parties[k] || (R.parties[k] = {nom:n, graine:g});
+    if(v === 'decochee'){
+      const c = n + ':' + g + ':' + R.duree;
+      if(!SANS_GALERIES[c]){
+        const avant = optionGaleries; optionGaleries = false;
+        try { const r = partieRejouable(() => avecGraine(g, () => partieOrdinateurs(AFFRONTEMENTS_GALERIES[n], R.duree))); SANS_GALERIES[c] = {fin:r.temps, vainqueur:vainqueurSerie(r), erreur:r.erreur}; }
+        finally { optionGaleries = avant; }
+      }
+      P.decochee = SANS_GALERIES[c];
+    } else {
+      P[v] = partieDefense(n, g, R.duree, {sansDefense:v === 'sansDefense'});
+      R.lignes.push(ligneDefense(P[v]));
+    }
+    R.travaux.shift(); R.faits++;
+  }
+  if(!R.travaux.length){ R.bilan = bilanDefense(Object.values(R.parties), R.duree); R.etat = 'fini'; }
+  return {reste:R.travaux.length, faits:R.faits};
+}
+window.avancerSerieDefense = avancerSerieDefense;
+// Bilan d'une série : pour chaque variante cochée (sans, avec la défense de l'ordinateur), parmi les parties terminées
+// option décochée, part encore terminée, part au même vainqueur, durée médiane (non terminée : durée maximale) ; et,
+// directement entre « sans défense » et « avec » : même vainqueur, durées médianes ; puis l'usage de la défense
+// (camps qui bâtissent la batterie, radars, munitions, intercepteurs tirés et réussis) et les fautes.
+function bilanDefense(parties, duree){
+  duree = duree || 900;
+  parties = parties.filter(p => p.decochee && p.sansDefense && p.avecDefense);
+  const base = parties.filter(p => p.decochee.vainqueur), fin = p => p.vainqueur ? p.fin : duree;
+  const variante = v => {
+    const termine = base.filter(p => p[v].vainqueur).length, meme = base.filter(p => p[v].vainqueur === p.decochee.vainqueur).length;
+    return {encoreTermines:termine + ' / ' + base.length, memeVainqueur:meme + ' / ' + base.length, mediane:medianeSerie(base.map(p => fin(p[v])))};
+  };
+  const ab = {memeVainqueur:parties.filter(p => p.sansDefense.vainqueur === p.avecDefense.vainqueur).length + ' / ' + parties.length,
+    medianeSans:medianeSerie(parties.map(p => fin(p.sansDefense))), medianeAvec:medianeSerie(parties.map(p => fin(p.avecDefense))),
+    terminesSans:parties.filter(p => p.sansDefense.vainqueur).length, terminesAvec:parties.filter(p => p.avecDefense.vainqueur).length};
+  const usage = {campsMenaces:0, batteries:0, radars:0, munitions:0, intercepteurs:0, abattus:0, missilesTires:0};
+  const fautes = [];
+  for(const p of parties){
+    const A = p.avecDefense;
+    if(A.erreur || p.sansDefense.erreur || p.decochee.erreur) fautes.push(p.nom + ' g' + p.graine + ' erreur ' + (A.erreur || p.sansDefense.erreur || p.decochee.erreur));
+    for(const f of A.fautes) fautes.push(p.nom + ' g' + p.graine + ' ' + f);
+    for(const [id, c] of Object.entries(A.camps)){
+      if(!/^0 \/ 0 \//.test(c.triche) || c.resMin < 0) fautes.push(p.nom + ' g' + p.graine + ' ' + id + ' triche ' + c.triche + ', réserves min ' + c.resMin);
+      usage.missilesTires += c.missilesTires;
+      const menace = Object.entries(A.camps).some(([k, d]) => k !== id && hostile(id, k) && d.galerie != null);
+      if(menace && c.niveau !== 'facile') usage.campsMenaces++;
+      if(c.parasol.length) usage.batteries++;
+      usage.radars += c.radars.length; usage.munitions += c.munitions; usage.intercepteurs += c.intercepteurs.tires; usage.abattus += c.intercepteurs.reussis;
+    }
+  }
+  return {parties:parties.length, terminesDecochee:base.length, galeriesSansDefense:variante('sansDefense'), galeriesAvecDefense:variante('avecDefense'),
+    sansContreAvec:ab, usage, fautes};
+}
+window.bilanDefense = bilanDefense;
+
+// Essais automatiques des règles de la défense antimissile (cahier § 11.7). À lancer depuis front-de-sel.html?verif :
+//   avecGraine(7, () => testerDefense())   → règles (construction … option décochée) et ordinateur en scène courte
+//   testerDefense('parties', 0)            → partie d'ordinateurs n° 0, 1 ou 2 de 900 s, graine fixée par partie
+//                                            (sans numéro : les trois ; tache('d', () => testerDefense('parties')))
+// Renvoie une liste de verdicts {nom, ok, detail}. L'option est cochée pendant l'essai puis remise dans son état
+// d'avant ; chaque scène repart d'une partie neuve.
+function testerDefense(quoi, numero){
+  if(MISSION) return [{nom:'page', ok:false, detail:'testerDefense se lance depuis la page d’escarmouche (?verif), pas depuis une mission'}];
+  window.enregistrerVictoire = () => {};
+  const verdicts = [];
+  const V = (nom, ok, detail) => { verdicts.push({nom, ok:!!ok, detail:typeof detail === 'string' ? detail : JSON.stringify(detail)}); };
+  const DT = 0.05, EPS = 0.11;
+  const pas = s => { for(let k = 0; k < Math.round(s/DT); k++) miseAJour(DT); };
+  const jusqua = (cond, max) => { const t0 = temps; while(temps - t0 < max){ miseAJour(DT); if(cond()) return temps - t0; } return null; };
+  const r1 = v => Math.round(v*10)/10, r2 = v => Math.round(v*100)/100;
+  const qg = id => ents.find(e => e.camp === id && e.type === 'qg' && !e.mort);
+  // Scène : J Halden et K Halden alliés (équipe A), I Karsk (équipe B) ; ordinateurs arrêtés, seuls les QG restent.
+  const scene = () => {
+    reinitialiserPartie();
+    demarrer('halden', configTest('halden', '2c1'));
+    tableRase();
+    for(const id of campsEnJeu()){ camps[id].reserves = 20000; camps[id].points = 0; camps[id].recharges = {}; }
+  };
+  const poser = (type, id, pres) => { const p = trouverEmplacement(type, pres || qg(id)); return p ? creerBatiment(type, id, p.c, p.r, true) : null; };
+  const unite = (type, id, x, y) => { const p = pointLibre(x, y); return creerUnite(type, id, p.x, p.y); };
+  const versCentre = (id, d) => { const q = qg(id), a = Math.atan2(HAUT/2 - q.y, LARG/2 - q.x); return pointLibre(q.x + Math.cos(a)*d, q.y + Math.sin(a)*d); };
+  // Espions (remis en place à la fin) : effets créés (avec l'objet rendu), explosions de zone, messages par camp ;
+  // chances forcées par camp (forcees[camp] = 0 ou 100) pour rendre l'issue certaine.
+  const orig = {effet:window.effet, explosionZone:window.explosionZone, chancesInterception:window.chancesInterception};
+  const ecouteurAvant = ecouteurNotifications;
+  let journal = null, forcees = {};
+  const ecouter = () => { journal = {effets:[], zones:[], messages:[]}; };
+  window.effet = function(type, p){ const f = orig.effet.apply(this, arguments); if(journal) journal.effets.push({type, t:temps, p, f}); return f; };
+  window.explosionZone = function(x, y, r, deg, arme){ if(journal) journal.zones.push({t:temps, x, y, arme}); return orig.explosionZone.apply(this, arguments); };
+  window.chancesInterception = function(camp){ return camp in forcees ? forcees[camp] : orig.chancesInterception.apply(this, arguments); };
+  const optAvant = optionGaleries, reseauAvant = modeReseau, roleAvant = roleMonde;
+  try {
+    optionGaleries = true;
+    ecouteurNotifications = (camp, texte) => { if(journal) journal.messages.push({camp, texte}); };
+    if(quoi === 'parties') essaisParties();
+    else { essaisRegles(); essaisCycles(); essaisOrdinateur(); essaisOption(); }
+  } catch(err){
+    V('exécution de l’essai', false, 'ERREUR t=' + (typeof temps === 'number' ? temps.toFixed(2) : '?') + ' ' + err.message + ' | ' + String(err.stack || '').split('\n').slice(1, 3).join(' | '));
+  } finally {
+    Object.assign(window, orig);
+    ecouteurNotifications = ecouteurAvant;
+    optionGaleries = optAvant; modeReseau = reseauAvant; roleMonde = roleAvant;
+  }
+  return verdicts;
+
+  // ----------------------------------------------------------------- construction, limites, munitions, chances
+  function essaisRegles(){
+    // 1. Construction et limites, pour les deux factions.
+    scene();
+    for(const id of ['J', 'I']){
+      const q = qg(id);
+      // Un ouvrier par chantier (un ouvrier qui reçoit un nouvel ordre abandonne le chantier précédent).
+      const ordre = (type, pres) => { const p = trouverEmplacement(type, pres || q), o = unite(faction(id).ouvrier, id, q.x, q.y + 110);
+        return {type:'construire', bat:type, c:p.c, r:p.r, ouvrierIds:[o.id]}; };
+      const liste = batimentsConstructibles(faction(id));
+      const rSans = executerOrdre(id, ordre('parasol'));
+      V('construction ' + id + ' : batterie et radar dans la liste ; sans usine → refus', liste.includes('parasol') && liste.includes('radar') && !rSans.ok && /Nécessite/.test(rSans.motif || ''), {motif:rSans.motif});
+      poser('usine', id, {x:q.x, y:q.y - 220});
+      const r0 = camps[id].reserves, rOk = executerOrdre(id, ordre('parasol')), b = rOk.ok ? entiteParId(rOk.id) : null;
+      V('construction ' + id + ' : batterie acceptée avec usine, 600 payés', rOk.ok && b && b.enCours && r0 - camps[id].reserves === 600 && b.para && b.para.stock === 0 && b.para.fab === 0,
+        {ok:rOk.ok, motif:rOk.motif, paye:r0 - camps[id].reserves});
+      const rDeux = executerOrdre(id, ordre('parasol', {x:q.x + 300, y:q.y + 250}));
+      V('construction ' + id + ' : seconde batterie pendant le chantier → refus', !rDeux.ok && rDeux.motif === MOTIFS_LIMITE_DEFENSE.parasol, {motif:rDeux.motif});
+      const radars = [], r1r = camps[id].reserves;
+      for(const [dx, dy] of [[-260, 0], [260, 0], [0, 260], [0, -400]]){
+        const r = executerOrdre(id, ordre('radar', {x:q.x + dx, y:q.y + dy})); radars.push(r.ok ? 'accepté' : r.motif);
+      }
+      V('construction ' + id + ' : trois radars acceptés (250 pièce), le quatrième refusé', radars.slice(0, 3).every(x => x === 'accepté') && radars[3] === MOTIFS_LIMITE_DEFENSE.radar && r1r - camps[id].reserves === 750,
+        {radars, paye:r1r - camps[id].reserves});
+      const fini = jusqua(() => !ents.some(e => e.camp === id && e.def.defense && e.enCours && !e.mort), 400);
+      const rTrois = executerOrdre(id, ordre('parasol', {x:q.x - 300, y:q.y + 250}));
+      V('construction ' + id + ' : chantiers terminés (900 et 350 PV), seconde batterie toujours refusée', fini !== null && Math.abs(b.pv - 900) < 0.5 && !rTrois.ok && rTrois.motif === MOTIFS_LIMITE_DEFENSE.parasol
+        && ents.filter(e => e.camp === id && estRadar(e) && !e.mort).every(e => Math.abs(e.pv - 350) < 0.5), {fini:fini === null ? 'non' : r1(fini), motif:rTrois.motif});
+    }
+
+    // 2. Munitions : prix, plafond de 4, une à la fois en 30 s, réserves, chantier.
+    scene();
+    {
+      const b = poser('parasol', 'J'), D = b.def.defense, ordre = () => executerOrdre('J', {type:'fabriquerMunition', id:b.id});
+      const r0 = camps.J.reserves, a = ordre();
+      V('munitions : 120 payés à l’ordre, fabrication 30 s', a.ok && r0 - camps.J.reserves === 120 && b.para.fab === 1 && b.para.fabT === 30, {paye:r0 - camps.J.reserves, fab:b.para.fab, fabT:b.para.fabT});
+      const l = [ordre(), ordre(), ordre(), ordre()];
+      V('munitions : quatre au plus, prêtes ou en fabrication', l[0].ok && l[1].ok && l[2].ok && !l[3].ok && l[3].motif === MOTIF_MUNITIONS_PLEINES && b.para.fab === 4, {fab:b.para.fab, motif:l[3].motif});
+      const prets = [], t0 = temps;
+      for(let k = 0; k < Math.round(125/DT); k++){ miseAJour(DT); while(prets.length < b.para.stock) prets.push(r1(temps - t0)); }
+      V('munitions : une à la fois, prêtes à 30, 60, 90 et 120 s', prets.length === 4 && [30, 60, 90, 120].every((v, i) => Math.abs(prets[i] - v) <= EPS), {prets});
+      camps.J.reserves = 100; b.para.stock = 0;
+      const rr = ordre();
+      V('munitions : réserves insuffisantes → refus, rien de prélevé', !rr.ok && rr.code === 'reserves' && camps.J.reserves === 100 && b.para.fab === 0, {motif:rr.motif, code:rr.code});
+      camps.J.reserves = 20000;
+      const p = trouverEmplacement('parasol', qg('K')), bk = creerBatiment('parasol', 'K', p.c, p.r, false);
+      const rc = executerOrdre('K', {type:'fabriquerMunition', id:bk.id}), rAutre = executerOrdre('I', {type:'fabriquerMunition', id:b.id});
+      V('munitions : refus pour une batterie en chantier et pour la batterie d’un autre camp', !rc.ok && !rAutre.ok && b.para.fab === 0, {chantier:rc.motif, autreCamp:rAutre.motif});
+    }
+
+    // 3. Chances : 25, 42, 58 et 75 % selon les radars (fonction pure), puis 2 000 tirages à graine fixe par palier.
+    {
+      const attendu = [25, 25 + 50/3, 25 + 100/3, 75];
+      V('chances : 25, 41,7, 58,3, 75 % selon 0 à 3 radars, jamais plus de 75', [0, 1, 2, 3].every(n => Math.abs(chancesDepuisRadars(n) - attendu[n]) < 1e-9) && chancesDepuisRadars(5) === 75,
+        [0, 1, 2, 3, 5].map(chancesDepuisRadars).map(r2));
+      const mesures = [];
+      for(let n = 0; n <= 3; n++){
+        scene();
+        const b = poser('parasol', 'J'), gI = poser('terrier', 'I');
+        for(let k = 0; k < n; k++) poser('radar', 'J', {x:qg('J').x + (k - 1)*240, y:qg('J').y + 260});
+        gI.gal.t0 = temps; gI.gal.n = 1; gI.gal.tires = 0;
+        proposerInterceptions(gI);
+        repondreInterception('J', true);
+        const tir = chancesInterception('J');
+        let abattus = 0;
+        avecGraine(1000 + n, () => { for(let k = 0; k < 2000; k++){ b.para.stock = 1; if(tenterInterceptions(gI, b.x, b.y, {}, {}, DT)) abattus++; } });
+        mesures.push({radars:n, attendu:r1(attendu[n]), chancesDuCamp:r1(tir), mesure:r1(abattus/20)});
+      }
+      V('chances : 2 000 tirages par palier (0 à 3 radars) à ±3 points', mesures.every(m => Math.abs(m.mesure - m.attendu) <= 3 && Math.abs(m.chancesDuCamp - m.attendu) < 0.1), mesures);
+      // Radars qui ne comptent pas : en chantier, détruit, ou d'un allié.
+      scene();
+      poser('parasol', 'J');
+      const ra = poser('radar', 'J', {x:qg('J').x - 260, y:qg('J').y}), rb = poser('radar', 'J', {x:qg('J').x + 260, y:qg('J').y});
+      const pc = trouverEmplacement('radar', {x:qg('J').x, y:qg('J').y + 260}); creerBatiment('radar', 'J', pc.c, pc.r, false);
+      poser('radar', 'K');
+      const avant = chancesInterception('J');
+      rb.mort = true;
+      const apres = chancesInterception('J');
+      V('chances : radars en chantier, détruits ou alliés non comptés', Math.abs(avant - (25 + 100/3)) < 1e-9 && Math.abs(apres - (25 + 50/3)) < 1e-9 && radarsActifs('J') === 1,
+        {deuxFinisUnChantierUnAllie:r1(avant), apresUnDetruit:r1(apres), radarsActifs:radarsActifs('J')});
+      void ra;
+    }
+  }
+
+  // ----------------------------------------------------------------- cycles de tir complets
+  // I (Karsk, Terrier) tire sur le QG de J ; J a sa batterie près de son QG. Relevés : proposition, réponses,
+  // intercepteurs, impacts, issues lues par l'interface et messages, datés depuis l'ordre de tir.
+  function essaisCycles(){
+    const prepa = (stockJ, missiles) => {
+      scene();
+      const bJ = poser('parasol', 'J'), gI = poser('terrier', 'I');
+      bJ.para.stock = stockJ; gI.gal.stock = missiles;
+      return {bJ, gI, cible:qg('J')};
+    };
+    // Cycle : ordre de tir de I sur (x, y), réponse de J (undefined : aucune), 17,6 s de jeu ; pendant(t) appelée
+    // à chaque pas.
+    const cycle = (gI, x, y, reponse, pendant) => {
+      ecouter();
+      const ordre = executerOrdre('I', {type:'tirGalerie', id:gI.id, x, y}), t0 = temps;
+      const p0 = propositionEnCours('J');
+      const rep = reponse === undefined ? null : executerOrdre('J', {type:'repondreInterception', oui:reponse});
+      const issues = [], A = {};
+      for(let k = 0; k < Math.round(17.6/DT); k++){
+        miseAJour(DT);
+        const t = temps - t0;
+        if(pendant) pendant(t, A);
+        const r = resultatInterception('J'), is = r ? r.issue : null;
+        if(!issues.length || issues[issues.length - 1][1] !== is) issues.push([r2(t), is]);
+      }
+      const rel = l => l.map(e => r2(e.t - t0));
+      return {ordre, p0, rep, A, issues,
+        impacts:rel(journal.zones.filter(z => z.arme === 'missileGalerie')),
+        inter:journal.effets.filter(e => e.type === 'intercepteur').map(e => ({t:r2(e.t - t0), camp:e.p.camp, duree:e.p.duree, reussi:e.p.reussi})),
+        missiles:journal.effets.filter(e => e.type === 'missile' && e.p.galerie).map(e => e.f),
+        marqueurs:journal.effets.filter(e => e.type === 'marqueur' && e.p.pouvoir === 'galerie').map(e => e.f),
+        msg:(camp, re) => journal.messages.filter(m => m.camp === camp && re.test(m.texte)).length};
+    };
+    const issueA = (c, t) => { let v = null; for(const [ti, is] of c.issues) if(ti <= t + 1e-6) v = is; return v; };
+
+    // A. Réussite (chances forcées à 100 %).
+    {
+      const {bJ, gI, cible} = prepa(2, 1);
+      forcees = {J:100};
+      // (Le marqueur est relevé juste avant et juste après la rencontre : à la fin du cycle, il aurait expiré de toute façon.)
+      const marqueur = () => { const m = journal.effets.find(e => e.type === 'marqueur' && e.p.pouvoir === 'galerie'); return m ? m.f.vie : null; };
+      const pvQG = cible.pv, c = cycle(gI, cible.x, cible.y, true, (t, A) => {
+        if(A.stock95 == null && t >= 9.6) A.stock95 = bJ.para.stock;
+        if(A.vieAvant == null && t >= 12.3) A.vieAvant = marqueur();
+        if(A.vieApres == null && t >= 12.7) A.vieApres = marqueur();
+      });
+      forcees = {};
+      V('réussite : proposition à l’ordre de tir (sans réponse, 1 missile, 25 % sans radar), réponse acceptée',
+        c.ordre.ok && c.p0 && c.p0.reponse === null && c.p0.n === 1 && c.p0.radars === 0 && orig.chancesInterception('J') === 25 && c.rep && c.rep.ok, {p0:c.p0, rep:c.rep});
+      V('réussite : un intercepteur au départ (9,5 s, rencontre à 3 s), une munition dépensée, b.intT posé', c.inter.length === 1 && Math.abs(c.inter[0].t - 9.5) <= EPS && c.inter[0].duree === 3
+        && c.inter[0].reussi === true && c.A.stock95 === 1 && bJ.para.stock === 1 && typeof bJ.intT === 'number', {inter:c.inter, stock:bJ.para.stock, intT:bJ.intT});
+      V('réussite : missile abattu (abattuA = 3), aucun impact, QG intact, marqueur effacé', c.missiles.length === 1 && c.missiles[0].abattuA === 3 && c.impacts.length === 0
+        && cible.pv === pvQG && c.marqueurs.length === 1 && c.A.vieAvant > 1 && c.A.vieApres <= 0,
+        {abattuA:c.missiles.map(m => m.abattuA), impacts:c.impacts, marqueur:[c.A.vieAvant, c.A.vieApres].map(v => v == null ? v : r2(v))});
+      V('réussite : issue « en vol » puis « réussie » à la rencontre (12,5 s) ; messages au défenseur et au tireur', issueA(c, 12.4) === 'enVol' && issueA(c, 12.7) === 'reussie'
+        && c.msg('J', /Interception réussie/) === 1 && c.msg('I', /Missile intercepté/) === 1, {issues:c.issues});
+    }
+    // B. Échec (0 %).
+    {
+      const {bJ, gI, cible} = prepa(2, 1);
+      forcees = {J:0};
+      const pvQG = cible.pv, c = cycle(gI, cible.x, cible.y, true);
+      forcees = {};
+      V('échec : intercepteur tiré, munition dépensée, impact à 14,5 s, QG touché, « manquée »', c.inter.length === 1 && c.inter[0].reussi === false && bJ.para.stock === 1
+        && c.impacts.length === 1 && Math.abs(c.impacts[0] - 14.5) <= EPS && cible.pv < pvQG && issueA(c, 12.7) === 'manquee' && c.msg('J', /Interception manquée/) === 1 && c.msg('I', /intercepté/) === 0,
+        {inter:c.inter, impacts:c.impacts, issues:c.issues});
+    }
+    // C. Hors zone : point d'impact à plus de 560 px (plus la dispersion) de la batterie.
+    {
+      const {bJ, gI} = prepa(2, 1), p = versCentre('J', 950);
+      const loin = Math.hypot(p.x - bJ.x, p.y - bJ.y);
+      const c = cycle(gI, p.x, p.y, true);
+      V('hors zone : rien de tiré ni dépensé, l’impact a lieu, issue « horsZone »', loin > 560 + 45 && c.inter.length === 0 && bJ.para.stock === 2 && c.impacts.length === 1
+        && issueA(c, 10) === 'horsZone' && c.msg('J', /hors de la zone/) === 1, {distance:Math.round(loin), impacts:c.impacts, issues:c.issues});
+    }
+    // D. Sans autorisation (aucune réponse), puis « laisser passer ».
+    for(const reponse of [undefined, false]){
+      const {bJ, gI, cible} = prepa(2, 1), c = cycle(gI, cible.x, cible.y, reponse);
+      V('sans autorisation (' + (reponse === undefined ? 'aucune réponse' : 'laisser passer') + ') : rien de tiré ni dépensé, l’impact a lieu', c.inter.length === 0 && bJ.para.stock === 2
+        && c.impacts.length === 1 && c.issues.every(([, is]) => is === null) && (reponse === undefined || (c.rep && c.rep.ok)), {impacts:c.impacts, rep:c.rep});
+    }
+    // E. Sans munition.
+    {
+      const {gI, cible} = prepa(0, 1), c = cycle(gI, cible.x, cible.y, true);
+      V('sans munition : réponse acceptée, rien de tiré, l’impact a lieu, issue « sansMunition »', c.rep && c.rep.ok && c.inter.length === 0 && c.impacts.length === 1
+        && issueA(c, 10) === 'sansMunition' && c.msg('J', /Aucune munition prête/) === 1, {impacts:c.impacts, issues:c.issues});
+    }
+    // F. Salve de deux missiles : deux munitions → deux tirs ; une seule → un sur deux.
+    {
+      const {bJ, gI, cible} = prepa(2, 2);
+      forcees = {J:100};
+      const c = cycle(gI, cible.x, cible.y, true);
+      forcees = {};
+      const r = resultatInterception('J');
+      V('salve : deux munitions, deux intercepteurs (9,5 et 10,1 s), aucun impact, « réussie »', c.p0.n === 2 && c.inter.length === 2 && Math.abs(c.inter[1].t - 10.1) <= EPS && bJ.para.stock === 0
+        && c.impacts.length === 0 && issueA(c, 13.2) === 'reussie', {inter:c.inter, issues:c.issues, r});
+      const P = prepa(1, 2);
+      forcees = {J:100};
+      const c2 = cycle(P.gI, P.cible.x, P.cible.y, true);
+      forcees = {};
+      V('salve : une seule munition, un abattu sur deux, un impact (15,1 s), « partielle »', c2.inter.length === 1 && P.bJ.para.stock === 0 && c2.impacts.length === 1
+        && Math.abs(c2.impacts[0] - 15.1) <= EPS && issueA(c2, 13.2) === 'partielle', {inter:c2.inter, impacts:c2.impacts, issues:c2.issues});
+    }
+    // Corrections du 20 novembre 2026 (constats du contrôle du lot A).
+    {
+      // Salve : le caisson ne retombe pas au second tir (b.intT reste l'heure du premier).
+      const {bJ, gI, cible} = prepa(2, 2);
+      forcees = {J:100};
+      const c = cycle(gI, cible.x, cible.y, true, (t, A) => { if(t >= 10.3 && A.intT === undefined) A.intT = r2(bJ.intT - (temps - t)); });
+      forcees = {};
+      V('salve : le caisson reste levé au second tir (b.intT garde l’heure du premier, 9,5 s)', c.inter.length === 2 && Math.abs(c.A.intT - 9.5) <= EPS, {intT:c.A.intT, inter:c.inter});
+    }
+    {
+      // Deux galeries adverses à la suite : deux propositions ouvertes, I et L valent pour toutes.
+      const {bJ, gI, cible} = prepa(4, 1), g2 = poser('terrier', 'I', {x:gI.x, y:gI.y + 240});
+      g2.gal.stock = 1;
+      const o1 = executerOrdre('I', {type:'tirGalerie', id:gI.id, x:cible.x, y:cible.y});
+      for(let k = 0; k < Math.round(2/DT); k++) miseAJour(DT);
+      const o2 = executerOrdre('I', {type:'tirGalerie', id:g2.id, x:cible.x, y:cible.y});
+      FENETRE_DEFENSE.fermees = {};
+      const p = propositionEnCours('J', FENETRE_DEFENSE.fermees), props = () => Object.values(camps.J.interception.propositions).map(q => q.reponse);
+      const local = campLocal() === 'J';
+      let apresI = null, apresAnnuler = null, apresL = null, restante = undefined, titre = '';
+      if(local){
+        majFenetreDefense(); titre = (el('defense').querySelector('.titre') || {}).textContent || '';
+        toucheDefense('i'); apresI = props();
+        toucheDefense('l'); apresAnnuler = props();
+        toucheDefense('l'); apresL = props(); restante = propositionEnCours('J', FENETRE_DEFENSE.fermees);
+        FENETRE_DEFENSE.fermees = {}; majFenetreDefense();
+      }
+      V('deux galeries à la suite : deux propositions ouvertes, la fenêtre le dit, I autorise les deux, L annule les deux puis les ferme',
+        o1.ok && o2.ok && p && p.ouvertes === 2 && p.cles.length === 2 && p.galerie === gI.id && local && /2 galeries/.test(titre)
+        && apresI.every(x => x === true) && apresAnnuler.every(x => x === false) && apresL.every(x => x === false) && restante === null,
+        {ordres:[o1.ok || o1.motif, o2.ok || o2.motif], ouvertes:p && p.ouvertes, local, titre, apresI, apresAnnuler, apresL, restante:restante === null ? null : 'encore ouverte'});
+    }
+    {
+      // J sans munition, K (allié) abat : J ne lit pas « un impact », mais « réussie » (abattu par un allié).
+      const {bJ, gI, cible} = prepa(0, 1), bK = poser('parasol', 'K', {x:cible.x, y:cible.y + 200});
+      bK.para.stock = 2;
+      forcees = {J:100, K:100};
+      const c = cycle(gI, cible.x, cible.y, true);
+      forcees = {};
+      const rJ = Object.values(camps.J.interception.resultats)[0] || null;
+      V('alliés : J sans munition, K abat au départ ; J compte le missile abattu par un allié (« réussie », pas « sans munition »)',
+        c.inter.length === 1 && c.inter[0].camp === 'K' && c.inter[0].t === 9.5 && c.impacts.length === 0 && rJ && rJ.sansMunition === 0 && rJ.parAllie === 1 && issueA(c, 13.2) === 'reussie',
+        {inter:c.inter, rJ, issues:c.issues});
+    }
+    {
+      // Pas de temps irrégulier (jeu réel) : le tour de l'allié arrive un peu après 3 s de vol, il doit tirer quand même.
+      const {bJ, gI, cible} = prepa(2, 1), bK = poser('parasol', 'K', {x:cible.x, y:cible.y + 200});
+      bK.para.stock = 2;
+      forcees = {J:0, K:100};
+      ecouter();
+      executerOrdre('I', {type:'tirGalerie', id:gI.id, x:cible.x, y:cible.y}); executerOrdre('J', {type:'repondreInterception', oui:true});
+      const t0 = temps; let k = 0;
+      while(temps - t0 < 17.6) miseAJour([0.016, 0.031, 0.05, 0.021][k++ % 4]);
+      forcees = {};
+      const inter = journal.effets.filter(e => e.type === 'intercepteur').map(e => ({t:r2(e.t - t0), camp:e.p.camp, duree:r2(e.p.duree)}));
+      const impacts = journal.zones.filter(z => z.arme === 'missileGalerie').length;
+      V('alliés, pas de temps irrégulier : K tire quand même après la rencontre manquée de J, et abat',
+        inter.length === 2 && inter[1].camp === 'K' && inter[1].t >= 12.4 && inter[1].t <= 12.7 && impacts === 0 && bK.para.stock === 1, {inter, impacts, stockK:bK.para.stock});
+    }
+    {
+      // Radar perdu : attente, puis deux reconstructions au plus (fonction de lecture radarPermisIA).
+      const t = temps;
+      V('ordinateur : radar perdu → pas de reconstruction avant 60 s, plus aucune après la troisième perte',
+        radarPermisIA({}) && !radarPermisIA({radarsPerdus:[{x:0, y:0, t:t - 10}]}) && radarPermisIA({radarsPerdus:[{x:0, y:0, t:t - 61}]})
+        && radarPermisIA({radarsPerdus:[{t:t - 300}, {t:t - 61}]}) && !radarPermisIA({radarsPerdus:[{t:t - 300}, {t:t - 200}, {t:t - 100}]}), {});
+    }
+    // G. Batterie détruite avant le départ.
+    {
+      const {bJ, gI, cible} = prepa(2, 1), tueur = unite('lynx', 'I', bJ.x + 150, bJ.y);
+      const c = cycle(gI, cible.x, cible.y, true, (t, A) => { if(t >= 5 && !A.fait){ A.fait = true; infliger(bJ, 1e6, tueur); A.prop = null; } if(A.fait && t > 5.2 && A.prop === null) A.prop = propositionEnCours('J'); });
+      V('batterie détruite avant le départ : aucun tir, l’impact a lieu, plus de proposition', bJ.mort && c.inter.length === 0 && c.impacts.length === 1 && c.A.prop === null, {mort:bJ.mort, impacts:c.impacts});
+    }
+    // H. Galerie détruite pendant son ouverture, avant le départ.
+    {
+      const {bJ, gI, cible} = prepa(2, 1), tueur = unite('lynx', 'J', gI.x - 150, gI.y);
+      const c = cycle(gI, cible.x, cible.y, true, (t, A) => { if(t >= 5 && !A.fait){ A.fait = true; infliger(gI, 1e6, tueur); } if(A.fait && t > 5.2 && A.prop === undefined) A.prop = propositionEnCours('J'); });
+      V('galerie détruite avant le départ : aucun missile, aucun tir, munitions intactes, plus de proposition', gI.mort && c.missiles.length === 0 && c.inter.length === 0 && bJ.para.stock === 2
+        && c.A.prop === null && resultatInterception('J') === null, {mort:gI.mort, missiles:c.missiles.length, stock:bJ.para.stock});
+    }
+    // I. Alliés : J et K (ordinateur, qui accepte seul s'il a une munition) couvrent le même point.
+    {
+      for(const [cJ, cK] of [[0, 100], [100, 0]]){
+        const {bJ, gI, cible} = prepa(2, 1), bK = poser('parasol', 'K', {x:cible.x, y:cible.y + 200});
+        bK.para.stock = 2;
+        forcees = {J:cJ, K:cK};
+        const c = cycle(gI, cible.x, cible.y, true, (t, A) => { if(A.repK === undefined){ const E = camps.K.interception; const p = E && Object.values(E.propositions)[0]; A.repK = p ? p.reponse : null; } });
+        forcees = {};
+        const rJ = c.issues.length ? c.issues[c.issues.length - 1][1] : null;
+        const rK = (camps.K.interception && Object.values(camps.K.interception.resultats)[0]) || null;
+        if(cJ === 0) V('alliés : J manque, K (son allié) ne tire qu’à la rencontre manquée de J (12,5 s, rencontre 1,5 s plus tard) et abat ; pas d’impact ; J lit « réussie » (abattu par un allié)',
+          c.A.repK === true && c.inter.length === 2 && c.inter[0].camp === 'J' && !c.inter[0].reussi && c.inter[1].camp === 'K' && c.inter[1].t === 12.5 && Math.abs(c.inter[1].duree - 1.5) < 1e-6 && c.inter[1].reussi
+          && c.impacts.length === 0 && bJ.para.stock === 1 && bK.para.stock === 1 && issueA(c, 12.7) === 'manquee' && issueA(c, 13.2) === 'manquee' && issueA(c, 14.2) === 'reussie' && c.msg('J', /Notre allié a abattu/) === 1,
+          {repK:c.A.repK, inter:c.inter, issuesJ:c.issues, stocks:[bJ.para.stock, bK.para.stock]});
+        else V('alliés : J abat, K n’a pas à tirer (munition gardée) et compte le missile abattu par son allié',
+          c.inter.length === 1 && c.inter[0].camp === 'J' && c.impacts.length === 0 && bK.para.stock === 2 && rK && rK.parAllie === 1 && rJ === 'reussie',
+          {inter:c.inter, rK, stockK:bK.para.stock});
+      }
+      // L'ordinateur sans munition n'autorise pas.
+      const {gI, cible} = prepa(2, 1), bK = poser('parasol', 'K', {x:cible.x, y:cible.y + 200});
+      bK.para.stock = 0;
+      executerOrdre('I', {type:'tirGalerie', id:gI.id, x:cible.x, y:cible.y});
+      const pK = Object.values(camps.K.interception.propositions)[0];
+      V('ordinateur : sans munition, il n’autorise pas (réponse « non » à l’ordre de tir)', pK && pK.reponse === false, {reponse:pK && pK.reponse});
+    }
+  }
+
+  // ----------------------------------------------------------------- ordinateur, scène courte
+  // I (Difficile) et K (Facile) jouent seuls depuis une base rasée (QG, usine, 20 000 en réserve). Sans galerie
+  // hostile : aucune défense. J pose une galerie : I bâtit sa batterie près de son QG, deux radars écartés, commande
+  // deux munitions (jamais au-delà), puis autorise d'office l'interception d'un tir de J ; K (Facile) ne fait rien.
+  function essaisOrdinateur(){
+    scene();
+    poser('usine', 'I', {x:qg('I').x, y:qg('I').y - 220}); poser('usine', 'K', {x:qg('K').x, y:qg('K').y - 220});
+    confierAOrdinateur('I', 'difficile'); confierAOrdinateur('K', 'facile');
+    // (Pas de vague d'assaut : au premier essai, J, réduit à son QG, était éliminé avant la fin de la scène.)
+    etatIA('I').premiereVague = Infinity; etatIA('K').premiereVague = Infinity;
+    const defenses = id => ents.filter(e => e.camp === id && e.def.defense && !e.mort);
+    pas(60);
+    const avant = defenses('I').length + defenses('K').length;
+    const gJ = poser('aiguille', 'J'), gJpos = {x:gJ.x, y:gJ.y};
+    const cm = window.commanderMunition, depasse = [];
+    window.commanderMunition = function(b){ const n = b.para.stock + b.para.fab, ok = cm.apply(this, arguments); if(ok && n >= 2) depasse.push(b.camp); return ok; };
+    // (20 novembre 2026) L'ordinateur, qui a sa propre galerie à son plan, ne bâtit sa défense qu'après elle, sauf
+    // s'il a subi un tir de galerie : 60 s sans tir, rien ; puis J tire un missile au milieu de la carte.
+    pas(60);
+    const avantTir = defenses('I').length;
+    gJ.gal.stock = 1;
+    const tirLoin = executerOrdre('J', {type:'tirGalerie', id:gJ.id, x:LARG/2, y:HAUT/2});
+    pas(20);
+    V('ordinateur : pas de défense avant sa propre galerie tant qu’il n’a subi aucun tir de galerie ; un tir subi la déclenche',
+      avantTir === 0 && tirLoin.ok && etatsIA.I.defense && etatsIA.I.defense.subi === true, {avantTir, tir:tirLoin.ok || tirLoin.motif, subi:etatsIA.I.defense && etatsIA.I.defense.subi});
+    let t;
+    try {
+      t = jusqua(() => { const b = defenses('I').find(estParasol), rad = defenses('I').filter(e => estRadar(e) && !e.enCours);
+        return b && !b.enCours && b.para.stock >= 2 && rad.length >= 2; }, 400);
+    } finally { window.commanderMunition = cm; }
+    const bI = defenses('I').find(estParasol), radars = defenses('I').filter(estRadar), qI = qg('I');
+    const ecarts = [];
+    for(let a = 0; a < radars.length; a++) for(let b = a + 1; b < radars.length; b++) ecarts.push(Math.round(dist(radars[a], radars[b])));
+    V('ordinateur : rien sans galerie hostile ; puis batterie, deux radars (Difficile) et deux munitions', avant === 0 && t !== null && bI && radars.length === 2 && bI.para.stock + bI.para.fab === 2 && depasse.length === 0,
+      {avantGalerie:avant, delai:t === null ? 'non' : r1(t), radars:radars.length, munitions:bI && [bI.para.stock, bI.para.fab], depasse, journal:(etatsIA.I.defense || {journal:[]}).journal.map(l => l.t + ' ' + l.quoi + ' ' + (l.type || ''))});
+    V('ordinateur : batterie près du QG (zone sur le QG), radars dans la base et écartés', bI && dist(bI, qI) < 350 && radars.every(r => dist(r, qI) < 500) && ecarts.every(d => d >= 150),
+      {batterieQG:bI && Math.round(dist(bI, qI)), radarsQG:radars.map(r => Math.round(dist(r, qI))), ecarts});
+    V('ordinateur Facile : aucune défense, malgré la galerie hostile', defenses('K').length === 0 && !(etatsIA.K && etatsIA.K.defense), {defensesK:defenses('K').length});
+    if(bI){
+      gJ.gal.stock = 1;
+      ecouter();
+      const r = executerOrdre('J', {type:'tirGalerie', id:gJ.id, x:qI.x, y:qI.y});
+      const p = camps.I.interception && Object.values(camps.I.interception.propositions).find(x => x.galerie === gJ.id);
+      pas(11);
+      const tirs = journal.effets.filter(e => e.type === 'intercepteur' && e.p.camp === 'I').length;
+      V('ordinateur : autorise d’office l’interception et tire au départ du missile', r.ok && p && p.reponse === true && tirs === 1,
+        {ordre:r.ok || r.motif, reponse:p && p.reponse, tirs, galerie:gJpos, galerieMorte:gJ.mort, campJ:camps.J.elimine ? 'éliminé' : 'en jeu', t:r1(temps)});
+    }
+  }
+
+  // ----------------------------------------------------------------- option décochée, en ligne, mission
+  function essaisOption(){
+    scene();
+    const q = qg('J'), o = unite('technicien', 'J', q.x, q.y + 110);
+    poser('usine', 'J', {x:q.x, y:q.y - 220});
+    const b = poser('parasol', 'J'), gI = poser('terrier', 'I'); gI.gal.stock = 1;
+    const pc = trouverEmplacement('radar', {x:q.x + 260, y:q.y});
+    const photo0 = photoEtat(), res = [];
+    for(const [opt, mr, rm] of [[false, null, null], [true, 'hote', 'hote'], [true, 'invite', 'invite'], [true, 'echo', null]]){
+      optionGaleries = opt; modeReseau = mr; roleMonde = rm;
+      const a = executerOrdre('J', {type:'fabriquerMunition', id:b.id}), r = executerOrdre('J', {type:'repondreInterception', oui:true});
+      const c = mr === 'invite' ? null : executerOrdre('J', {type:'construire', bat:'radar', c:pc.c, r:pc.r, ouvrierIds:[o.id]});
+      const listes = ['halden', 'karsk'].map(f => batimentsConstructibles(FACTIONS[f])).every(l => !l.includes('parasol') && !l.includes('radar'));
+      res.push({option:opt, mode:mr, actif:galeriesActives(), fab:a.ok ? 'ACCEPTÉ' : a.motif, reponse:r.ok ? 'ACCEPTÉ' : r.motif, construire:c ? (c.ok ? 'ACCEPTÉ' : c.motif) : '-', listes});
+      optionGaleries = true; modeReseau = reseauAvant; roleMonde = roleAvant;
+    }
+    const sansCode = ordreVersReseau({type:'fabriquerMunition', id:b.id}) === null && ordreVersReseau({type:'repondreInterception', oui:true}) === null
+      && !['fabriquerMunition', 'repondreInterception'].some(k => Object.prototype.hasOwnProperty.call(CODES_ORDRES, k))
+      && !tablesReseau().batiments.includes('parasol') && !tablesReseau().batiments.includes('radar');
+    V('option décochée et en ligne (hôte, invité, écho) : munition, réponse et radar refusés, absents des listes ; aucun code ni table réseau ; état inchangé',
+      res.every(r => !r.actif && r.fab !== 'ACCEPTÉ' && r.reponse !== 'ACCEPTÉ' && r.construire !== 'ACCEPTÉ' && r.listes && r.fab === MOTIF_SANS_GALERIES) && sansCode && photoEtat() === photo0, {res, sansCode});
+    V('mission : batterie et radar réservés à l’escarmouche, option jamais active en mission',
+      RESERVES_ESCARMOUCHE.batiments.has('parasol') && RESERVES_ESCARMOUCHE.batiments.has('radar') && /!MISSION/.test(String(galeriesActives)), String(galeriesActives));
+    // Ordinateur, option décochée : une galerie hostile posée à la main ne lui fait rien bâtir ni épargner.
+    scene();
+    poser('usine', 'I', {x:qg('I').x, y:qg('I').y - 220});
+    confierAOrdinateur('I', 'difficile');
+    poser('aiguille', 'J');
+    optionGaleries = false;
+    try { pas(90); } finally { optionGaleries = true; }
+    V('ordinateur, option décochée : aucune défense ni mémoire de défense', !ents.some(e => e.camp === 'I' && e.def.defense) && !(etatsIA.I && etatsIA.I.defense), {defense:!!(etatsIA.I && etatsIA.I.defense)});
+  }
+
+  // ----------------------------------------------------------------- parties d'ordinateurs
+  // Parties de 900 s à graine fixe, option cochée, où l'ordinateur gère seul galeries et défenses. Graines choisies
+  // le 19 novembre 2026 pour que chaque partie montre ce qu'elle doit montrer (sujets : camps qui doivent bâtir leur
+  // batterie ; tir : au moins un intercepteur tiré dans la partie).
+  function essaisParties(){
+    const parties = PARTIES_DEFENSE;
+    for(const P of parties){
+      if(typeof numero === 'number' && parties.indexOf(P) !== numero) continue;
+      const r = partieDefense(P.nom, P.graine, 900);
+      const nom = P.nom + ' (graine ' + P.graine + ', 900 s)';
+      const bilan = P.sujets.map(id => ({camp:id, parasol:r.camps[id].parasol, radars:r.camps[id].radars, munitions:r.camps[id].munitions, intercepteurs:r.camps[id].intercepteurs}));
+      const tirs = Object.values(r.camps).reduce((s, c) => s + c.intercepteurs.tires, 0);
+      V('partie ' + nom + ' : ' + P.sujets.join(' et ') + (P.sujets.length > 1 ? ' bâtissent leur batterie et leurs radars, commandent' : ' bâtit sa batterie et ses radars, commande') + ' des munitions' + (P.tir ? ' ; au moins un intercepteur tiré' : ''),
+        !r.erreur && bilan.every(b => b.parasol.length >= 1 && b.radars.length >= 1 && b.munitions >= 1) && (!P.tir || tirs >= 1), {bilan, tirs, ligne:ligneDefense(r)});
+      V('partie ' + nom + ' : sans triche (écart 0, aucune unité sans commande, réserves ≥ 0), batterie jamais avant une galerie hostile, rien chez Facile, aucune erreur',
+        !r.erreur && r.fautes.length === 0 && Object.values(r.camps).every(c => /^0 \/ 0 \//.test(c.triche) && c.resMin >= 0), {fautes:r.fautes, triche:Object.fromEntries(Object.entries(r.camps).map(([id, c]) => [id, c.triche + ', min ' + c.resMin]))});
+    }
+  }
+}
+window.testerDefense = testerDefense;
+// Parties d'essai de testerDefense('parties') (affrontement de AFFRONTEMENTS_GALERIES, graine, camps qui doivent
+// bâtir, intercepteur attendu). Graines : voir le commentaire de essaisParties.
+// Relevé du 19 novembre 2026 (partieDefense, 900 s) : DH-NK, NH-NK, UH-DK graines 1 à 6 ; UH-UK, UK-DH 1 à 8 ;
+// quatre 1 à 6. Retenues : DH-DK 25 (galerie de J à 454 s, batterie de I dans la seconde, deux radars, deux missiles
+// abattus sur deux), NH-NK 4 (galerie de I à 595 s, batterie de J à 616 s, un radar, un intercepteur manqué) et
+// quatre 3 (galerie de J à 449 s ; I et K bâtissent, K abat un missile sur deux). Aucune partie relevée ne montre
+// Ultra bâtir radars et munitions (UH-UK 7 : batterie de I à 871 s seulement) : Ultra n'est donc pas couvert par ces
+// parties d'essai (il passe par les mêmes fonctions que Normale et Difficile).
+// Rechoisies le 20 novembre 2026 (l'ordinateur bâtit désormais sa galerie avant sa défense, sauf tir déjà subi ;
+// relevé : DH-DK 22 à 24, NH-NK 1 à 10, quatre 1 à 8). Retenues : DH-DK 24 (galeries à 469 et 492 s, batteries à
+// 516 et 594 s, deux radars chacun, 4 intercepteurs dont 3 réussis), NH-NK 6 (galeries à 588 et 637 s, batteries
+// à 654 et 741 s, un radar chacun, un intercepteur réussi) et quatre 2 (J, sans galerie, subit deux tirs de K puis
+// bâtit batterie et deux radars : la défense déclenchée par un tir subi ; aucun tir après, donc pas d'intercepteur).
+// Vu dans ce relevé et pas corrigé : NH-NK 7 et 8, DH-DK 22, un ordinateur sans galerie subit un ou deux tirs en fin
+// de partie et ne bâtit pas de batterie avant 900 s.
+const PARTIES_DEFENSE = [
+  {nom:'DH-DK', graine:24, sujets:['J', 'I'], tir:true},
+  {nom:'NH-NK', graine:6, sujets:['J', 'I'], tir:true},
+  {nom:'quatre', graine:2, sujets:['J'], tir:false},
+];
+window.PARTIES_DEFENSE = PARTIES_DEFENSE;

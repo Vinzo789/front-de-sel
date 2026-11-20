@@ -154,10 +154,15 @@
     const t = D.taille || 1;
     return {id:idFictif++, est:'batiment', type, def:D, camp, c:0, r:0, x:0, y:0, rayon:t*16,
       pvMax:D.pv || 100, pv:D.pv || 100, enCours:false, progres:1, file:[], prodT:0, rally:null, mort:false,
-      angleT:Math.PI*0.75, tirT:-99, recharge:0, scan:0, cible:null, rang:0, kills:0,
+      // (Batterie Parasol : caisson tourné vers le sud-est, alvéoles et coiffes face à la caméra)
+      angleT:type === 'parasol' ? 1.05 : Math.PI*0.75, tirT:-99, recharge:0, scan:0, cible:null, rang:0, kills:0,
       // Galerie de tir (novembre 2026) : photographiée ouverte, lanceurs sortis et missiles dressés
-      // (fermée, ce n'est qu'une butte : le bouton ne dirait rien).
+      // (fermée, ce n'est qu'une butte : le bouton ne dirait rien). 7,9 s : missiles presque dressés,
+      // encore sur leur berceau (départ à 9,5 s depuis la défense antimissile).
       galT:D.galerie ? 7.9 : null,
+      // Batterie Parasol (novembre 2026) : photographiée au tir, caisson levé, intercepteur sortant de son
+      // alvéole dans sa flamme (b.intT = heure du tir ; les vignettes sont rendues à l'heure 0).
+      intT:type === 'parasol' ? -1.0 : null,
       dansAura:false, auraT:0, toucheT:-99, nom:null, selectionne:false};
   }
 
