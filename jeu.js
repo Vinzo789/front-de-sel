@@ -363,14 +363,15 @@ const POUVOIRS = {
 // alliance, arrivée à 300 s, normal) : Halden gagne 509 s après l'arrivée, Karsk 558 s (avant la
 // correction des tireurs d'élite : 779 s et 901 s).
 const DIFFICULTES = {
+// Bouclier du vaisseau-mère doublé le 20 novembre 2026, à la demande du propriétaire (1 500 / 2 000 / 2 500 avant).
   facile:   {revenu:0.7, premiereVague:330, vague:5, vagueMul:0.7,
-    invasion:{pv:5600, bouclier:1500, rayonDeg:320, rayonZone:95, charge:4.5, rayonRecharge:67, defDeg:9,
+    invasion:{pv:5600, bouclier:3000, rayonDeg:320, rayonZone:95, charge:4.5, rayonRecharge:67, defDeg:9,
       escadrille:2, dardsMax:4, dardsT:98, rodeurs:1, rodeursMax:2, rodeursT:110, vitesse:12, observation:90}},
   normal:   {revenu:1.0, premiereVague:210, vague:7, vagueMul:1,
-    invasion:{pv:7000, bouclier:2000, rayonDeg:400, rayonZone:100, charge:4, rayonRecharge:67, defDeg:12,
+    invasion:{pv:7000, bouclier:4000, rayonDeg:400, rayonZone:100, charge:4, rayonRecharge:67, defDeg:12,
       escadrille:2, dardsMax:5, dardsT:80, rodeurs:1, rodeursMax:2, rodeursT:86, vitesse:14, observation:60}},
   difficile:{revenu:1.35, premiereVague:150, vague:8, vagueMul:1.3,
-    invasion:{pv:10000, bouclier:2500, rayonDeg:500, rayonZone:110, charge:4, rayonRecharge:45, defDeg:16,
+    invasion:{pv:10000, bouclier:5000, rayonDeg:500, rayonZone:110, charge:4, rayonRecharge:45, defDeg:16,
       escadrille:3, dardsMax:9, dardsT:64, rodeurs:2, rodeursMax:5, rodeursT:69, vitesse:16, observation:40}},
 };
 // Ultra (novembre 2026, décision du propriétaire : « très intelligent et rusé », AUCUNE TRICHE) : revenu 1,
