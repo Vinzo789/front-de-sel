@@ -1072,9 +1072,11 @@ Cahier des charges : `travaux/multijoueur/CAHIER-GALERIES-EN-LIGNE.md`. Rien du
   ouvertes, « trop tard » peut être dit deux fois ; la case du salon garde sa
   dernière valeur tant que la page n'est pas rechargée.
 - **Choix faits sans le propriétaire, à valider** : case décochée par défaut ;
-  l'invité n'est prévenu qu'au lancement ; marge de 0,35 s ; le changement de
-  difficulté en cours de partie reste réservé au jeu contre l'ordinateur ; la
-  charge des collecteurs à 100 aussi.
+  l'invité n'est prévenu qu'au lancement ; marge de 0,35 s ; la charge des
+  collecteurs à 100 reste réservée au jeu contre l'ordinateur. (Le changement
+  de difficulté en cours de partie, d'abord réservé au solo, est possible
+  pour l'hôte depuis le 21 novembre 2026 : décision du propriétaire, voir
+  « Choix faits sans le propriétaire, à valider », `?v=42`.)
 - **Trouvé en passant, pas corrigé** : `testerGaleries('parties')` donne 11 sur
   15 et `testerDefense('parties')` 3 sur 6, sur la version 43 d'origine comme
   sur celle-ci (relevé par l'agent). Ces parties d'essai n'ont sans doute pas
@@ -1086,6 +1088,69 @@ Cahier des charges : `travaux/multijoueur/CAHIER-GALERIES-EN-LIGNE.md`. Rien du
   `majGaleriesInvite`, `envoyerOrdreInvite`), `reseau.js` (extension du
   bâtiment dans le codec, format en commentaire au-dessus de `qBatiment` ;
   quatre codes d'ordres), `verif-missions-moteur.js` (les deux essais en ligne).
+
+### Ordinateur Ultra : chars qui rebroussent chemin, collecteurs coincés (21 novembre 2026, `?v=45`)
+
+Demande du propriétaire : « Il faut améliorer l'intelligence de l'IA ultra. Elle n'est pas forte. Il y a des
+bugs (comme les chars qui rebroussent chemin lors d'une attaque ». Ce lot corrige les défauts ; il **ne rend pas
+Ultra plus fort** (mesuré, voir plus bas). Le renforcement par la stratégie est un lot suivant, à part.
+Documents de travail (non publiés) : `travaux/ia-ultra/` (`CAHIER.md`, `DIAGNOSTIC.md`, `MESURES-AVANT.md`,
+`MESURES-APRES.md`).
+
+- **Mesure** (`mesureUltra`, `verif-missions-moteur.js`) : chaque changement d'ordre d'une unité d'Ultra est
+  attribué à la fonction qui l'a donné. « Va-et-vient » : la même unité fait deux demi-tours ou plus en 20 s.
+  Série de référence : 80 parties de 25 min au plus (Port-Calmes et Gorges de Varsèche, Ultra en Halden et en
+  Karsk, des deux côtés, case « Galeries de tir » décochée puis cochée ; moitié à pas fixe de 1/30 s, moitié à
+  pas irrégulier entre 1/60 et 1/20 s).
+- **Causes trouvées**, toutes dans le code réservé à Ultra (section 7 ter de `jeu.js`) :
+  1. le recul des unités à longue portée et la marche groupée se contredisaient toutes les 1,5 s, y compris pour
+     le Rempart (antiaérien), qui « reculait » devant des chars qui ne le visaient pas (43 % des va-et-vient à pas
+     fixe, 68 % à pas irrégulier) ;
+  2. à la mort de sa cible, une unité repartait vers un vieux point d'étape resté derrière elle ;
+  3. bascule entre deux cibles situées de part et d'autre de l'unité ;
+  4. un harceleur recevait dans la même réflexion l'ordre de se replier et celui d'attaquer ;
+  5. seuil de regroupement sans marge, qui renvoyait aussi en arrière les unités en avance.
+- **Corrections** (`attaquerUltra`, `combattreUltra`, `harcelerUltra`, réglages dans `ULTRA`) : seules les unités
+  à longue portée qui tirent au sol gardent leurs distances, devant une menace qui peut les toucher, et tiennent
+  ensuite leur position de tir ; l'antiaérien suit derrière le groupe ; un ordre dépassé est remplacé ; seuils à
+  deux valeurs (380 / 250 px) ; une unité en avance attend au lieu de revenir.
+- **Collecteurs coincés** (`degagerCollecteursUltra`) : sur Gorges de Varsèche, six collecteurs d'Ultra restaient
+  face à face dans un passage d'une case, revenu nul jusqu'à la fin (cause de 5 des 9 défaites contre Difficile).
+  Ultra les dégage par des ordres ordinaires, comme un joueur. La racine est dans le moteur commun (croisement
+  dans un passage étroit) : elle n'est pas corrigée, car cela changerait les autres niveaux ; choix laissé au
+  propriétaire.
+- **Assaut retenu** quand une armée ennemie d'au moins la moitié de la sienne marche sur sa base.
+- **Résultats vus passer** (avant → après, mêmes parties) : va-et-vient 91 → 15 à pas fixe (−84 %),
+  195 → 9 à pas irrégulier (−95 %) ; plus long blocage de collecteurs 256 s → 36 s (mesure de la phase 2).
+  Contre Difficile : 27 sur 32 → 28 sur 32 à pas fixe, 28 sur 32 → 28 sur 32 à pas irrégulier ; sur des graines
+  neuves (3 à 6), 54 sur 64 avant comme après. Nouvel Ultra contre ancien Ultra, 96 parties : 49 %. **Ultra n'est
+  donc pas plus fort qu'avant, seulement débarrassé de ces défauts.**
+- **Objectifs du cahier non atteints** : nouvel Ultra à 60 % contre l'ancien (49 %) ; zéro va-et-vient de cause
+  « défaut » (il en reste 3 à pas fixe et 1 à pas irrégulier sur 40 parties) ; durée médiane des victoires (584 s
+  contre 557 s à pas fixe) ; l'objectif « assauts avortés » était sans objet (0 avant, 2 après).
+- **Coût de calcul** : une réflexion d'Ultra coûte 0,2 à 0,3 ms en moyenne, 3,8 ms au plus ; rien dans Ultra
+  n'explique les ralentissements signalés par le propriétaire (le rendu 3D n'a pas été mesuré).
+- **Références** : duel `7d442efb` inchangé (Facile, Normale et Difficile ne passent pas par ce code) ; la partie
+  à quatre camps, qui contient un camp Ultra, passe de `d9afd39c` à **`69b4664e`** parce que le comportement
+  d'Ultra a changé. `testerDefense()` 47 sur 47, `avecGraine(7, () => testerGaleries())` 59 sur 59,
+  `testerGaleriesEnLigne()` 15 sur 15, `testerDefenseEnLigne()` 16 sur 16. Nouvel essai rejouable :
+  `testerUltra()` (3 parties à Port-Calmes, 4 sur `?carte=gorgesVarseche`, dont une à pas irrégulier sur chaque
+  carte). Outil modifié : `partieOrdinateurs` accepte `opts.pas` ; `reinitialiserPartie` remet `verifT` à zéro.
+- **Relecture** (un agent en lecture seule, rien de bloquant) et trois corrections faites ensuite par
+  l'orchestrateur, non relues par un tiers : la retenue d'assaut est limitée à 45 s, puis levée 90 s (sinon une
+  armée garée à mi-chemin empêchait Ultra d'attaquer pour toujours) ; la marque « position de tir » expire seule ;
+  un camp passé d'Ultra à un autre niveau en cours de partie ne garde plus les règles d'Ultra sur le choix des
+  champs (`champPour`). Après ces trois corrections, rejoué : les deux empreintes, `testerUltra()` sur les deux
+  cartes (mêmes empreintes de parties qu'avant elles) et 20 parties de la série à Port-Calmes (13 sur 16 contre
+  Difficile, 6 va-et-vient) ; les séries complètes ci-dessus datent d'avant ces trois corrections.
+- **Limite des outils** : les empreintes de référence ne valent qu'en premier appel d'une page neuve ; rejouée
+  après une autre partie dans la même page, une partie donne une autre empreinte (cause non cherchée).
+- **Pas vérifié** : le jeu à l'écran et à la souris ; les trois autres cartes ; trois ou quatre camps (hors
+  l'empreinte) ; le mode Surprises ; les missions (elles n'utilisent pas ce code).
+- **Faiblesses relevées, non traitées** : Halden Ultra reste le plus fragile (toutes les défaites contre
+  Difficile sont Halden contre Karsk) ; premiers assauts parfois à trois unités (un seuil plus haut n'a rien
+  changé aux mesures) ; sur Port-Calmes, le côté droit collecte moins à tous les niveaux, ce qui fausse les
+  séries ; les séries `testerGaleries('parties')` et `testerDefense('parties')` n'ont pas été rechoisies.
 
 ### Commandes
 
@@ -1644,6 +1709,13 @@ développement, le 11 novembre 2026 :
   son arrivée ; l'écran de fin ne dit pas que la difficulté a changé. Vérifié par appels directs (passage à Ultra
   puis à Facile, 2 minutes simulées sans erreur, refus en ligne, duel de référence `7d442efb` inchangé) ; jamais
   essayé à la souris, et l'allure de la liste n'a pas été vue à l'écran.
+  **En ligne aussi, pour l'hôte seul (21 novembre 2026, décision du propriétaire : « fait le aussi pour le mode en
+  ligne »)** : `difficulteReglable` l'accepte quand le monde chargé est celui de l'hôte ; la liste est absente chez
+  l'invité ; aucun ordre réseau ne porte ce réglage (un invité ne peut pas le changer, `reseau.js` inchangé) ; le
+  message « Difficulté : … » part à tous les joueurs (`notifier`) ; un camp d'invité confié ensuite à l'ordinateur
+  prend la difficulté du moment. Vu passer en mode `?echo` à trois camps : refus côté invité, les trois ordinateurs
+  passés de Normale à Ultra côté hôte, message reçu chez l'invité, camp confié en Ultra. Pas vu : la liste à l'écran
+  d'un vrai hôte, ni un essai entre deux ordinateurs.
 - (`?v=41`, 20 novembre 2026, demande du propriétaire) Bouclier du vaisseau-mère doublé (3 000 / 4 000 / 5 000).
 
 - (`?v=40`, 20 novembre 2026, deux demandes du propriétaire) **Missiles des galeries à 1 200 de dégâts** : l'Aiguille

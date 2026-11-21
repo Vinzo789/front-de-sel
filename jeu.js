@@ -1248,7 +1248,8 @@ function champPour(u){
     let s = dist(u, n);
     if(s - 900 >= bs) continue;
     // Ultra : champ signalé menacé par l'analyse (defendreUltra), évité un moment.
-    const SU = etatsIA[u.camp] && etatsIA[u.camp].ultra;
+    // (estUltra : un camp passé d'Ultra à un autre niveau en cours de partie ne garde pas ces deux règles.)
+    const SU = etatsIA[u.camp] && etatsIA[u.camp].ultra && estUltra(u.camp) ? etatsIA[u.camp].ultra : null;
     if(SU && SU.champsMenaces.has(n) && SU.champsMenaces.get(n) > temps) s += 900;
     // Ultra : un champ plus proche d'un bâtiment ennemi que du collecteur est un champ disputé, pris en dernier.
     if(SU && SU.analyse && Object.values(SU.analyse.ennemis).some(K => K.bats.some(b => dist(b, n) < dist(u, n)))) s += 500;
@@ -4104,7 +4105,21 @@ const ULTRA = {
   ECHEC_MEMOIRE:180,        // s pendant lesquels un objectif repoussé exige le rapport de forces rétabli
   GARDES_CHAMP:2,           // défenseurs postés près d'un champ harcelé
   GARDE_MEMOIRE:150,        // s pendant lesquels un champ harcelé garde ses défenseurs
+  // Corrections du 21 novembre 2026 (travaux/ia-ultra/DIAGNOSTIC.md, A1 à A5, B1, B2) :
+  RECUL_ENTREE:70,          // px au-delà de la portée de la menace : en deçà, une unité à longue portée recule (A1)
+  RECUL_SORTIE:150,         // px : au-delà, elle quitte sa position de tir et reprend la marche (hystérésis)
+  RECUL_DISTANCE:110,       // px au-delà de la portée de la menace : où elle se poste après un recul
+  POSTE_MAX:25,             // s au plus à tenir une position de tir sans nouveau recul
+  REJOINT_ENTREE:380, REJOINT_SORTIE:250,   // px du barycentre : rejoindre le groupe, et fin du rattrapage (A5)
+  EN_ROUTE:0.5,             // armée ennemie en route vers nous / la nôtre : au-delà, pas de nouvel assaut (B2)
+  RETENUE_MAX:45, RETENUE_REPOS:90,   // s : durée maximale de cette retenue, puis durée sans retenue
+  ASSAUT_PLANCHER:600,     // valeur minimale d'un premier assaut contre une armée faible (B3 : inchangé)
+  COLLECTEUR_CEDE:5,        // s d'immobilité d'un collecteur vide avant qu'il cède le passage (B1)
+  COLLECTEUR_RECULE:12,     // s d'immobilité d'un collecteur plein avant qu'il recule vers son champ (B1)
+  CHAMP_ENCOMBRE:40,        // s pendant lesquels le champ d'un collecteur qui a cédé est évité
 };
+// (L'interrupteur d'essai ultraV44, qui redonnait le comportement de la version 44 correction par correction, a été
+// retiré après l'étude par retrait ; une copie de cette version est dans travaux/ia-ultra/jeu-avec-interrupteur.js.)
 // Expansion économique permise (dépôt avancé, collecteurs au-delà de 4, ouvriers au-delà de 2, bâtiments
 // hors cœur) : aucune menace sur la base, rien qui approche, et une armée d'au moins ARMEE_MIN plus les
 // trois quarts de la plus forte armée adverse (valeur lissée, plusForteRef). (Essai indépendant du 13 novembre 2026 : Karsk Ultra mettait un
@@ -4584,6 +4599,7 @@ function majUltra(id, ia, ctx){
   esquiverZonesUltra(armee, A.zones);
   libres = replierBlessesUltra(id, S, libres, reparateurs, ctx);
   libres = defendreUltra(id, S, A, ctx, libres);
+  degagerCollecteursUltra(id, S, ctx);   // B1 : collecteurs coincés
   libres = gardesChampUltra(id, S, ctx, libres, !!vm);
   if(!vm){
     libres = harcelerUltra(id, S, A, ctx, libres);
@@ -4644,6 +4660,51 @@ function replierBlessesUltra(id, S, combattants, reparateurs, ctx){
     reste.push(u);
   }
   return reste;
+}
+// Collecteurs coincés (B1, 21 novembre 2026). Relevé : six collecteurs face à face dans un passage d'une case
+// (Gorges de Varsèche, côté est), trois pleins qui descendent au dépôt, trois vides qui montent au champ, immobiles
+// jusqu'à la fin de la partie ; revenu nul. Le moteur ne fait céder personne ; Ultra le fait comme un joueur, par des
+// ordres ordinaires : un collecteur vide immobile depuis COLLECTEUR_CEDE s (ordre de récolte, ni chargement ni
+// déchargement) cède le passage (il rentre au bord du dépôt, ou, près de son champ encombré, en choisit un autre) et
+// son champ est évité CHAMP_ENCOMBRE s ; un collecteur plein immobile depuis COLLECTEUR_RECULE s recule vers son champ.
+function degagerCollecteursUltra(id, S, ctx){
+  for(const c of ctx.uns){
+    if(!c.def.collecteur || c.mort) continue;
+    const o = c.ordre;
+    if(!o || o.type !== 'recolter' || c.travaille){ c.ultraImmobile = null; continue; }
+    const r = c.ultraImmobile;
+    if(!r || Math.hypot(c.x - r.x, c.y - r.y) > 8){ c.ultraImmobile = {x:c.x, y:c.y, t:temps}; continue; }
+    const duree = temps - r.t;
+    // Près de son champ (attente d'une place, normale et brève) : rien. (Premier essai : le champ encombré évité
+    // 40 s envoyait les collecteurs de Port-Calmes, côté est, vers des champs plus exposés ; deux défaites de plus.)
+    if(o.noeud && dist(c, o.noeud) < 120) continue;
+    if(o.retour){ const d = depotProche(c); if(d && distBord(c, d) < 150) continue; }   // file d'attente au dépôt : rien non plus
+    if(!o.retour && duree >= ULTRA.COLLECTEUR_CEDE){
+      // Le champ n'est évité que si ce collecteur a déjà dû céder dans les 90 s (passage où l'on se croise sans
+      // cesse) ; la première fois, il laisse seulement passer. (Essai : éviter le champ dès la première fois coûtait
+      // des parties à Port-Calmes, côté est, où deux collecteurs se croisent parfois devant le QG.)
+      if(o.noeud && temps - (c.ultraCedeT || -999) < 90) S.champsMenaces.set(o.noeud, temps + ULTRA.CHAMP_ENCOMBRE);
+      c.ultraCedeT = temps;
+      const d = depotProche(c);
+      if(!d){ c.ordre = null; c.chemin = null; }
+      else {
+        const dx = c.x - d.x, dy = c.y - d.y, dd = Math.hypot(dx, dy) || 1, k = (d.rayon || 60) + 50;
+        const p = pointLibre(d.x + dx/dd*k, d.y + dy/dd*k);
+        c.ordre = {type:'aller', x:p.x, y:p.y}; c.chemin = null; c.ultraDetour = temps;
+      }
+      c.ultraImmobile = null;
+      journalUltra(id, 'collecteur coincé (vide) : il cède le passage');
+    } else if(o.retour && duree >= ULTRA.COLLECTEUR_RECULE){
+      const n = o.noeud || noeudProche(c);
+      if(n){
+        const dx = n.x - c.x, dy = n.y - c.y, dd = Math.hypot(dx, dy) || 1, k = Math.min(160, dd);
+        const p = pointLibre(c.x + dx/dd*k, c.y + dy/dd*k);
+        c.ordre = {type:'aller', x:p.x, y:p.y}; c.chemin = null; c.ultraDetour = temps;
+        journalUltra(id, 'collecteur coincé (plein) : il recule vers son champ');
+      }
+      c.ultraImmobile = null;
+    }
+  }
 }
 function plusProche(u, liste){ let best = null, bd = Infinity; for(const e of liste){ const d = dist(u, e); if(d < bd){ bd = d; best = e; } } return best; }
 // Défense : chaque menace (intrus voisins regroupés) reçoit DEFENSE_PROPORTION fois sa valeur en défenseurs,
@@ -4774,7 +4835,8 @@ function harcelerUltra(id, S, A, ctx, libres){
       let mien = 0; for(const u of membres) mien += valeurCombat(u);
       if(forceEnnemie(A, c.x, c.y, 450) > mien*0.9){
         journalUltra(id, 'harcèlement : repli devant une force supérieure');
-        for(const u of membres){ u.ultra = null; u.cible = null; u.ordre = {type:'aller', x:ctx.rassemblement.x, y:ctx.rassemblement.y}; u.chemin = null; }
+        // (ultraLibereT : lu par attaquerUltra, A4 — un assaut décidé dans la même réflexion lui donne son ordre.)
+        for(const u of membres){ u.ultra = null; u.cible = null; u.ordre = {type:'aller', x:ctx.rassemblement.x, y:ctx.rassemblement.y}; u.chemin = null; u.ultraLibereT = temps; }
         S.harcelement = null; S.harceleT = temps + ULTRA.HARCELEMENT_REPOS;
       } else {
         if(!H.cible || H.cible.mort || galerieFermee(H.cible)){ H.cible = cibleHarcelement(id, A, c, mien); H.wp = null; if(!H.cible){ for(const u of membres) u.ultra = null; S.harcelement = null; S.harceleT = temps + 10; return libres; } }
@@ -4875,9 +4937,33 @@ function attaquerUltra(id, S, A, ctx, libres){
     if(!obj) return;
     // Seuil du premier assaut : contre une armée adverse faible, dès que la nôtre vaut deux fois la plus
     // forte armée adverse ; à effectif plein, on choisit l'objectif le moins défendu au lieu d'attendre.
-    const minimum = plein ? 800 : Math.max(600, Math.min(ULTRA.ASSAUT_MIN, 2*A.plusForte));
+    const minimum = plein ? 800 : Math.max(ULTRA.ASSAUT_PLANCHER, Math.min(ULTRA.ASSAUT_MIN, 2*A.plusForte));
     const marge = obj.pression ? 1.1 : plein ? 0.8 : ULTRA.ASSAUT_MARGE;
     if(total < Math.max(minimum, marge*obj.besoin)) return;
+    // B2 (21 novembre 2026) : une armée ennemie en route vers nous (à moins de ULTRA.APPROCHE px d'un de nos
+    // bâtiments, et plus près de nos bâtiments que des siens : ce que voit un joueur) qui vaut au moins EN_ROUTE fois
+    // la nôtre : on défend d'abord, l'assaut viendra après. (Relevé : Gorges, Halden Ultra, graine 2, assaut lancé à
+    // 526 s au-devant d'une vague de 1 860, armée perdue en 30 s, défaite.)
+    let enRoute = 0;
+    for(const K of Object.values(A.ennemis)){
+      if(K.camp === 'X') continue;
+      for(const e of K.armee){
+        if(e.def.avion && enVol(e)) continue;
+        let dn = Infinity; for(const b of ctx.bats) dn = Math.min(dn, dist(b, e));
+        if(dn > ULTRA.APPROCHE) continue;
+        let de = Infinity; for(const b of K.bats) de = Math.min(de, dist(b, e));
+        if(dn < de) enRoute += valeurCombat(e);
+      }
+    }
+    // Retenue limitée dans le temps (RETENUE_MAX s, puis RETENUE_REPOS s sans retenue) : sinon une armée garée à
+    // mi-chemin suffirait à empêcher Ultra d'attaquer pour toujours.
+    const retenu = enRoute >= total*ULTRA.EN_ROUTE;
+    if(!retenu || temps - (S.retenueT0 == null ? temps : S.retenueT0) > ULTRA.RETENUE_MAX + ULTRA.RETENUE_REPOS) S.retenueT0 = null;
+    if(retenu && S.retenueT0 == null) S.retenueT0 = temps;
+    if(retenu && temps - S.retenueT0 <= ULTRA.RETENUE_MAX){
+      if(temps - (S.journalRouteT || -99) > 10){ S.journalRouteT = temps; journalUltra(id, 'assaut retenu : armée ennemie en route vers nous (' + Math.round(enRoute) + ' contre ' + Math.round(total) + ')'); }
+      return;
+    }
     // Garnison : les fantassins les moins chers restent, jusqu'à GARNISON de la valeur.
     const tri = libres.slice().sort((a, c) => (a.def.cout || 0) - (c.def.cout || 0));
     let garde = 0; const garnison = new Set();
@@ -4894,6 +4980,9 @@ function attaquerUltra(id, S, A, ctx, libres){
       }
     }
     for(const u of assaut) if(!diversion || !diversion.includes(u)) u.ultra = 'assaut';
+    // A4 : un harceleur que harcelerUltra vient de renvoyer au rassemblement (même réflexion) est dans l'assaut :
+    // il quitte l'ordre de repli et attend le groupe là où il est (la marche groupée le reprend ensuite).
+    for(const u of assaut) if(u.ultraLibereT === temps && u.ordre && u.ordre.type === 'aller'){ u.ordre = null; u.chemin = null; }
     S.cible = obj.b; S.campCible = obj.camp; S.valeurDepart = total - garde;
     S.phase = diversion ? 'diversion' : 'assaut'; S.assautT = temps + (diversion ? ULTRA.DIVERSION_AVANCE : 0);
     journalUltra(id, 'assaut décidé contre ' + obj.camp + ' (' + obj.b.type + ') : ' + Math.round(total - garde) + ' contre une défense de ' + Math.round(obj.besoin) +
@@ -4941,14 +5030,49 @@ function attaquerUltra(id, S, A, ctx, libres){
     for(const u of enAssaut){ u.cible = null; u.ordre = {type:'aller', x:R.x + (Math.random()-.5)*160, y:R.y + (Math.random()-.5)*160}; u.chemin = null; }
     return;
   }
-  const dx = S.cible.x - c.x, dy = S.cible.y - c.y, d = Math.hypot(dx, dy) || 1;
-  const pas = Math.min(d, 320), wp = d < 520 ? {x:S.cible.x, y:S.cible.y} : {x:c.x + dx/d*pas, y:c.y + dy/d*pas};
+  // Marche groupée (corrigée le 21 novembre 2026, DIAGNOSTIC.md A1, A2, A5).
+  // A5 : le groupe, son barycentre et le point d'étape ne comptent que les unités qui tirent au sol (la DCA suit
+  // derrière ; sans elle dans le barycentre, sinon le point « derrière le groupe » fuit devant elle à chaque pas) ;
+  // un assaut où il ne reste que de la DCA prend fin.
+  const tireurs = enAssaut.filter(u => u.def.sol);
+  if(!tireurs.length){ S.phase = 'regroupe'; for(const u of enAssaut) u.ultra = null; journalUltra(id, 'assaut terminé : plus d’unité qui tire au sol'); return; }
+  const g = barycentre(tireurs), gx = S.cible.x - g.x, gy = S.cible.y - g.y, dg = Math.hypot(gx, gy) || 1, pasG = Math.min(dg, 320);
+  const etape = dg < 520 ? {x:S.cible.x, y:S.cible.y} : {x:g.x + gx/dg*pasG, y:g.y + gy/dg*pasG};
+  const fx = gx/dg, fy = gy/dg, enAvant = (u, x, y) => (x - u.x)*fx + (y - u.y)*fy;   // > 0 : (x, y) est devant u
+  // A1 : DCA (elle ne tire pas au sol) derrière le groupe, côté rassemblement, au lieu d'aller en tête puis de reculer
+  // devant chaque ennemi (le Rempart faisait à lui seul les trois quarts des reculs).
+  const dr = Math.hypot(R.x - g.x, R.y - g.y) || 1, arriere = {x:g.x + (R.x - g.x)/dr*150, y:g.y + (R.y - g.y)/dr*150};
   for(const u of enAssaut){
-    if(u.cible && !u.cible.mort) continue;
+    const o = u.ordre, aCible = u.cible && !u.cible.mort;
     if(u.ultraEsquive && temps - u.ultraEsquive < 2) continue;
     if(u.ultraRecul && temps - u.ultraRecul < 1.5) continue;
-    const p = dist(u, c) > 380 ? c : wp;
-    if(!u.ordre || u.ordre.type !== 'attaqueDeplacement' || Math.hypot(u.ordre.x - p.x, u.ordre.y - p.y) > 80){
+    // A2 : unité sans ordre (elle attend le groupe, tient sa position de tir, ou a atteint son point) : son point de
+    // repos ne reste pas derrière elle, sinon le moteur l'y ramène après chaque poursuite.
+    if(!o && u.repos && enAvant(u, u.repos.x, u.repos.y) < -60){ u.repos = {x:u.x, y:u.y}; u.retourRepos = false; }
+    // A1 : position de tir tenue après un recul (combattreUltra) : pas renvoyée en avant. La marque est levée par
+    // combattreUltra ; si celui-ci ne voit plus l'unité (ordre « aller » reçu d'ailleurs), elle expire ici.
+    if(u.ultraPoste){ if(temps - u.ultraPoste.t > ULTRA.POSTE_MAX + 2) u.ultraPoste = null; else continue; }
+    if(!u.def.sol){
+      if(!aCible && (!o || o.type !== 'attaqueDeplacement' || Math.hypot(o.x - arriere.x, o.y - arriere.y) > 120)){
+        u.ordre = {type:'attaqueDeplacement', x:arriere.x + (Math.random()-.5)*60, y:arriere.y + (Math.random()-.5)*60}; u.chemin = null;
+      }
+      continue;
+    }
+    // A5 : rattrapage avec hystérésis (au-delà de 380 px du barycentre, jusqu'à 250 px) ; une unité en avance n'est
+    // pas renvoyée en arrière : elle attend le groupe sur place.
+    const dc = dist(u, g);
+    if(dc > ULTRA.REJOINT_ENTREE) u.ultraRejoint = true; else if(dc < ULTRA.REJOINT_SORTIE) u.ultraRejoint = false;
+    const attend = u.ultraRejoint && enAvant(g, u.x, u.y) > 0;
+    const p = attend ? {x:u.x, y:u.y} : u.ultraRejoint ? g : etape;
+    // A2 : un ordre que l'unité a dépassé (en poursuivant une cible) est remplacé, même pendant qu'elle combat :
+    // à la mort de sa cible, le moteur ne la renvoie plus en arrière vers un vieux point d'étape.
+    const derriere = !!o && o.type === 'attaqueDeplacement' && enAvant(u, o.x, o.y) < -60;
+    if(aCible){ if(derriere) u.ordre = {type:'attaqueDeplacement', x:p.x, y:p.y}; continue; }
+    if(attend){
+      if(derriere || (o && o.type === 'attaqueDeplacement' && enAvant(u, o.x, o.y) > 60)){ u.ordre = null; u.chemin = null; }
+      continue;
+    }
+    if(!o || o.type !== 'attaqueDeplacement' || Math.hypot(o.x - p.x, o.y - p.y) > 80){
       u.ordre = {type:'attaqueDeplacement', x:p.x + (Math.random()-.5)*60, y:p.y + (Math.random()-.5)*60}; u.chemin = null;
     }
   }
@@ -4974,11 +5098,16 @@ function combattreUltra(id, S, A, combattants){
     const D = u.def;
     if(u.mort || D.avion || u.ultraRepli || (u.ordre && u.ordre.type === 'aller') || (u.ordre && u.ordre.type === 'attaquer' && u.ordre.cible && u.ordre.cible.def.forme === 'vaisseauMere')) continue;
     const portee = D.portee + 60;
-    let best = null, bs = 0, actuel = 0, menace = null, dm = Infinity;
+    // A1 (21 novembre 2026) : ne gardent leurs distances que les unités à longue portée qui tirent au sol (pas la DCA,
+    // qui ne peut pas répondre), et seulement devant une menace qui peut vraiment les toucher.
+    const garde = D.sol && D.portee >= 300;
+    let best = null, bs = 0, actuel = 0, vuActuel = false, menace = null, dm = Infinity;
     voisinsUltra(A, u.x, u.y, Math.max(portee, 380), e => {
       const d = distBord(u, e);
-      // Recul : ennemi au sol armé, de portée plus courte, qui nous a presque à portée.
-      if(D.portee >= 300 && e.est === 'unite' && e.def.arme && e.def.sol && !e.def.aerien && e.def.portee < D.portee - 40 && d < e.def.portee + 70 && d < dm){ dm = d; menace = e; }
+      // Recul : ennemi au sol armé, de portée plus courte, qui peut nous toucher et nous a presque à portée.
+      if(garde && e.est === 'unite' && e.def.arme && e.def.sol && !e.def.aerien && e.def.portee < D.portee - 40 && peutCibler(e, u) && efficacite(e.def.arme, u) > 0){
+        const m = d - e.def.portee; if(m < dm){ dm = m; menace = e; }   // marge : distance au-delà de sa portée
+      }
       if(d > portee || !peutCibler(u, e) || (D.porteeMin && d < D.porteeMin)) return;
       const k = efficacite(D.arme, e);
       if(k <= 0) return;
@@ -4987,13 +5116,30 @@ function combattreUltra(id, S, A, combattants){
       if(d > D.portee) s *= 0.6;
       const deja = assigne.get(e) || 0;
       if(deja*2 > e.pv) s *= 0.3;   // déjà condamnée : inutile de s'y mettre à plusieurs
-      if(e === u.cible) actuel = s;
+      if(e === u.cible){ actuel = s; vuActuel = true; }
       if(s > bs){ bs = s; best = e; }
     });
-    if(menace && D.portee >= 300){
-      const dx = u.x - menace.x, dy = u.y - menace.y, d = Math.hypot(dx, dy) || 1;
-      const p = pointLibre(u.x + dx/d*150, u.y + dy/d*150);
-      if(libre(p.x, p.y)){ u.ordre = {type:'aller', x:p.x, y:p.y}; u.cible = null; u.chemin = null; u.ultraRecul = temps; continue; }
+    if(garde && menace && dm < ULTRA.RECUL_ENTREE){
+      // Recul jusqu'à une position de tir : RECUL_DISTANCE au-delà de la portée de la menace, sans sortir de la
+      // nôtre si possible ; la position est tenue (ultraPoste, que la marche groupée respecte) tant que la menace
+      // reste à moins de RECUL_SORTIE au-delà de sa portée. Depuis là, l'unité tire (cible prise par le moteur).
+      const dx = u.x - menace.x, dy = u.y - menace.y, dd = Math.hypot(dx, dy) || 1;
+      const k = Math.max(40, Math.min(ULTRA.RECUL_DISTANCE - dm, D.portee - 10 - (dm + menace.def.portee)));
+      const p = pointLibre(u.x + dx/dd*k, u.y + dy/dd*k);
+      if(libre(p.x, p.y)){ u.ordre = {type:'aller', x:p.x, y:p.y}; u.cible = null; u.chemin = null; u.ultraRecul = temps; u.ultraPoste = {t:temps}; continue; }
+    } else if(!(garde && menace && dm < ULTRA.RECUL_SORTIE && u.ultraPoste && temps - u.ultraPoste.t < ULTRA.POSTE_MAX)) u.ultraPoste = null;
+    // A3 : la cible actuelle, hors du rayon de recherche mais toujours valable et à portée de poursuite (portée + 260,
+    // comme le moteur), garde sa note : la marge de 1,25 joue encore (avant : note nulle, n'importe quelle autre cible
+    // l'emportait, de part et d'autre de l'unité).
+    // (Phase 3, étude par retrait : seulement quand la meilleure autre cible est, elle aussi, hors de portée. Sinon une
+    // cible lointaine qui recule faisait poursuivre l'unité au lieu de tirer sur ce qui est à portée : Karsk Ultra perdait
+    // contre l'ancien Halden à Gorges, côté I, 2 parties sur 6 au lieu de 6 sur 6 sans A3.)
+    if(!vuActuel && best && distBord(u, best) > D.portee && u.cible && !u.cible.mort && peutCibler(u, u.cible)){
+      const e = u.cible, d = distBord(u, e), k = efficacite(D.arme, e);
+      if(k > 0 && d <= D.portee + 260 && !(D.porteeMin && d < D.porteeMin)){
+        actuel = prioriteCibleUltra(e, A.mesAppareils) * (D.degats * (D.salve || 1) / D.cadence * k) / Math.max(1, e.pv) * 0.6;
+        if((assigne.get(e) || 0)*2 > e.pv) actuel *= 0.3;
+      }
     }
     if(best && best !== u.cible && bs > actuel*1.25) u.cible = best;
     const c = u.cible;
@@ -9891,10 +10037,14 @@ function brancherHote(salon){
   salon.on('campConfie', ({camp}) => dansMonde(H, () => { if(camps[camp]) confierCampAOrdinateur(camp, difficulte); }));
 }
 // Difficulté changée en cours de partie (20 novembre 2026, demande du propriétaire) : escarmouche contre
-// l'ordinateur seulement (ni mission, ni partie en ligne). Le réglage vaut pour tous les ordinateurs et prend
+// l'ordinateur, jamais en mission. Le réglage vaut pour tous les ordinateurs et prend
 // effet tout de suite : revenu, rythme et taille des vagues, façon de réfléchir. Chacun garde l'armée et la
 // base qu'il a déjà ; le vaisseau du mode Surprises, lui, garde la force fixée à son arrivée.
-function difficulteReglable(){ return enJeu && !MISSION && modeReseau === null && !window.MODE_DEMO && !partieFinie; }
+// En ligne (21 novembre 2026, décision du propriétaire) : l'hôte seul peut la changer, puisque c'est lui qui
+// simule les ordinateurs ; aucun ordre réseau ne la porte, un invité ne peut donc pas la changer, et la liste
+// est absente de son écran. Tous les joueurs sont prévenus (notifier). roleMonde vaut 'hote' chez l'hôte
+// réel et, en mode ?echo, seulement pendant que le monde de l'hôte est chargé.
+function difficulteReglable(){ return enJeu && !MISSION && (modeReseau === null || roleMonde === 'hote') && !window.MODE_DEMO && !partieFinie; }
 function changerDifficulte(niveau){
   if(!difficulteReglable() || !DIFFICULTES[niveau] || niveau === difficulte) return false;
   difficulte = niveau;
@@ -9905,7 +10055,8 @@ function changerDifficulte(niveau){
     const E = etatIA(id);
     E.niveau = niveau; E.revenu = dk.revenu; E.premiereVague = dk.premiereVague; E.vague = dk.vague;
   }
-  message('Difficulté : ' + ({facile:'Facile', normal:'Normale', difficile:'Difficile', ultra:'Ultra'})[niveau] + '.');
+  const texte = 'Difficulté : ' + ({facile:'Facile', normal:'Normale', difficile:'Difficile', ultra:'Ultra'})[niveau] + '.';
+  if(modeReseau === null) message(texte); else notifier('tous', texte);
   return true;
 }
 // Liste déroulante de la barre du haut : visible seulement quand le réglage est permis.

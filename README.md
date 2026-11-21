@@ -57,8 +57,9 @@ compte : seul un pseudonyme est demandé.
   s'arrête pour tous.
 - Les galeries de tir et la défense antimissile se jouent en ligne si l'hôte
   coche « Galeries de tir » dans le salon, avant de lancer la partie.
-- Les campagnes, le mode « Surprises » et le changement de difficulté en cours
-  de partie restent en solo.
+- L'hôte peut changer la difficulté des ordinateurs en cours de partie (liste
+  à côté du bouton Pause) ; tous les joueurs en sont prévenus.
+- Les campagnes et le mode « Surprises » restent en solo.
 
 Le détail, les limites connues et ce qui a été vérifié sont dans
 `NOTES-CONCEPTION.md`, section « Multijoueur ».

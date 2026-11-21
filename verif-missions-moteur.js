@@ -537,6 +537,10 @@ function reinitialiserPartie(){
   ents = []; projectiles = []; effets = []; evenements = []; selection = []; groupes = {};
   if(typeof issuePartie !== 'undefined') issuePartie = null;
   temps = 0; partieFinie = false; enJeu = false; enPause = false; mode = null;
+  // Minuteur de verifierFin remis comme dans une page neuve (21 novembre 2026) : sans cela, une même graine donnait
+  // une autre partie selon ce qui avait tourné avant dans la page. Sans effet sur les références (premier appel
+  // d'une page neuve, où verifT vaut déjà 0).
+  if(typeof verifT !== 'undefined') verifT = 0;
   chargerCarte(CARTE);
   if(typeof reinitialiserIA === 'function'){ reinitialiserIA(); alliance = false; }   // un état d'IA par camp ordinateur
   else Object.assign(ia, {t:0, vague:7, premiereVague:210, revenu:1, indexVeh:0, indexInf:0, indexAvion:0, tourAvion:true, nAvions:0, besoin:null, active:true,
@@ -786,6 +790,7 @@ function partieOrdinateurs(liste, duree, opts){
   const niveaux = {}; for(const k of liste) niveaux[k.id] = k.niveau;
   demarrer(liste[0].faction, liste.map(k => ({id:k.id, faction:k.faction, equipe:k.equipe, ia:k.id !== 'J', niveau:k.id !== 'J' ? k.niveau : undefined})));
   if(niveaux.J && niveaux.J !== 'robot') confierAOrdinateur('J', niveaux.J);
+  if(opts.preparer) opts.preparer();   // (réglage d'un essai juste après le départ ; aucun outil ne s'en sert aujourd'hui)
   const ids = campsEnJeu();
   const compta = Object.fromEntries(ids.map(id => [id, {depart:camps[id].reserves, collecte:0, charge:0, dechargements:0, secours:0, depenses:0, unites:0, commandes:0, renforts:0}]));
   // Instruments (remis en place à la fin).
@@ -842,13 +847,20 @@ function partieOrdinateurs(liste, duree, opts){
     if(ok && cle === 'renforts' && compta[camp]) compta[camp].renforts += 5;
     return ok;
   };
+  // opts.pas (21 novembre 2026, mesureUltra) : pas de temps fixe (nombre, ex. 1/30) ou fonction qui rend le pas
+  // suivant (pas irrégulier) ; la partie s'arrête alors à duree s de jeu. Sans opts.pas : 0,05 s et la boucle
+  // d'avant, inchangée (empreinte de référence 7d442efb).
   const dt = 0.05; let tMax = 0, tSomme = 0, n = 0, erreur = null;
   const ech = opts.mesureApres || 0;
+  const pasSuivant = opts.pas == null ? null : typeof opts.pas === 'function' ? opts.pas : () => opts.pas;
+  const nPas = pasSuivant ? Infinity : (duree || 1500)/dt;
   try {
-    for(let k = 0; k < (duree || 1500)/dt; k++){
+    for(let k = 0; k < nPas; k++){
+      if(pasSuivant && temps >= (duree || 1500) - 1e-9) break;
+      const dtk = pasSuivant ? pasSuivant() : dt;
       if(opts.surprise){ if(surprise.etat === 'cinematique') passerCinematique(); if(surprise.etat === 'dialogue') repondreAlliance(true); }
       const t0 = performance.now();
-      try { miseAJour(dt); } catch(e){ erreur = 't=' + temps.toFixed(1) + ' ' + e.message + ' | ' + String(e.stack || '').split('\n').slice(1, 3).join(' | '); break; }
+      try { miseAJour(dtk); } catch(e){ erreur = 't=' + temps.toFixed(1) + ' ' + e.message + ' | ' + String(e.stack || '').split('\n').slice(1, 3).join(' | '); break; }
       const d = performance.now() - t0;
       if(temps >= ech){ tSomme += d; n++; if(d > tMax) tMax = d; }
       if(k % 20 === 0 && niveaux.J === 'robot') robotEscarmouche();
@@ -3552,3 +3564,598 @@ const PARTIES_DEFENSE = [
   {nom:'quatre', graine:2, sujets:['J'], tir:false},
 ];
 window.PARTIES_DEFENSE = PARTIES_DEFENSE;
+// =====================================================================
+//  Mesures de l'ordinateur Ultra (21 novembre 2026, travaux/ia-ultra/CAHIER.md). Outil de mesure seulement :
+//  les fonctions d'ordre de l'ordinateur sont enveloppées le temps d'une partie (remises ensuite) ; les
+//  enveloppes ne font que lire l'état (aucun appel à Math.random, aucune écriture dans les entités ni dans
+//  etatsIA) : la partie est la même avec et sans mesure (contrôle : verifierNeutraliteUltra).
+//  Définitions du cahier, pour les seules unités armées au sol d'un camp Ultra :
+//   - destination d'une unité (évaluée après chaque passage de majIA) : sa cible si elle la poursuit (hors de
+//     portée), sinon le point de son ordre (aller, attaque-déplacement, attaquer, chemin), sinon son point de
+//     repos si elle y retourne ; inchangée tant qu'elle tire à portée ;
+//   - demi-tour : unité engagée (rôle 'assaut' ou 'diversion' au pas précédent ou au pas courant) dont la
+//     destination change de plus de 200 px avec plus de 120° entre l'ancienne et la nouvelle direction (vues
+//     de sa position) ; cause : le dernier code qui a changé l'ordre (ou la cible, si la destination vient de
+//     la cible ou si la cible a changé après l'ordre) ; « voulu » : retraite générale, repli d'un blessé,
+//     esquive, défense de notre base ;
+//   - va-et-vient : demi-tour (tous motifs) d'une unité qui en a déjà fait un dans les 20 s précédentes ;
+//   - assaut avorté : assaut (passage de 'regroupe' à 'diversion' ou 'assaut') terminé sans un seul tir de ses
+//     unités, et relancé dans les 60 s ;
+//   - coût d'une réflexion : durée de majIACamp pour un camp Ultra, temps des enveloppes retiré (ms).
+//  En plus (hors cahier, pour le diagnostic) : retournements « moteur », une unité engagée qui repart à plus
+//  de 120° de sa marche de la seconde précédente sans aucun changement d'ordre depuis 2 s (poursuite d'une
+//  cible, ou trajet : chemin recalculé, poussée entre unités).
+//  Ex. : mesureUltra([{id:'J', faction:'halden', equipe:'A', niveau:'ultra'}, {id:'I', faction:'karsk', equipe:'B',
+//        niveau:'difficile'}], 1500, {graine:1, pas:1/30, galeries:false})
+//  opts : graine (hasard du jeu), pas (nombre ; 1/30 par défaut), irregulier (graine d'un générateur à part :
+//  pas tirés entre 1/60 et 1/20 s), galeries (case « Galeries de tir »), trace (true : liste des demi-tours et
+//  retournements), suivre (numéro d'unité : trace de cette unité toutes les 0,25 s), sansMesure (partie nue,
+//  pour la comparaison d'empreinte).
+// =====================================================================
+const FONCTIONS_ORDRES_ULTRA = ['majIACamp', 'analyserUltra', 'esquiverRayon', 'economieIA', 'majIAAviation', 'majUltra', 'esquiverZonesUltra',
+  'eloignerDuVaisseauUltra', 'replierBlessesUltra', 'defendreUltra', 'gardesChampUltra', 'harcelerUltra', 'attaquerUltra',
+  'combattreUltra', 'soutenirUltra', 'riposteGalerieIA', 'pouvoirsUltra', 'tirGalerieIA', 'esquiveGalerieIA'];
+const CAUSES_VOULUES_ULTRA = ['replierBlessesUltra', 'esquiverZonesUltra', 'esquiveGalerieIA', 'esquiverRayon', 'eloignerDuVaisseauUltra',
+  'attaquerUltra:retraite générale', 'defendreUltra:base menacée'];
+function mesureUltra(liste, duree, opts){
+  opts = opts || {};
+  duree = duree || 1500;
+  const ultras = new Set(liste.filter(k => k.niveau === 'ultra').map(k => k.id));
+  const M = {demiTours:0, voulus:0, parCause:{}, vaEtVient:0, unitesVaEtVient:new Set(), pairesVaEtVient:{}, retournementsMoteur:{},
+    horsAssaut:{}, vaEtVientHorsAssaut:0, collecteursBloques:{}, blocageMax:{}, premierBlocage:null, fugaces:0, assauts:[], couts:[], pics:[], tempsFn:{}, trace:[], suivi:[], transitions:[]};
+  let campCourant = null;   // camp Ultra dont la réflexion est en cours (temps par fonction)
+  const etat = new Map();   // id -> {o, ox, oy, c, ultra, auteurO, tO, auteurC, tC, dest, dernierDT, echant, dernierRet}
+  const pile = [];
+  let instru = 0;           // ms passées dans les enveloppes (retirées du coût des réflexions)
+  const phases = {};        // camp -> phase vue
+  const assautEnCours = {}; // camp -> enregistrement d'assaut
+  const S_ = id => etatsIA[id] && etatsIA[id].ultra;
+  const suivies = () => ents.filter(e => ultras.has(e.camp) && e.est === 'unite' && !e.mort && e.def.arme && !e.def.ouvrier && !e.def.collecteur && !e.def.aerien);
+  const engage = r => r === 'assaut' || r === 'diversion';
+  // Sous-cause d'un changement d'ordre ou de cible, selon le code qui l'a fait (pre : état relevé à l'entrée).
+  const detail = (nom, u, quoi, pre) => {
+    const o = u.ordre;
+    if(nom === 'attaquerUltra'){
+      const S = S_(u.camp), ph0 = pre && pre.phase[u.camp], ph1 = S && S.phase;
+      if(quoi === 'cible') return 'cible';
+      if(o && o.type === 'aller' && ph0 !== 'retraite' && ph1 === 'retraite') return 'retraite générale';
+      if(ph0 === 'retraite') return 'retraite (vers le rassemblement)';
+      if(u.ultra === 'diversion') return 'diversion';
+      if(o && o.type === 'aller') return 'rassemblement';
+      if(o && o.type === 'attaqueDeplacement' && u.ultra === 'assaut'){
+        const b = pre && pre.bary[u.camp];
+        return b && Math.hypot(o.x - b.x, o.y - b.y) < 120 ? 'marche : rejoindre le barycentre' : 'marche : point d’étape';
+      }
+      return o ? 'autre ' + o.type : 'ordre effacé';
+    }
+    if(nom === 'combattreUltra') return quoi === 'ordre' && o && o.type === 'aller' && u.ultraRecul === temps ? 'recul longue portée' : quoi === 'cible' ? 'changement de cible' : 'autre';
+    if(nom === 'defendreUltra') return (S_(u.camp) && S_(u.camp).menace > 0) ? 'base menacée' : 'base alliée';
+    if(nom === 'harcelerUltra') return o && o.type === 'aller' ? 'repli ou détour' : 'harcèlement';
+    if(nom === 'replierBlessesUltra') return o ? 'repli' : 'fin du repli';
+    if(nom === 'moteur'){
+      if(quoi === 'cible') return u.cible ? 'cible prise' : 'cible perdue';
+      return o ? 'ordre ' + o.type : 'ordre accompli';
+    }
+    return quoi;
+  };
+  // Relève les changements d'ordre et de cible depuis le dernier relevé et les attribue à « nom ».
+  const rattraper = (nom, pre) => {
+    const t0 = performance.now();
+    for(const u of suivies()){
+      let s = etat.get(u.id);
+      if(!s){ s = {o:u.ordre, ox:u.ordre && u.ordre.x, oy:u.ordre && u.ordre.y, c:u.cible, ultra:u.ultra, auteurO:'création', tO:temps, auteurC:'création', tC:temps, dest:null, dernierDT:[], echant:[], dernierRet:-99}; etat.set(u.id, s); continue; }
+      const o = u.ordre;
+      if(o !== s.o || (o && (o.x !== s.ox || o.y !== s.oy))){ s.auteurO = nom + ':' + detail(nom, u, 'ordre', pre); s.tO = temps; s.o = o; s.ox = o && o.x; s.oy = o && o.y; }
+      if(u.cible !== s.c){ s.auteurC = nom + ':' + detail(nom, u, 'cible', pre); s.tC = temps; s.c = u.cible; }
+    }
+    // Phases des camps Ultra (assauts lancés, terminés).
+    for(const id of ultras){
+      const S = S_(id); if(!S) continue;
+      const p0 = phases[id], p1 = S.phase;
+      if(p0 === p1) continue;
+      phases[id] = p1;
+      M.transitions.push({t:+temps.toFixed(1), camp:id, de:p0, vers:p1, par:nom});
+      if((p0 === 'regroupe' || p0 === undefined) && (p1 === 'assaut' || p1 === 'diversion')){
+        const membres = new Set(ents.filter(e => e.camp === id && !e.mort && (e.ultra === 'assaut' || e.ultra === 'diversion')).map(e => e.id));
+        const A = {camp:id, debut:+temps.toFixed(1), fin:null, finPar:null, vers:null, tirs:0, membres, n:membres.size, valeur:Math.round(S.valeurDepart || 0),
+          cible:S.cible ? S.cible.type : null};
+        assautEnCours[id] = A; M.assauts.push(A);
+      } else if((p0 === 'assaut' || p0 === 'diversion') && (p1 === 'retraite' || p1 === 'regroupe') && assautEnCours[id]){
+        const A = assautEnCours[id]; A.fin = +temps.toFixed(1); A.finPar = nom; A.vers = p1; assautEnCours[id] = null;
+      }
+    }
+    instru += performance.now() - t0;
+  };
+  const destination = u => {
+    const c = u.cible;
+    if(c && !c.mort){
+      const d = distBord(u, c), portee = u.def.porteeAir && enVol(c) ? u.def.porteeAir : u.def.portee;
+      // Poursuite : le point où elle arrivera à portée (sur la droite qui la mène à sa cible), pas la cible
+      // elle-même (une cible à 10 px de la portée ne fait presque pas bouger l'unité).
+      if(d > portee){ const dc = Math.hypot(c.x - u.x, c.y - u.y) || 1, k = Math.min(1, (d - portee + 10)/dc); return {x:u.x + (c.x - u.x)*k, y:u.y + (c.y - u.y)*k, src:'cible'}; }
+      return 'garde';
+    }
+    const o = u.ordre;
+    if(o){
+      if(o.type === 'aller' || o.type === 'attaqueDeplacement') return {x:o.x, y:o.y, src:'ordre'};
+      if(o.type === 'attaquer' && o.cible) return {x:o.cible.x, y:o.cible.y, src:'ordre'};
+      if(o.type === 'chemin'){ const p = o.points[o.i]; return p ? {x:p.x, y:p.y, src:'ordre'} : null; }
+      return null;
+    }
+    if(u.retourRepos && u.repos) return {x:u.repos.x, y:u.repos.y, src:'repos'};
+    return null;
+  };
+  const ajouter = (T, k) => { T[k] = (T[k] || 0) + 1; };
+  // Collecteurs d'Ultra immobiles (diagnostic, 21 novembre 2026 : six collecteurs coincés tête-bêche dans un
+  // couloir, revenu nul pendant des minutes) : relevé toutes les secondes ; un collecteur qui a un ordre de
+  // récolte, ne charge ni ne décharge et n'a pas bougé de 8 px en 10 s compte comme bloqué (secondes cumulées).
+  const bloc = new Map(); let blocT = 0;
+  const releverCollecteurs = () => {
+    if(temps - blocT < 1) return; blocT = temps;
+    for(const c of ents){
+      if(c.mort || !c.def.collecteur || !camps[c.camp]) continue;   // tous les camps (comparaison avec l'adversaire)
+      const b = bloc.get(c.id) || {pos:[], bloqueS:0};
+      bloc.set(c.id, b);
+      b.pos.push({t:temps, x:c.x, y:c.y}); if(b.pos.length > 11) b.pos.shift();
+      const p0 = b.pos[0];
+      const bloque = b.pos.length === 11 && c.ordre && c.ordre.type === 'recolter' && !c.travaille && Math.hypot(c.x - p0.x, c.y - p0.y) < 8;
+      b.suite = bloque ? (b.suite || 0) + 1 : 0;   // secondes de blocage d'affilée (après les 10 s du critère)
+      if(b.suite > (M.blocageMax[c.camp] || 0)) M.blocageMax[c.camp] = b.suite;
+      if(bloque){
+        b.bloqueS++; M.collecteursBloques[c.camp] = (M.collecteursBloques[c.camp] || 0) + 1;
+        if(!M.premierBlocage && ultras.has(c.camp)) M.premierBlocage = {t:Math.round(temps), camp:c.camp, id:c.id, x:Math.round(c.x), y:Math.round(c.y)};
+      }
+    }
+  };
+  // Demi-tour confirmé (nouvelle destination tenue 0,5 s) : compté, avec sa cause, au moment où il a eu lieu.
+  const confirmer = (u, s, K) => {
+    const T = K.t, cause = K.cause, A = K.A, D = K.D;
+    if(!K.eng){
+      // Hors assaut (défense, réserve, harcèlement) : compté à part, pour le diagnostic seulement.
+      ajouter(M.horsAssaut, (K.role || 'sans rôle') + ' / ' + cause);
+      s.dernierHA = (s.dernierHA || []).filter(t => T - t <= 20);
+      if(s.dernierHA.length) M.vaEtVientHorsAssaut++;
+      s.dernierHA.push(T);
+      if(opts.trace && M.trace.length < 800) M.trace.push({quoi:'demi-tour hors assaut', t:+T.toFixed(2), camp:u.camp, id:u.id, type:u.type, x:K.x, y:K.y,
+        de:[Math.round(A.x), Math.round(A.y)], vers:[Math.round(D.x), Math.round(D.y)], cause, role:K.role, phase:K.phase});
+      return;
+    }
+    const voulu = CAUSES_VOULUES_ULTRA.some(v => cause === v || cause.startsWith(v + ':'));
+    M.demiTours++; if(voulu) M.voulus++;
+    ajouter(M.parCause, cause);
+    s.dernierDT = s.dernierDT.filter(x => T - x.t <= 20);
+    let vev = false;
+    if(s.dernierDT.length){ M.vaEtVient++; M.unitesVaEtVient.add(u.id); ajouter(M.pairesVaEtVient, s.dernierDT[s.dernierDT.length - 1].cause + ' → ' + cause); vev = true; }
+    s.dernierDT.push({t:T, cause});
+    if(opts.trace && M.trace.length < 800) M.trace.push({quoi:'demi-tour', t:+T.toFixed(2), camp:u.camp, id:u.id, type:u.type, x:K.x, y:K.y,
+      de:[Math.round(A.x), Math.round(A.y)], vers:[Math.round(D.x), Math.round(D.y)], angle:Math.round(K.ang*180/Math.PI), cause, voulu, vaEtVient:vev,
+      phase:K.phase, role:K.role, pv:K.pv});
+  };
+  // Après chaque passage de majIA : destinations, demi-tours, va-et-vient, retournements « moteur ».
+  const evaluer = () => {
+    const t0 = performance.now();
+    releverCollecteurs();
+    releverEco();
+    for(const u of suivies()){
+      const s = etat.get(u.id); if(!s) continue;
+      const eng = engage(s.ultra) || engage(u.ultra);
+      const D = destination(u);
+      if(D !== 'garde'){
+        // Demi-tour en attente de confirmation : il ne compte que si la nouvelle destination tient 0,5 s. Une
+        // destination remplacée aussitôt (cible détruite, retour d'un pas vers un ordre périmé, puis nouvel ordre
+        // au passage suivant de l'ordinateur) ne fait pas tourner l'unité : elle est notée « fugace », et l'ancienne
+        // destination est rétablie pour la comparaison suivante.
+        if(s.cand){
+          const K = s.cand;
+          if(D && Math.hypot(D.x - K.D.x, D.y - K.D.y) > 200 && temps - K.t < 0.5){ M.fugaces++; s.dest = K.A; s.destT = K.tA; s.cand = null; }
+          else if(temps - K.t >= 0.5){ confirmer(u, s, K); s.cand = null; }
+        }
+        // Ancienne destination : la dernière connue, gardée 3 s après un ordre accompli (un recul de 150 px suivi
+        // d'un nouvel ordre vers l'avant est un aller-retour). Ancienne direction : vers elle, ou, si l'unité y est
+        // déjà (moins de 60 px), sa marche de la dernière seconde.
+        const A = s.dest && temps - s.destT <= 3 ? s.dest : null;
+        let dirA = null;
+        if(A){
+          if(Math.hypot(A.x - u.x, A.y - u.y) > 60) dirA = Math.atan2(A.y - u.y, A.x - u.x);
+          else { const E = s.echant, a = E[E.length - 3], b = E[E.length - 1]; if(a && b && Math.hypot(b.x - a.x, b.y - a.y) > 15) dirA = Math.atan2(b.y - a.y, b.x - a.x); }
+        }
+        if(!s.cand && A && D && dirA !== null && Math.hypot(D.x - A.x, D.y - A.y) > 200 && Math.hypot(D.x - u.x, D.y - u.y) > 60){
+          const ang = Math.abs(diffAngle(dirA, Math.atan2(D.y - u.y, D.x - u.x)));
+          if(ang > Math.PI*2/3){
+            // Cible finie (détruite, perdue) et retour au point d'un ordre plus ancien que la cible : la cause est cet
+            // ordre resté en place pendant la poursuite (« ordre périmé »), pas le code qui avait choisi la cible.
+            const cause = D.src === 'repos' ? 'moteur:retour au repos'
+              : D.src === 'ordre' && A.src === 'cible' && s.tO < s.tC ? 'moteur:retour à un ordre périmé (' + s.auteurO + ')'
+              : D.src === 'cible' || s.tC > s.tO ? s.auteurC : s.auteurO;
+            s.cand = {t:temps, A, tA:s.destT, D, ang, cause, eng, role:s.ultra || u.ultra || null, phase:S_(u.camp) && S_(u.camp).phase,
+              x:Math.round(u.x), y:Math.round(u.y), pv:Math.round(100*u.pv/u.pvMax)};
+          }
+        }
+        if(D){ s.dest = D; s.destT = temps; }
+      }
+      // Retournement « moteur » : échantillons de position toutes les 0,5 s (2 s gardées).
+      const E = s.echant;
+      if(!E.length || temps - E[E.length - 1].t >= 0.5){
+        E.push({t:temps, x:u.x, y:u.y}); if(E.length > 5) E.shift();
+        if(E.length === 5 && eng && temps - s.tO > 2 && temps - s.dernierRet > 2){
+          const ax = E[2].x - E[0].x, ay = E[2].y - E[0].y, bx = E[4].x - E[2].x, by = E[4].y - E[2].y;
+          const v = u.def.vitesse*0.35;   // au moins 35 % de sa vitesse sur chaque seconde
+          if(Math.hypot(ax, ay) > v && Math.hypot(bx, by) > v){
+            const ang = Math.abs(diffAngle(Math.atan2(ay, ax), Math.atan2(by, bx)));
+            if(ang > Math.PI*2/3){
+              const k = (u.cible || temps - s.tC < 2) ? 'poursuite ou changement de cible' : 'trajet (chemin, poussée)';
+              ajouter(M.retournementsMoteur, k); s.dernierRet = temps;
+              if(opts.trace && M.trace.length < 600) M.trace.push({quoi:'retournement moteur', t:+temps.toFixed(2), camp:u.camp, id:u.id, type:u.type, x:Math.round(u.x), y:Math.round(u.y), cause:k,
+                cible:u.cible ? u.cible.type + '#' + u.cible.id : null, ordre:u.ordre ? u.ordre.type : null});
+            }
+          }
+        }
+      }
+      s.ultra = u.ultra;
+      if(opts.suivre === u.id && (!M.suivi.length || temps - M.suivi[M.suivi.length - 1].t >= 0.25))
+        M.suivi.push({t:+temps.toFixed(2), x:Math.round(u.x), y:Math.round(u.y), pv:Math.round(u.pv), ordre:u.ordre ? u.ordre.type + (u.ordre.x != null ? ' ' + Math.round(u.ordre.x) + ',' + Math.round(u.ordre.y) : '') : null,
+          cible:u.cible ? u.cible.type + '#' + u.cible.id : null, role:u.ultra || null, auteurO:s.auteurO, auteurC:s.auteurC, dest:s.dest ? Math.round(s.dest.x) + ',' + Math.round(s.dest.y) : null,
+          phase:S_(u.camp) && S_(u.camp).phase});
+    }
+    instru += performance.now() - t0;
+  };
+  // Enveloppes.
+  const orig = {majIA:window.majIA, tirer:window.tirer};
+  for(const n of FONCTIONS_ORDRES_ULTRA) orig[n] = window[n];
+  const releverPre = () => {
+    const t0 = performance.now(), pre = {phase:{}, bary:{}};
+    for(const id of ultras){
+      const S = S_(id); pre.phase[id] = S && S.phase;
+      const l = ents.filter(e => e.camp === id && !e.mort && e.ultra === 'assaut');
+      pre.bary[id] = barycentre(l);
+    }
+    instru += performance.now() - t0;
+    return pre;
+  };
+  // Économie et combats (phase 3) : collecte par camp, relevés à 300 et 600 s, morts d'unités armées, unités au contact.
+  const campsListe = liste.map(k => k.id), collecte = {}, releves = {}, morts = [], contacts = [];
+  let contactT = -1;
+  const releverEco = () => {
+    for(const T of [300, 600]) if(temps >= T && !releves[T]) releves[T] = Object.fromEntries(campsListe.map(id => [id, {collecte:Math.round(collecte[id] || 0), armee:valeurArmee(id)}]));
+    if(temps - contactT < 1) return; contactT = temps;
+    const armes = {}; for(const id of campsListe) armes[id] = [];
+    for(const e of ents) if(!e.mort && e.est === 'unite' && armes[e.camp] && e.def.arme && !e.def.collecteur && !e.def.ouvrier && !e.def.aerien) armes[e.camp].push(e);
+    const l = {t:temps};
+    for(const id of campsListe){
+      let n = 0; for(const u of armes[id]) if(campsListe.some(o => o !== id && hostile(id, o) && armes[o].some(e => Math.abs(e.x - u.x) < 300 && Math.abs(e.y - u.y) < 300 && Math.hypot(e.x - u.x, e.y - u.y) < 300))) n++;
+      l[id] = [n, armes[id].length];
+    }
+    contacts.push(l);
+    // Poursuite inutile (phase 3) : unité d'Ultra qui poursuit une cible hors de portée alors qu'un ennemi qu'elle peut
+    // toucher est déjà à portée (unités-secondes).
+    if(!opts.poursuite) return;   // (coûteux : seulement sur demande, opts.poursuite)
+    for(const id of ultras) for(const u of armes[id] || []){
+      const c = u.cible;
+      if(!c || c.mort || distBord(u, c) <= u.def.portee) continue;
+      if(ents.some(e => !e.mort && e !== c && e.est === 'unite' && peutCibler(u, e) && efficacite(u.def.arme, e) > 0 && distBord(u, e) <= u.def.portee)) poursuiteInutile[id] = (poursuiteInutile[id] || 0) + 1;
+    }
+  };
+  const poursuiteInutile = {};
+  orig.majCollecteur = window.majCollecteur; orig.tuer = window.tuer;
+  const installer = () => {
+    if(!opts.coutSeul){
+      window.majCollecteur = function(u){ const C = camps[u.camp], r0 = C ? C.reserves : 0; const r = orig.majCollecteur.apply(this, arguments); if(C && C.reserves > r0) collecte[u.camp] = (collecte[u.camp] || 0) + C.reserves - r0; return r; };
+      window.tuer = function(c){ if(c && !c.mort && c.est === 'unite' && c.def.arme && !c.def.collecteur && !c.def.ouvrier) morts.push({t:temps, camp:c.camp, v:c.def.cout || 0}); return orig.tuer.apply(this, arguments); };
+    }
+    if(!opts.coutSeul) window.majIA = function(){
+      rattraper('moteur');
+      const r = orig.majIA.apply(this, arguments);
+      rattraper('majIA'); evaluer();
+      return r;
+    };
+    window.tirer = function(u){
+      if(u && ultras.has(u.camp)){ const A = assautEnCours[u.camp]; if(A && A.membres.has(u.id)) A.tirs++; }
+      return orig.tirer.apply(this, arguments);
+    };
+    for(const n of FONCTIONS_ORDRES_ULTRA){
+      const f = orig[n]; if(typeof f !== 'function') continue;
+      window[n] = function(){
+        if(n === 'majIACamp'){
+          const id = arguments[0], estU = ultras.has(id);
+          const i0 = instru, t0 = performance.now();
+          if(!opts.coutSeul) rattraper(pile.length ? pile[pile.length - 1] : 'moteur');
+          pile.push(n); campCourant = estU ? id : null;
+          let r; try { r = f.apply(this, arguments); } finally { pile.pop(); campCourant = null; }
+          if(!opts.coutSeul) rattraper(n);
+          if(estU){ const c = performance.now() - t0 - (instru - i0); M.couts.push(c); if(c > 2 && M.pics.length < 200) M.pics.push({t:+temps.toFixed(1), camp:id, ms:+c.toFixed(2)}); }
+          return r;
+        }
+        if(opts.coutSeul) return f.apply(this, arguments);
+        rattraper(pile.length ? pile[pile.length - 1] : 'moteur');
+        const pre = n === 'attaquerUltra' ? releverPre() : null;
+        pile.push(n);
+        const i0 = instru, t0 = performance.now();
+        let r; try { r = f.apply(this, arguments); } finally { pile.pop(); }
+        if(campCourant){ const c = performance.now() - t0 - (instru - i0), T = M.tempsFn[n] || (M.tempsFn[n] = {somme:0, max:0, n:0}); T.somme += c; T.n++; if(c > T.max) T.max = c; }
+        rattraper(n, pre);
+        return r;
+      };
+    }
+  };
+  // Pas de temps : fixe (1/30 par défaut) ou irrégulier (générateur à part, qui ne touche pas Math.random).
+  let pas = opts.pas || 1/30;
+  if(opts.irregulier != null){ let g = opts.irregulier >>> 0 || 1; pas = () => { g = (Math.imul(g, 1103515245) + 12345) >>> 0; return 1/60 + (g/4294967296)*(1/20 - 1/60); }; }
+  const avant = optionGaleries;
+  optionGaleries = !!opts.galeries;
+  let r;
+  try {
+    if(!opts.sansMesure) installer();
+    // Minuteur de verifierFin remis comme dans une page neuve : reinitialiserPartie ne le remet pas, et la même
+    // graine donnait une autre partie selon ce qui avait tourné avant dans la page (relevé du 21 novembre 2026).
+    verifT = 0;
+    // (Options ancien, cles et retraits de la phase 3 retirées avec l'interrupteur ultraV44 de jeu.js.)
+    const jouer = () => partieRejouable(() => partieOrdinateurs(liste, duree, {pas}));
+    r = opts.graine != null ? avecGraine(opts.graine, jouer) : jouer();
+  } finally { Object.assign(window, orig); optionGaleries = avant; }
+  const empreinte = empreinteEtat().empreinte;
+  const gagnants = vainqueurSerie(r);
+  const cs = M.couts.slice().sort((a, b) => a - b), q = p => cs.length ? +cs[Math.min(cs.length - 1, Math.floor(p*cs.length))].toFixed(2) : null;
+  // Assauts avortés : aucun tir, relancé (même camp) dans les 60 s qui suivent sa fin.
+  let avortes = 0;
+  M.assauts.forEach((A, i) => {
+    const suivant = M.assauts.slice(i + 1).find(B => B.camp === A.camp);
+    A.avorte = A.fin != null && A.tirs === 0 && !!suivant && suivant.debut - A.fin <= 60;
+    if(A.avorte) avortes++;
+  });
+  const parCamp = {};
+  for(const k of liste) parCamp[k.id] = k.niveau + ' ' + k.faction;
+  // Premier grand combat : première fenêtre de 30 s où meurent des unités armées pour au moins 1 000 (tous camps) ;
+  // pertes de chaque camp dans la fenêtre, et unités au contact (à moins de 300 px d'un ennemi armé) : le plus haut
+  // relevé entre 5 s avant et 10 s après le début de la fenêtre.
+  let combat = null;
+  for(let i = 0; i < morts.length && !combat; i++){
+    const t0 = morts[i].t, f = morts.filter(m => m.t >= t0 && m.t < t0 + 30);
+    if(f.reduce((s, m) => s + m.v, 0) >= 1000){
+      combat = {t:Math.round(t0), pertes:{}, contact:{}};
+      for(const id of campsListe) combat.pertes[id] = f.filter(m => m.camp === id).reduce((s, m) => s + m.v, 0);
+      for(const l of contacts) if(l.t >= t0 - 5 && l.t <= t0 + 10) for(const id of campsListe) if(!combat.contact[id] || l[id][0] > combat.contact[id][0]) combat.contact[id] = l[id];
+    }
+  }
+  const vainqueur = !gagnants ? 'aucun (non terminée)' : gagnants.split('+').map(id => id + ' ' + parCamp[id]).join(' + ');
+  return {carte:CARTE.id, camps:parCamp, galeries:!!opts.galeries, graine:opts.graine, pas:opts.irregulier != null ? 'irrégulier ' + opts.irregulier : +(opts.pas || 1/30).toFixed(4),
+    vainqueur, gagnants, duree:r.temps, erreur:r.erreur, empreinte, releves, combat, poursuiteInutile,
+    demiTours:M.demiTours, voulus:M.voulus, defauts:M.demiTours - M.voulus, parCause:M.parCause,
+    vaEtVient:M.vaEtVient, unitesVaEtVient:M.unitesVaEtVient.size, pairesVaEtVient:M.pairesVaEtVient, retournementsMoteur:M.retournementsMoteur,
+    horsAssaut:M.horsAssaut, vaEtVientHorsAssaut:M.vaEtVientHorsAssaut, fugaces:M.fugaces, collecteursBloques:M.collecteursBloques, blocageMax:M.blocageMax, premierBlocage:M.premierBlocage,
+    assautsLances:M.assauts.length, assautsAvortes:avortes,
+    assauts:M.assauts.map(A => ({camp:A.camp, debut:A.debut, fin:A.fin, vers:A.vers, par:A.finPar, n:A.n, valeur:A.valeur, cible:A.cible, tirs:A.tirs, avorte:A.avorte})),
+    reflexions:cs.length, coutMoyen:cs.length ? +(cs.reduce((a, b) => a + b, 0)/cs.length).toFixed(3) : null, coutMax:q(1), coutP99:q(0.99), coutP50:q(0.5),
+    reflexionsPlusDe2ms:cs.filter(x => x > 2).length, reflexionsPlusDe5ms:cs.filter(x => x > 5).length, pics:M.pics.slice(0, 30),
+    tempsParFonction:Object.fromEntries(Object.entries(M.tempsFn).map(([k, T]) => [k, {moyen:+(T.somme/T.n).toFixed(3), max:+T.max.toFixed(2), n:T.n}])),
+    msParPas:r.msParPas, msMaxPas:r.msMax, collecte:Object.fromEntries(Object.entries(r.camps).map(([id, c]) => [id, c.collecte])), triche:Object.fromEntries(Object.entries(r.camps).map(([id, c]) => [id, c.inexplique + ' / ' + c.unitesSansCommande])),
+    transitions:opts.trace ? M.transitions : undefined, trace:opts.trace ? M.trace : undefined, suivi:opts.suivre != null ? M.suivi : undefined};
+}
+window.mesureUltra = mesureUltra;
+// Neutralité de l'instrument : même partie avec et sans mesure (même empreinte finale).
+function verifierNeutraliteUltra(liste, duree, opts){
+  const a = mesureUltra(liste, duree, Object.assign({}, opts, {sansMesure:true}));
+  const b = mesureUltra(liste, duree, opts);
+  return {sans:a.empreinte, avec:b.empreinte, identiques:a.empreinte === b.empreinte, duree:[a.duree, b.duree], vainqueur:[a.vainqueur, b.vainqueur]};
+}
+window.verifierNeutraliteUltra = verifierNeutraliteUltra;
+// Plan de la série de référence (cahier) pour la carte chargée : Ultra contre Difficile (Ultra Halden et Karsk, en
+// J et en I, galeries décochées et cochées, graines données) et Ultra contre Ultra (Halden en J puis Karsk en J).
+const campU = (id, faction, niveau) => ({id, faction, equipe:id === 'J' ? 'A' : 'B', niveau});
+function planSerieUltra(graines, grainesUU, opts){
+  opts = opts || {};
+  const plan = [];
+  for(const gal of [false, true]){
+    for(const g of graines) for(const [fU, cote] of [['halden', 'J'], ['karsk', 'J'], ['halden', 'I'], ['karsk', 'I']]){
+      const fA = fU === 'halden' ? 'karsk' : 'halden';
+      const liste = cote === 'J' ? [campU('J', fU, 'ultra'), campU('I', fA, 'difficile')] : [campU('J', fA, 'difficile'), campU('I', fU, 'ultra')];
+      plan.push({nom:'U' + fU[0].toUpperCase() + '(' + cote + ')-D', liste, graine:g, galeries:gal});
+    }
+    for(const g of (grainesUU || [])) for(const fJ of ['halden', 'karsk'])
+      plan.push({nom:'UU ' + fJ[0].toUpperCase() + '(J)', liste:[campU('J', fJ, 'ultra'), campU('I', fJ === 'halden' ? 'karsk' : 'halden', 'ultra')], graine:g, galeries:gal});
+  }
+  return plan.map(p => Object.assign(p, opts));
+}
+window.planSerieUltra = planSerieUltra;
+// Ultra contre Ultra (biais de côté et de camp) : pour chaque graine, Halden (J) contre Karsk (I) puis Karsk (J) contre
+// Halden (I). (Les outils « nouveau contre ancien » et l'étude par retrait de la phase 3 demandaient l'interrupteur
+// ultraV44 de jeu.js, retiré ; ils sont décrits dans travaux/ia-ultra/MESURES-APRES.md, et la version de jeu.js qui
+// les accepte est dans travaux/ia-ultra/jeu-avec-interrupteur.js.)
+function planUltraContreUltra(graines){
+  const plan = [];
+  for(const g of graines) for(const fJ of ['halden', 'karsk']){
+    const fI = fJ === 'halden' ? 'karsk' : 'halden';
+    plan.push({nom:'UU ' + fJ[0].toUpperCase() + '(J)-' + fI[0].toUpperCase(), liste:[campU('J', fJ, 'ultra'), campU('I', fI, 'ultra')], graine:g, galeries:false});
+  }
+  return plan;
+}
+window.planUltraContreUltra = planUltraContreUltra;
+// Biais de côté et de camp : victoires de J et de Karsk.
+function biaisUltra(parties){
+  let n = 0, j = 0, k = 0, nul = 0;
+  for(const p of parties){ const m = p.mesure; if(!m || m.demiTours == null) continue; n++; if(!m.gagnants){ nul++; continue; } if(m.gagnants === 'J') j++; if(m.camps[m.gagnants].includes('karsk')) k++; }
+  return {parties:n, victoiresJ:j, victoiresKarsk:k, nulles:nul};
+}
+window.biaisUltra = biaisUltra;
+// Résumé économie / combat d'une série, par camp de faction : moyennes de la collecte et de l'armée à 300 et 600 s, des
+// pertes subies et infligées et de la part des unités au contact dans le premier grand combat (mesureUltra).
+function ecoCombatUltra(parties){
+  const S = {};
+  const aj = (o, k, v) => { if(v == null || isNaN(v)) return; o[k] = (o[k] || 0) + v; o[k + 'N'] = (o[k + 'N'] || 0) + 1; };
+  for(const p of parties){
+    const m = p.mesure; if(!m || !m.releves) continue;
+    for(const id of Object.keys(m.camps)){
+      const o = S[m.camps[id]] || (S[m.camps[id]] = {n:0}); o.n++;
+      for(const T of [300, 600]) if(m.releves[T]){ aj(o, 'collecte' + T, m.releves[T][id].collecte); aj(o, 'armee' + T, m.releves[T][id].armee); }
+      if(m.combat){
+        const autre = Object.keys(m.camps).find(x => x !== id);
+        aj(o, 'pertesCombat', m.combat.pertes[id]); aj(o, 'pertesInfligees', m.combat.pertes[autre]);
+        if(m.combat.contact[id]) aj(o, 'partAuContact', m.combat.contact[id][1] ? m.combat.contact[id][0]/m.combat.contact[id][1] : 0);
+      }
+    }
+  }
+  for(const o of Object.values(S)) for(const k of Object.keys(o)) if(k.endsWith('N')){ const b = k.slice(0, -1); o[b] = +(o[b]/o[k]).toFixed(b === 'partAuContact' ? 2 : 0); delete o[k]; }
+  return S;
+}
+window.ecoCombatUltra = ecoCombatUltra;
+// Série par morceaux synchrones (une partie par appel d'avancerSerieUltra), résultats dans RESULTATS[cle].
+function preparerSerieUltra(cle, plan, duree){
+  RESULTATS[cle] = {etat:'en cours', duree:duree || 1500, travaux:plan.slice(), faits:0, total:plan.length, parties:[]};
+  return plan.length + ' parties à jouer';
+}
+window.preparerSerieUltra = preparerSerieUltra;
+function ligneMesureUltra(p, m){
+  return p.nom + ' g' + p.graine + (p.galeries ? ' gal' : '') + ' : ' + m.vainqueur + ' ' + m.duree + ' s, demi-tours ' + m.demiTours + ' (voulus ' + m.voulus +
+    '), va-et-vient ' + m.vaEtVient + ', collecteurs bloqués (s) ' + JSON.stringify(m.collecteursBloques || {}) + ', assauts ' + m.assautsLances + ' / avortés ' + m.assautsAvortes + ', réflexion ' + m.coutMoyen + ' ms (max ' + m.coutMax + ')' + (m.erreur ? ' ERREUR ' + m.erreur : '');
+}
+function avancerSerieUltra(cle, limite){
+  const R = RESULTATS[cle], t0 = performance.now();
+  while(R.travaux.length && performance.now() - t0 < (limite || 1)){
+    const p = R.travaux[0];
+    let m;
+    try { m = mesureUltra(p.liste, R.duree, {graine:p.graine, galeries:p.galeries, pas:p.pas, irregulier:p.irregulier}); }
+    catch(e){ m = {erreur:e.message}; }
+    const res = {nom:p.nom, graine:p.graine, galeries:p.galeries, pas:p.irregulier != null ? 'irr' + p.irregulier : (p.pas || 1/30), mesure:m, ligne:ligneMesureUltra(p, m)};
+    delete m.trace; delete m.suivi; delete m.transitions;
+    R.parties.push(res); R.travaux.shift(); R.faits++;
+  }
+  if(!R.travaux.length) R.etat = 'fini';
+  return {reste:R.travaux.length, faits:R.faits, derniere:R.parties.length ? R.parties[R.parties.length - 1].ligne : null};
+}
+window.avancerSerieUltra = avancerSerieUltra;
+// Même chose sans bloquer les appels courts : une partie par tour de la boucle du navigateur.
+function lancerSerieUltra(cle, plan, duree){
+  preparerSerieUltra(cle, plan, duree);
+  const pas = () => { if(!RESULTATS[cle].travaux.length) return; avancerSerieUltra(cle, 1); setTimeout(pas, 10); };
+  setTimeout(pas, 10);
+  return 'lancée : RESULTATS.' + cle;
+}
+window.lancerSerieUltra = lancerSerieUltra;
+// Plusieurs séries par morceaux : SERIES_ULTRA = [[cle, plan], ...] ; avancerSeriesUltra(24000) autant de fois qu'il
+// faut (chaque appel joue des parties pendant au plus ce nombre de ms).
+window.SERIES_ULTRA = [];
+function avancerSeriesUltra(lim){
+  const t0 = performance.now();
+  for(const [k, p] of SERIES_ULTRA){
+    if(!RESULTATS[k]) preparerSerieUltra(k, p, 1500);
+    while(RESULTATS[k].travaux.length && performance.now() - t0 < lim) avancerSerieUltra(k, 1);
+  }
+  return SERIES_ULTRA.map(([k]) => k + ' ' + RESULTATS[k].faits + '/' + RESULTATS[k].total).join(', ');
+}
+window.avancerSeriesUltra = avancerSeriesUltra;
+// Tableau (lignes Markdown) et bilan condensé d'une série.
+function resumerSerieUltra(k){
+  const L = RESULTATS[k].parties.map(p => {
+    const m = p.mesure, idU = Object.keys(m.camps).filter(id => m.camps[id].startsWith('ultra'));
+    return '| ' + p.nom + ' | ' + p.graine + ' | ' + (p.galeries ? 'oui' : 'non') + ' | ' + m.vainqueur + ' | ' + m.duree + ' | ' + m.demiTours + ' (' + m.voulus + ') | ' +
+      m.vaEtVient + ' | ' + m.fugaces + ' | ' + m.assautsLances + ' / ' + m.assautsAvortes + ' | ' + m.coutMoyen + ' / ' + m.coutMax + ' | ' +
+      idU.map(id => id + ' ' + ((m.collecteursBloques || {})[id] || 0)).join(', ') + ' | `' + m.empreinte + '` |' + (m.erreur ? ' ERREUR ' + m.erreur : '');
+  });
+  const B = bilanSerieUltra(RESULTATS[k].parties);
+  return L.join('\n') + '\nBILAN ' + JSON.stringify({vsD:B.contreDifficile, UU:B.ultraContreUltra, DT:B.demiTours, voulus:B.voulus, VEV:B.vaEtVient, VEVdefaut:B.vaEtVientDefaut, unitesVEV:B.unitesVaEtVient,
+    fugaces:B.fugaces, assauts:B.assauts, avortes:B.avortes, parCause:B.parCause, paires:B.pairesVaEtVient, moteur:B.retournementsMoteur,
+    cout:[B.coutMoyen, B.coutMax, B.reflexionsPlusDe2ms, B.reflexionsPlusDe5ms], bloques:[B.collecteursBloquesUltra, B.collecteursBloquesAdversaire],
+    partiesBlocage:B.partiesBlocageUltra, ha:B.horsAssaut, vevHA:B.vaEtVientHorsAssaut, erreurs:B.erreurs});
+}
+window.resumerSerieUltra = resumerSerieUltra;
+// Va-et-vient « défaut » : paire de demi-tours dont aucune des deux causes n'est voulue (CAUSES_VOULUES_ULTRA).
+const causeVoulueUltra = c => CAUSES_VOULUES_ULTRA.some(v => c === v || c.startsWith(v + ':'));
+function vaEtVientDefaut(paires){
+  let n = 0;
+  for(const [k, v] of Object.entries(paires || {})){ const [a, b] = k.split(' → '); if(!causeVoulueUltra(a) && !causeVoulueUltra(b)) n += v; }
+  return n;
+}
+window.vaEtVientDefaut = vaEtVientDefaut;
+// Va-et-vient des causes A1 à A5 du diagnostic : une des deux causes est le recul (A1), un ordre périmé (A2), un
+// changement de cible de combattreUltra (A3), le repli d'un harceleur (A4), « rejoindre le barycentre » (A5), ou
+// les deux sont des ordres de marche groupée (bascule A5). Les autres va-et-vient « défaut » viennent de la laisse du
+// moteur (retour au repos, cible prise au balayage) : règle commune à tous les niveaux, comptée à part.
+const CAUSE_A1A5 = /recul longue portée|ordre périmé|combattreUltra:changement de cible|harcelerUltra:repli|rejoindre le barycentre/;
+function vaEtVientA1A5(paires){
+  let n = 0;
+  for(const [k, v] of Object.entries(paires || {})){
+    const [a, b] = k.split(' → ');
+    if(causeVoulueUltra(a) || causeVoulueUltra(b)) continue;
+    if(CAUSE_A1A5.test(a) || CAUSE_A1A5.test(b) || (/attaquerUltra:marche/.test(a) && /attaquerUltra:marche/.test(b))) n += v;
+  }
+  return n;
+}
+window.vaEtVientA1A5 = vaEtVientA1A5;
+// Essai rejouable de l'ordinateur Ultra (21 novembre 2026, phase 2) : les parties où le diagnostic a vu les défauts
+// A1 à A5 et B1 (DIAGNOSTIC.md), sur la carte chargée (?verif&carte=portCalmes, puis ?verif&carte=gorgesVarseche),
+// dont une à pas irrégulier. Par partie : aucun va-et-vient de cause A1 à A5 (vaEtVientA1A5), aucun collecteur
+// d'Ultra bloqué plus de 30 s d'affilée (au-delà des 10 s du critère), aucune erreur, aucune triche ; victoire d'Ultra
+// quand il joue contre Difficile (un vainqueur quand Ultra joue contre Ultra).
+// Ex. : testerUltra()  →  {carte, bilan:'n / m', verdicts:[...]} (environ 10 s par carte).
+const CAS_ULTRA = {
+  portCalmes:[
+    {nom:'UH(J)-D g1 (Bastion #50 : ordre périmé, bascule de cible)', liste:[campU('J', 'halden', 'ultra'), campU('I', 'karsk', 'difficile')], graine:1},
+    {nom:'UU H(J) g1 (Lynx #60 : harceleur enrôlé dans l’assaut)', liste:[campU('J', 'halden', 'ultra'), campU('I', 'karsk', 'ultra')], graine:1, uu:true},
+    {nom:'UH(I)-D g2 galeries, pas irrégulier 202 (Rempart #64 : recul / avance)', liste:[campU('J', 'karsk', 'difficile'), campU('I', 'halden', 'ultra')], graine:2, galeries:true, irregulier:202},
+  ],
+  gorgesVarseche:[
+    {nom:'UH(J)-D g1 (Rempart #76 : recul / avance, seuil du barycentre)', liste:[campU('J', 'halden', 'ultra'), campU('I', 'karsk', 'difficile')], graine:1},
+    {nom:'UH(I)-D g1 (six collecteurs coincés dans un couloir)', liste:[campU('J', 'karsk', 'difficile'), campU('I', 'halden', 'ultra')], graine:1},
+    {nom:'UH(J)-D g2 (assaut au-devant d’une vague)', liste:[campU('J', 'halden', 'ultra'), campU('I', 'karsk', 'difficile')], graine:2},
+    {nom:'UH(J)-D g1, pas irrégulier 101', liste:[campU('J', 'halden', 'ultra'), campU('I', 'karsk', 'difficile')], graine:1, irregulier:101},
+  ],
+};
+window.CAS_ULTRA = CAS_ULTRA;
+function testerUltra(){
+  const cas = CAS_ULTRA[CARTE.id];
+  if(!cas) return {carte:CARTE.id, bilan:'0 / 0', verdicts:[{nom:'carte prévue (portCalmes ou gorgesVarseche)', ok:false}]};
+  const V = [];
+  for(const c of cas){
+    const m = mesureUltra(c.liste, 1500, {graine:c.graine, galeries:!!c.galeries, irregulier:c.irregulier});
+    const ids = c.liste.filter(k => k.niveau === 'ultra').map(k => k.id);
+    const bloque = Math.max(0, ...ids.map(id => (m.blocageMax || {})[id] || 0));
+    const vevA = vaEtVientA1A5(m.pairesVaEtVient);
+    const triche = Object.values(m.triche).every(t => t === '0 / 0');
+    const victoire = c.uu ? !!m.gagnants : ids.includes(m.gagnants);
+    const ok = !m.erreur && vevA === 0 && bloque <= 30 && triche && victoire;
+    V.push({nom:c.nom, ok, detail:{vainqueur:m.vainqueur, duree:m.duree, vaEtVientA1A5:vevA, vaEtVientDefaut:vaEtVientDefaut(m.pairesVaEtVient), vaEtVient:m.vaEtVient,
+      paires:m.pairesVaEtVient, collecteurBloqueDaffilee:bloque, collecteurBloqueTotal:ids.map(id => (m.collecteursBloques || {})[id] || 0), triche:m.triche, erreur:m.erreur, empreinte:m.empreinte}});
+  }
+  return {carte:CARTE.id, bilan:V.filter(v => v.ok).length + ' / ' + V.length, verdicts:V};
+}
+window.testerUltra = testerUltra;
+// Bilan d'une ou plusieurs séries (tableau de parties de RESULTATS[cle].parties).
+function bilanSerieUltra(parties){
+  const B = {parties:parties.length, contreDifficile:{n:0, victoires:0, haldenContreKarsk:{n:0, v:0}, durees:[]}, ultraContreUltra:{n:0, J:0, I:0, aucun:0},
+    demiTours:0, voulus:0, vaEtVient:0, unitesVaEtVient:0, assauts:0, avortes:0, parCause:{}, pairesVaEtVient:{}, retournementsMoteur:{},
+    coutMoyen:null, coutMax:0, reflexionsPlusDe2ms:0, reflexionsPlusDe5ms:0, erreurs:0};
+  let sc = 0, nc = 0;
+  for(const p of parties){
+    const m = p.mesure; if(!m || m.erreur){ B.erreurs++; if(!m || m.demiTours == null) continue; }
+    const niv = Object.values(m.camps);
+    if(niv.every(s => s.startsWith('ultra'))){
+      B.ultraContreUltra.n++;
+      if(!m.gagnants) B.ultraContreUltra.aucun++; else B.ultraContreUltra[m.gagnants]++;
+    } else {
+      B.contreDifficile.n++;
+      const idU = Object.keys(m.camps).find(id => m.camps[id].startsWith('ultra'));
+      const v = m.gagnants === idU;
+      if(v){ B.contreDifficile.victoires++; B.contreDifficile.durees.push(m.duree); }
+      if(m.camps[idU] === 'ultra halden'){ B.contreDifficile.haldenContreKarsk.n++; if(v) B.contreDifficile.haldenContreKarsk.v++; }
+    }
+    B.demiTours += m.demiTours; B.voulus += m.voulus; B.vaEtVient += m.vaEtVient; B.unitesVaEtVient += m.unitesVaEtVient;
+    B.assauts += m.assautsLances; B.avortes += m.assautsAvortes;
+    for(const [k, n] of Object.entries(m.parCause)) B.parCause[k] = (B.parCause[k] || 0) + n;
+    for(const [k, n] of Object.entries(m.pairesVaEtVient)) B.pairesVaEtVient[k] = (B.pairesVaEtVient[k] || 0) + n;
+    for(const [k, n] of Object.entries(m.retournementsMoteur)) B.retournementsMoteur[k] = (B.retournementsMoteur[k] || 0) + n;
+    for(const [id, s] of Object.entries(m.collecteursBloques || {})){ const k = m.camps[id].startsWith('ultra') ? 'collecteursBloquesUltra' : 'collecteursBloquesAdversaire'; B[k] = (B[k] || 0) + s; if(s >= 60 && m.camps[id].startsWith('ultra')) (B.partiesBlocageUltra = B.partiesBlocageUltra || []).push(p.nom + ' g' + p.graine + (p.galeries ? ' gal' : '') + ' ' + id + ' ' + s + ' s'); }
+    B.fugaces = (B.fugaces || 0) + (m.fugaces || 0);
+    B.vaEtVientDefaut = (B.vaEtVientDefaut || 0) + vaEtVientDefaut(m.pairesVaEtVient);
+    B.vaEtVientA1A5 = (B.vaEtVientA1A5 || 0) + vaEtVientA1A5(m.pairesVaEtVient);
+    for(const [id, s] of Object.entries(m.blocageMax || {})) if(m.camps[id].startsWith('ultra')) B.blocageMaxUltra = Math.max(B.blocageMaxUltra || 0, s);
+    B.horsAssaut = B.horsAssaut || {}; B.vaEtVientHorsAssaut = (B.vaEtVientHorsAssaut || 0) + (m.vaEtVientHorsAssaut || 0);
+    for(const [k, n] of Object.entries(m.horsAssaut || {})) B.horsAssaut[k] = (B.horsAssaut[k] || 0) + n;
+    if(m.reflexions){ sc += m.coutMoyen*m.reflexions; nc += m.reflexions; }
+    B.coutMax = Math.max(B.coutMax, m.coutMax || 0); B.reflexionsPlusDe2ms += m.reflexionsPlusDe2ms || 0; B.reflexionsPlusDe5ms += m.reflexionsPlusDe5ms || 0;
+  }
+  B.coutMoyen = nc ? +(sc/nc).toFixed(3) : null;
+  B.contreDifficile.mediane = medianeSerie(B.contreDifficile.durees);
+  const tri = T => Object.fromEntries(Object.entries(T).sort((a, b) => b[1] - a[1]));
+  B.parCause = tri(B.parCause); B.pairesVaEtVient = tri(B.pairesVaEtVient); if(B.horsAssaut) B.horsAssaut = tri(B.horsAssaut);
+  return B;
+}
+window.bilanSerieUltra = bilanSerieUltra;
