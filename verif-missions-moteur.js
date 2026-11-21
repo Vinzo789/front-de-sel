@@ -3816,7 +3816,7 @@ function mesureUltra(liste, duree, opts){
   const campsListe = liste.map(k => k.id), collecte = {}, releves = {}, morts = [], contacts = [];
   let contactT = -1;
   const releverEco = () => {
-    for(const T of [300, 600]) if(temps >= T && !releves[T]) releves[T] = Object.fromEntries(campsListe.map(id => [id, {collecte:Math.round(collecte[id] || 0), armee:valeurArmee(id)}]));
+    for(const T of [180, 300, 360, 540, 600]) if(temps >= T && !releves[T]) releves[T] = Object.fromEntries(campsListe.map(id => [id, {collecte:Math.round(collecte[id] || 0), armee:valeurArmee(id)}]));
     if(temps - contactT < 1) return; contactT = temps;
     const armes = {}; for(const id of campsListe) armes[id] = [];
     for(const e of ents) if(!e.mort && e.est === 'unite' && armes[e.camp] && e.def.arme && !e.def.collecteur && !e.def.ouvrier && !e.def.aerien) armes[e.camp].push(e);
@@ -3836,11 +3836,25 @@ function mesureUltra(liste, duree, opts){
     }
   };
   const poursuiteInutile = {};
-  orig.majCollecteur = window.majCollecteur; orig.tuer = window.tuer;
+  orig.majCollecteur = window.majCollecteur; orig.tuer = window.tuer; orig.infliger = window.infliger; orig.creerUnite = window.creerUnite; orig.activerPouvoir = window.activerPouvoir;
+  // Analyse stratégique (lot « stratégie », 21 novembre 2026) : par camp, collecteurs perdus, dégâts infligés (aux
+  // unités et bâtiments ennemis) et coût des unités produites, pouvoirs lancés et valeur qu'ils détruisent.
+  const strat = Object.fromEntries(campsListe.map(id => [id, {collecteursPerdus:0, degats:0, degatsBat:0, produit:0, pouvoirs:0, valeurPouvoirs:0}]));
   const installer = () => {
     if(!opts.coutSeul){
       window.majCollecteur = function(u){ const C = camps[u.camp], r0 = C ? C.reserves : 0; const r = orig.majCollecteur.apply(this, arguments); if(C && C.reserves > r0) collecte[u.camp] = (collecte[u.camp] || 0) + C.reserves - r0; return r; };
-      window.tuer = function(c){ if(c && !c.mort && c.est === 'unite' && c.def.arme && !c.def.collecteur && !c.def.ouvrier) morts.push({t:temps, camp:c.camp, v:c.def.cout || 0}); return orig.tuer.apply(this, arguments); };
+      window.tuer = function(c, auteur){
+        if(c && !c.mort && c.est === 'unite' && c.def.arme && !c.def.collecteur && !c.def.ouvrier) morts.push({t:temps, camp:c.camp, v:c.def.cout || 0});
+        if(c && !c.mort && c.def.collecteur && strat[c.camp]) strat[c.camp].collecteursPerdus++;
+        if(c && !c.mort && auteur && auteur.est === 'pouvoir' && strat[auteur.camp]) strat[auteur.camp].valeurPouvoirs += c.def.cout || 0;
+        return orig.tuer.apply(this, arguments);
+      };
+      window.infliger = function(c, deg, auteur){
+        if(c && !c.mort && deg > 0 && auteur && strat[auteur.camp] && auteur.camp !== c.camp){ const v = Math.min(deg, c.pv); if(c.est === 'batiment') strat[auteur.camp].degatsBat += v; else strat[auteur.camp].degats += v; }
+        return orig.infliger.apply(this, arguments);
+      };
+      window.creerUnite = function(type, camp){ const u = orig.creerUnite.apply(this, arguments); if(temps > 0 && strat[camp] && UNITES[type] && UNITES[type].arme && !UNITES[type].collecteur) strat[camp].produit += UNITES[type].cout || 0; return u; };
+      window.activerPouvoir = function(camp){ const ok = orig.activerPouvoir.apply(this, arguments); if(ok && strat[camp]) strat[camp].pouvoirs++; return ok; };
     }
     if(!opts.coutSeul) window.majIA = function(){
       rattraper('moteur');
@@ -3923,7 +3937,10 @@ function mesureUltra(liste, duree, opts){
     vaEtVient:M.vaEtVient, unitesVaEtVient:M.unitesVaEtVient.size, pairesVaEtVient:M.pairesVaEtVient, retournementsMoteur:M.retournementsMoteur,
     horsAssaut:M.horsAssaut, vaEtVientHorsAssaut:M.vaEtVientHorsAssaut, fugaces:M.fugaces, collecteursBloques:M.collecteursBloques, blocageMax:M.blocageMax, premierBlocage:M.premierBlocage,
     assautsLances:M.assauts.length, assautsAvortes:avortes,
-    assauts:M.assauts.map(A => ({camp:A.camp, debut:A.debut, fin:A.fin, vers:A.vers, par:A.finPar, n:A.n, valeur:A.valeur, cible:A.cible, tirs:A.tirs, avorte:A.avorte})),
+    assauts:M.assauts.map(A => { const f = A.fin == null ? r.temps : A.fin, dans = m => m.t >= A.debut && m.t <= f;
+      return {camp:A.camp, debut:A.debut, fin:A.fin, vers:A.vers, par:A.finPar, n:A.n, valeur:A.valeur, cible:A.cible, tirs:A.tirs, avorte:A.avorte,
+        pertes:morts.filter(m => dans(m) && m.camp === A.camp).reduce((s, m) => s + m.v, 0), infligees:morts.filter(m => dans(m) && m.camp !== A.camp).reduce((s, m) => s + m.v, 0)}; }),
+    strat,
     reflexions:cs.length, coutMoyen:cs.length ? +(cs.reduce((a, b) => a + b, 0)/cs.length).toFixed(3) : null, coutMax:q(1), coutP99:q(0.99), coutP50:q(0.5),
     reflexionsPlusDe2ms:cs.filter(x => x > 2).length, reflexionsPlusDe5ms:cs.filter(x => x > 5).length, pics:M.pics.slice(0, 30),
     tempsParFonction:Object.fromEntries(Object.entries(M.tempsFn).map(([k, T]) => [k, {moyen:+(T.somme/T.n).toFixed(3), max:+T.max.toFixed(2), n:T.n}])),
@@ -3997,6 +4014,50 @@ function ecoCombatUltra(parties){
   return S;
 }
 window.ecoCombatUltra = ecoCombatUltra;
+// Robot joueur (camp J) contre Ultra (camp I) : graines données, Halden et Karsk pour Ultra.
+function planRobotUltra(graines){
+  const plan = [];
+  for(const g of graines) for(const fU of ['halden', 'karsk'])
+    plan.push({nom:'R-U' + fU[0].toUpperCase(), liste:[campU('J', fU === 'halden' ? 'karsk' : 'halden', 'robot'), campU('I', fU, 'ultra')], graine:g, galeries:false});
+  return plan;
+}
+window.planRobotUltra = planRobotUltra;
+// Analyse stratégique d'une série (lot « stratégie ») : pour chaque camp Ultra, moyennes selon l'issue (gagné / perdu /
+// nul) : collecte à 3, 6 et 9 min, armée, collecteurs perdus, dégâts infligés par crédit d'unités produites, pouvoirs et
+// valeur détruite par eux, assauts (nombre, retraites, valeur engagée, pertes contre pertes infligées pendant l'assaut),
+// et les mêmes chiffres pour l'adversaire.
+function analyseUltra(parties){
+  const G = {};
+  const aj = (o, k, v) => { if(v == null || isNaN(v)) return; o[k] = (o[k] || 0) + v; o['#' + k] = (o['#' + k] || 0) + 1; };
+  for(const p of parties){
+    const m = p.mesure; if(!m || !m.strat) continue;
+    for(const id of Object.keys(m.camps)){
+      if(!m.camps[id].startsWith('ultra')) continue;
+      const adv = Object.keys(m.camps).find(x => x !== id);
+      const issue = !m.gagnants ? 'nul' : m.gagnants === id ? 'gagne' : 'perdu';
+      for(const [qui, c] of [['ultra', id], ['adversaire', adv]]){
+        const o = (G[issue] = G[issue] || {})[qui] = G[issue][qui] || {};
+        aj(o, 'parties', 1);
+        for(const T of [180, 360, 540]) if(m.releves[T]){ aj(o, 'collecte' + T, m.releves[T][c].collecte); aj(o, 'armee' + T, m.releves[T][c].armee); }
+        const s = m.strat[c]; aj(o, 'collecteursPerdus', s.collecteursPerdus); aj(o, 'degatsParCredit', s.produit ? (s.degats + s.degatsBat)/s.produit : 0);
+        aj(o, 'pouvoirs', s.pouvoirs); aj(o, 'valeurPouvoirs', s.valeurPouvoirs);
+        const As = (m.assauts || []).filter(A => A.camp === c);
+        aj(o, 'assauts', As.length); aj(o, 'retraites', As.filter(A => A.vers === 'retraite').length);
+        aj(o, 'valeurAssaut', As.length ? As.reduce((a, A) => a + A.valeur, 0)/As.length : null);
+        const pe = As.reduce((a, A) => a + A.pertes, 0), inf = As.reduce((a, A) => a + A.infligees, 0);
+        if(As.length) aj(o, 'echangeAssaut', inf/Math.max(1, pe));
+        aj(o, 'premierAssaut', As.length ? As[0].debut : null);
+      }
+      (G[issue].duree = G[issue].duree || []).push(m.duree);
+    }
+  }
+  for(const g of Object.values(G)) for(const o of Object.values(g)) if(!Array.isArray(o)) for(const k of Object.keys(o)) if(k[0] === '#'){
+    const b = k.slice(1); o[b] = b === 'parties' ? o[b] : +(o[b]/o[k]).toFixed(b === 'degatsParCredit' || b === 'echangeAssaut' || b === 'collecteursPerdus' || b === 'pouvoirs' || b === 'assauts' || b === 'retraites' ? 2 : 0); delete o[k];
+  }
+  for(const g of Object.values(G)) if(g.duree) g.dureeMediane = medianeSerie(g.duree), delete g.duree;
+  return G;
+}
+window.analyseUltra = analyseUltra;
 // Série par morceaux synchrones (une partie par appel d'avancerSerieUltra), résultats dans RESULTATS[cle].
 function preparerSerieUltra(cle, plan, duree){
   RESULTATS[cle] = {etat:'en cours', duree:duree || 1500, travaux:plan.slice(), faits:0, total:plan.length, parties:[]};
@@ -4042,6 +4103,20 @@ function avancerSeriesUltra(lim){
   return SERIES_ULTRA.map(([k]) => k + ' ' + RESULTATS[k].faits + '/' + RESULTATS[k].total).join(', ');
 }
 window.avancerSeriesUltra = avancerSeriesUltra;
+// Même chose sans bloquer l'outil qui interroge la page : lancerSeriesUltra([[cle, plan], ...]) enchaîne des morceaux
+// de 15 s par setTimeout ; ETAT_SERIES_ULTRA dit où on en est (« fini … » à la fin).
+window.ETAT_SERIES_ULTRA = '';
+function lancerSeriesUltra(series){
+  SERIES_ULTRA = series; ETAT_SERIES_ULTRA = 'en cours';
+  const pas = () => {
+    let r; try { r = avancerSeriesUltra(15000); } catch(e){ ETAT_SERIES_ULTRA = 'ERREUR ' + e.message; return; }
+    ETAT_SERIES_ULTRA = r;
+    if(SERIES_ULTRA.some(([k]) => RESULTATS[k].travaux.length)) setTimeout(pas, 30); else ETAT_SERIES_ULTRA = 'fini ' + r;
+  };
+  setTimeout(pas, 30);
+  return 'lancé';
+}
+window.lancerSeriesUltra = lancerSeriesUltra;
 // Tableau (lignes Markdown) et bilan condensé d'une série.
 function resumerSerieUltra(k){
   const L = RESULTATS[k].parties.map(p => {
