@@ -309,3 +309,120 @@ CARTES.valBrunelles = {
   // 0 nord-ouest contre 1 sud-est ; 2 nord-est contre 3 sud-ouest
   bases: [ { c: 7, r: 6 }, { c: 70, r: 46 }, { c: 70, r: 6 }, { c: 7, r: 46 } ],
 };
+
+// ---------------------------------------------------------------------
+//  Couronne de Varenne (novembre 2026) : grande carte à huit camps, escarmouche hors ligne.
+//  Huit bases en couronne, une ville au centre. Données fabriquées par
+//  travaux/carte8/fabrique_carte.py (non publié). Champ « taille » : voir jeu.js, section 1.
+// ---------------------------------------------------------------------
+// >>> Couronne de Varenne : bloc fabriqué, ne pas modifier à la main
+CARTES.couronneVarenne = {
+  id: 'couronneVarenne',
+  nom: 'Couronne de Varenne',
+  description: 'Grande carte à huit bases en couronne autour d’une ville ; les champs riches sont en ville. Hors ligne seulement.',
+  taille: { cols: 140, lignes: 98 },   // les autres cartes font 80 × 56
+  horsLigne: true,                     // absente des parties en ligne
+  graine: 80825,
+  ambiance: 'midi',
+  cote: null,
+  rivieres: [],
+  ponts: [],
+  // Crêtes entre deux bases voisines : on passe d'une base à l'autre par l'intérieur de la couronne.
+  cretes: [
+    [4428, 2393, 5275, 2619, 9],
+    [3474, 3006, 3825, 3550, 9],
+    [2126, 3006, 1775, 3550, 9],
+    [1172, 2393, 325, 2619, 9],
+    [1172, 1527, 325, 1301, 9],
+    [2126, 914, 1775, 370, 9],
+    [3474, 914, 3825, 370, 9],
+    [4428, 1527, 5275, 1301, 9],
+  ],
+  rochers: 80,
+  zonesSansRochers: [ { x: 1900, y: 1400, l: 1800, h: 1120 } ],   // la ville et ses portes
+  bosquets: [
+    { x: 4016, y: 2284, r: 70 },
+    { x: 3304, y: 2741, r: 70 },
+    { x: 2296, y: 2741, r: 70 },
+    { x: 1584, y: 2284, r: 70 },
+    { x: 1584, y: 1636, r: 70 },
+    { x: 2296, y: 1179, r: 70 },
+    { x: 3304, y: 1179, r: 70 },
+    { x: 4016, y: 1636, r: 70 },
+    { x: 1283, y: 2167, r: 55 },
+    { x: 4317, y: 1753, r: 55 },
+    { x: 2478, y: 985, r: 55 },
+    { x: 3122, y: 2935, r: 55 },
+    { x: 1499, y: 1417, r: 55 },
+    { x: 4101, y: 2503, r: 55 },
+    { x: 3645, y: 1124, r: 55 },
+    { x: 1955, y: 2796, r: 55 },
+  ],
+  routes: [
+    [[610, 1979], [2180, 1965]],
+    [[4990, 1979], [3420, 1965]],
+    [[2782, 610], [2792, 1340]],
+    [[2782, 3310], [2792, 2580]],
+    [[1266, 981], [2277, 1626]],
+    [[4334, 2939], [3323, 2294]],
+    [[4334, 981], [3323, 1626]],
+    [[1266, 2939], [2277, 2294]],
+    [[3787, 1960], [3655, 2277], [3294, 2509], [2800, 2594], [2306, 2509], [1945, 2277], [1813, 1960], [1945, 1643], [2306, 1411], [2800, 1326], [3294, 1411], [3655, 1643], [3787, 1960]],
+    [[2180, 1960], [3420, 1960]],
+    [[2800, 1560], [2800, 2360]],
+  ],
+  noeuds: [
+    [657, 1632, 3000],   // base ouest
+    [663, 2325, 3000],   // base ouest
+    [1192, 2183, 2500],   // avance ouest
+    [4937, 2325, 3000],   // base est
+    [4943, 1632, 3000],   // base est
+    [4411, 1764, 2500],   // avance est
+    [3129, 655, 3000],   // base nord
+    [2436, 665, 3000],   // base nord
+    [2580, 1193, 2500],   // avance nord
+    [2436, 3255, 3000],   // base sud
+    [3129, 3265, 3000],   // base sud
+    [2999, 2732, 2500],   // avance sud
+    [1495, 716, 3000],   // base nord-ouest
+    [1122, 1300, 3000],   // base nord-ouest
+    [1643, 1470, 2500],   // avance nord-ouest
+    [4105, 3204, 3000],   // base sud-est
+    [4478, 2620, 3000],   // base sud-est
+    [3957, 2450, 2500],   // avance sud-est
+    [4478, 1300, 3000],   // base nord-est
+    [4105, 716, 3000],   // base nord-est
+    [3732, 1117, 2500],   // avance nord-est
+    [1122, 2620, 3000],   // base sud-ouest
+    [1495, 3204, 3000],   // base sud-ouest
+    [1868, 2803, 2500],   // avance sud-ouest
+    [2800, 1960, 6000],   // place de la ville
+    [2040, 1530, 5000],   // porte de la ville
+    [3560, 1530, 5000],   // porte de la ville
+    [2040, 2390, 5000],   // porte de la ville
+    [3560, 2390, 5000],   // porte de la ville
+  ],
+  structures: [
+    { type: 'ferme', x: 1744, y: 2088, l: 150, h: 100, nom: 'Mas de la Croix' },
+    { type: 'village', x: 3704, y: 1743, l: 160, h: 110, nom: 'Les Salines' },
+    { type: 'ferme', x: 2547, y: 1282, l: 150, h: 100, nom: 'Mas du Levant' },
+    { type: 'village', x: 2882, y: 2537, l: 160, h: 110, nom: 'Font-Claire' },
+    { type: 'village', x: 1931, y: 1603, l: 160, h: 110, nom: 'Les Aubiers' },
+    { type: 'ferme', x: 3514, y: 2212, l: 150, h: 100, nom: 'Mas des Genets' },
+    { type: 'village', x: 3326, y: 1317, l: 160, h: 110, nom: 'Roquebrune' },
+    { type: 'ferme', x: 2119, y: 2498, l: 150, h: 100, nom: 'Mas du Couchant' },
+    { type: 'village', x: 2260, y: 1660, l: 180, h: 120, nom: 'Quartier des Tanneurs' },
+    { type: 'village', x: 2560, y: 1660, l: 180, h: 120, nom: 'Quartier de la Halle' },
+    { type: 'village', x: 2860, y: 1660, l: 180, h: 120, nom: 'Quartier du Beffroi' },
+    { type: 'village', x: 3160, y: 1660, l: 180, h: 120, nom: 'Quartier des Sauniers' },
+    { type: 'village', x: 2260, y: 1900, l: 180, h: 120, nom: 'Quartier du Lavoir' },
+    { type: 'village', x: 3160, y: 1900, l: 180, h: 120, nom: 'Quartier de la Gare' },
+    { type: 'village', x: 2260, y: 2140, l: 180, h: 120, nom: 'Quartier des Citernes' },
+    { type: 'village', x: 2560, y: 2140, l: 180, h: 120, nom: 'Quartier du Marche' },
+    { type: 'village', x: 2860, y: 2140, l: 180, h: 120, nom: 'Quartier des Remparts' },
+    { type: 'village', x: 3160, y: 2140, l: 180, h: 120, nom: 'Quartier du Canal' },
+  ],
+  // 0 ouest contre 1 est, 2 nord contre 3 sud, 4 nord-ouest contre 5 sud-est, 6 nord-est contre 7 sud-ouest
+  bases: [ { c: 10, r: 48 }, { c: 127, r: 48 }, { c: 68, r: 10 }, { c: 68, r: 85 }, { c: 27, r: 21 }, { c: 110, r: 74 }, { c: 110, r: 21 }, { c: 27, r: 74 } ],
+};
+// <<< Couronne de Varenne

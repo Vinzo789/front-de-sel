@@ -75,7 +75,7 @@ fixes, un aéroport avec trois avions et deux hélicoptères, deux
 pouvoirs dont une super-arme, et une mécanique propre (réseau de relais pour
 Halden, ravitaillement pour Karsk).
 
-Cinq cartes, au choix sur l'écran de l'escarmouche (aperçu schématique, choix
+Cinq cartes (et, depuis le 25 novembre 2026, une grande carte à huit camps : voir « Carte à huit camps »), au choix sur l'écran de l'escarmouche (aperçu schématique, choix
 mémorisé dans le navigateur) :
 
 | Carte (`?carte=`) | Ambiance | Caractère |
@@ -1247,6 +1247,70 @@ Demande du propriétaire : « À partir du mode difficile, si la partie dure suf
   un ordinateur en réponse dans ces parties. Pas de relecture indépendante de ce réglage. Pas d'essai à la souris.
 - **Choix faits sans le propriétaire, à valider** : seuil de 8 minutes ; épargne de 8 par seconde ; réserve de
   sécurité du lourd ramenée de 300 à 100 ; abandon après 4 minutes ; 3 minutes de légers entre deux lourds.
+
+### Carte à huit camps « Couronne de Varenne », lot 1 (25 novembre 2026, `?v=48`, escarmouche hors ligne)
+
+Demande du propriétaire : une carte bien plus grande, pour 8 camps, avec les 8 bases autour, une ville au milieu
+et des champs de ressources en ville. Il a décidé : escarmouche hors ligne seulement dans un premier temps ;
+30 unités au plus par camp à 8. Ce lot est le premier de quatre ; les suivants ne sont **pas faits** : champs au
+contenu doublé (lot 2), extracteurs à capturer par un technicien (lot 3), bâtiments de la ville à occuper par
+l'infanterie (lot 4).
+
+- **Taille de carte variable.** Elle était fixée à 80 × 56 cases. Une carte peut porter un champ `taille` ; la
+  taille se lit une seule fois, dans l'adresse (`tailleCarteDepuisAdresse`, `jeu.js`, section 1), puisque changer
+  de carte recharge la page. Les cinq autres cartes et les missions restent en 80 × 56. La grande carte fait
+  140 × 98 cases (5 600 × 3 920 px, environ trois fois la surface), au même rapport 10 : 7, ce qui laisse la
+  minicarte telle quelle.
+- **Huit camps hors ligne.** `CAMPS_JOUEURS` : J, I, K, L, M, O, P, Q (N et X restent les neutres et les
+  envahisseurs) ; couleurs orange, violet, turquoise et rose en plus ; huit équipes hors ligne (`EQUIPES_SOLO`).
+  Le jeu en ligne reste à quatre camps et quatre équipes (`CAMPS_EN_LIGNE`, `EQUIPES`).
+- **Écran d'escarmouche.** Sur une carte de plus de quatre emplacements : sept ordinateurs, huit équipes, deux
+  raccourcis en plus (« Chacun pour soi à 8 », « 4 contre 4 »), configuration mémorisée sous sa propre clé
+  (`frontDeSel.camps8`) ; par défaut, chacun pour soi à huit. L'écran des autres cartes est inchangé.
+- **Hors ligne seulement** (`carteHorsLigne`) : le bouton « Héberger » est absent sur cette carte, l'ouverture
+  d'un salon et le mode `?echo` la refusent, un invité la refuse. Raison technique : le transport des positions du
+  jeu en ligne plafonne vers 3 700 px et ne connaît que quatre camps.
+- **Rendu** (`dimensionnerTerrain`, `r3d-scene.js`) : le maillage du sol et sa texture détaillée suivent la taille
+  de la carte. La texture reste large de 4 096 points : sur la grande carte le sol est un peu moins fin (0,64
+  point par px contre 0,82). Valeurs d'origine gardées pour 80 × 56.
+- **Recherche de chemin** : le plafond d'itérations (7 000) croît en proportion de la grille (21 438 sur la
+  grande carte) ; inchangé en 80 × 56.
+- **La carte** (`cartes.js`, bloc fabriqué par `travaux/carte8/fabrique_carte.py`, non publié) : huit bases en
+  couronne (1 270 à 1 720 px entre voisines), crêtes entre bases voisines, ville de dix pâtés de maisons autour
+  d'une place, grand-rue et boulevard de ceinture, huit faubourgs (hameaux et fermes) au bord des routes ; par
+  base, deux champs de 3 000 et un de 2 500 ; en ville, un champ de 6 000 sur la place et quatre de 5 000 aux
+  portes. Le décor n'utilise que les types existants (`village`, `ferme`).
+- **Mesures** (volet masqué du navigateur d'essai ; les temps d'image y sont peu fiables) : calcul du jeu à huit
+  ordinateurs Difficile, 0,27 à 0,44 ms par pas entre 5 et 15 min ; une image vue sur une base 17 à 20 ms sur le
+  brouillon de 128 × 112 (9 ms sur Gorges à quatre camps), 370 000 à 400 000 triangles (390 000 sur Gorges) ;
+  chargement de la page 9 s (11 s pour Gorges).
+- **Vu passer par l'orchestrateur**, code final : case décochée, pages neuves, premier appel : duel `7d442efb`,
+  quatre camps `69b4664e`, inchangés ; `testerDefense()` 83 sur 83 ; `avecGraine(7, () => testerGaleries())`
+  72 sur 72 ; `testerDefenseEnLigne()` 21 sur 21 ; mission `halden-1` une minute sans erreur, en 80 × 56 même
+  avec `&carte=couronneVarenne` ; sur la grande carte : toutes les cases libres reliées (12 895 sur 12 896 sur le
+  premier tracé de 140 × 98), huit bases et 29 champs accessibles, 56 trajets de base à base trouvés, aucune
+  recherche de chemin en échec sur 12 952 pendant une partie de 15 min ; parties à huit ordinateurs sans erreur
+  ni écart de réserves (Difficile 15 min ; niveaux mélangés avec Ultra, case « Galeries de tir » cochée, pas
+  irrégulier, 20 min) ; partie « 4 contre 4 » lancée depuis l'écran, deux minutes ; mode Surprises à deux camps,
+  10 min, sans erreur ; images regardées : ville, bord sud, écran d'escarmouche, vignettes des six cartes.
+  `testerGaleriesEnLigne()` 19 sur 19 a été vu avant les corrections de relecture, pas rejoué après.
+- **Relecture indépendante** (un agent en lecture seule) : rien de bloquant. Corrigés ensuite par l'orchestrateur,
+  non relus par un tiers : vignettes des cartes à la mauvaise échelle ; `?echo` sur la grande carte ; invité déjà
+  sur la grande carte qui pouvait entrer en ligne ; plafond de la recherche de chemin ; camps M à Q admis chez
+  l'invité ; camp du joueur non repris sur la grande carte.
+- **Non vérifié** : le jeu à la souris et la fluidité réelle à l'écran ; une grosse bataille à huit (armées de 9
+  à 17 unités dans les parties mesurées) ; le mode Surprises à huit camps ; l'équité des huit emplacements ;
+  les missions autres que `halden-1`.
+- **Limites connues** : à huit ordinateurs chacun pour soi, des camps tombent tôt sous l'attaque d'un voisin ;
+  l'ordinateur n'est réglé pour aucune carte de cette taille (seuils de distance d'Ultra pensés pour 3 200 px) ;
+  la vignette de la carte ne marque en plein que les bases 0 et 1 ; en mode Surprises le vaisseau arrive par le
+  milieu d'un bord, donc presque sur une base (à décider) ; les outils `configTest` et `?demo` ne connaissent
+  que quatre camps.
+- **Choix faits sans le propriétaire, à valider** : la taille de 140 × 98 (le brouillon qu'il a vu mesurer
+  faisait 128 × 112 ; changé pour garder la minicarte) ; le nom « Couronne de Varenne » et ceux des quartiers et
+  faubourgs ; les quatre couleurs ; la disposition (crêtes, routes, quantités des champs) ; les raccourcis
+  « Chacun pour soi à 8 » et « 4 contre 4 » ; chacun pour soi par défaut ; « Rejoindre une partie » reste
+  visible sur cette carte.
 
 ### Commandes
 

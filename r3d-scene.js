@@ -36,11 +36,23 @@
   const PONT_H = 1.2;                         // hauteur de la chaussée des ponts (les unités roulent dessus)
   const PONT_RAMPE = 16;                      // longueur des rampes d'accès aux extrémités d'un pont
   // Zone couverte par la texture détaillée du sol (au-delà : couleurs de sommets).
-  const TX0 = -900, TY0 = -700, TW = 5000;
-  const TEX_L = 4096, TEX_H = 2704;
-  const TS = TEX_L / TW, TH = TEX_H / TS;
+  // Valeurs des cartes de 80 × 56 cases ; une carte plus grande les recalcule (dimensionnerTerrain).
+  let TX0 = -900, TY0 = -700, TW = 5000;
+  let TEX_L = 4096, TEX_H = 2704;
+  let TS = TEX_L / TW, TH = TEX_H / TS;
   // Grille du maillage de terrain (pas de 20 = une demi-tuile : berges et rivages plus fins).
-  const GX0 = -2000, GZ0 = -1800, GPAS = 20, GNX = 360, GNZ = 290;
+  const GX0 = -2000, GZ0 = -1800, GPAS = 20;
+  let GNX = 360, GNZ = 290;
+  // Grande carte (novembre 2026) : le maillage garde les mêmes marges autour de la carte, et la texture
+  // détaillée, toujours large de 4 096 points, couvre la carte avec une marge réduite (400 px à gauche et à
+  // droite, 300 en haut, 400 en bas) : le sol y est donc un peu moins fin (0,64 point par px contre 0,82).
+  // Pour 80 × 56, les valeurs d'origine sont gardées telles quelles.
+  function dimensionnerTerrain(lx, ly){
+    if(lx <= 3200 && ly <= 2240) return;
+    GNX = Math.ceil((lx + 4000)/GPAS); GNZ = Math.ceil((ly + 3560)/GPAS);
+    TX0 = -400; TY0 = -300; TW = lx + 800;
+    TS = TEX_L / TW; TH = ly + 700; TEX_H = Math.round(TH*TS);
+  }
   const MAX_BRULURES = 150;
 
   let renderer, scene, camera, soleil, appoint, hemi;
@@ -315,6 +327,7 @@
   function lireCarte(){
     T_TUILE = lire('TUILE') || 40; NC = lire('COLS') || 80; NL = lire('LIGNES') || 56;
     LX = NC*T_TUILE; LY = NL*T_TUILE;
+    dimensionnerTerrain(LX, LY);
     const C = lire('CARTE') || null;
     const fCote = lire('cote');
     // Paramètres de la côte : ceux de la carte, ou ceux de Port-Calmes si le moteur ne fournit
@@ -1645,7 +1658,7 @@ float fdsOmbreNuages( vec3 posVue ) {
     });
     const F = [];
     for(const [hy, dec] of [[6, 0], [17, 900]]){
-      const g = new THREE.PlaneGeometry(9000, 8000, 1, 1); g.rotateX(-Math.PI/2); g.translate(LX/2 + dec*0.2, hy, LY/2 - dec*0.1);
+      const g = new THREE.PlaneGeometry(Math.max(9000, LX + 5800), Math.max(8000, LY + 5760), 1, 1); g.rotateX(-Math.PI/2); g.translate(LX/2 + dec*0.2, hy, LY/2 - dec*0.1);
       F.push(g);
     }
     for(const g of F){ const m = new THREE.Mesh(g, matBrumeBasse); m.renderOrder = 5; scene.add(m); }

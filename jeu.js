@@ -25,7 +25,23 @@
 // =====================================================================
 //  1. CONSTANTES ET TABLES
 // =====================================================================
-const TUILE = 40, COLS = 80, LIGNES = 56;
+const TUILE = 40;
+// Taille de la carte, en cases. 80 × 56 partout, sauf pour une carte d'escarmouche qui porte un champ
+// « taille » (grande carte à huit camps, novembre 2026). Le décor n'est construit qu'une fois par page et
+// changer de carte recharge la page : la taille se lit donc une seule fois, dans l'adresse (?carte=<id>).
+// Une mission (?mission=) garde toujours 80 × 56. Fonction pure.
+function tailleCarteDepuisAdresse(recherche, cartes){
+  const defaut = {cols:80, lignes:56};
+  try {
+    const p = new URLSearchParams(recherche || ''), id = p.get('carte');
+    if(p.get('mission') || !id || !cartes || !Object.prototype.hasOwnProperty.call(cartes, id)) return defaut;
+    const t = cartes[id] && cartes[id].taille;
+    if(t && Number.isInteger(t.cols) && Number.isInteger(t.lignes) && t.cols >= 40 && t.cols <= 200 && t.lignes >= 40 && t.lignes <= 200) return {cols:t.cols, lignes:t.lignes};
+  } catch(err){ /* adresse illisible : taille habituelle */ }
+  return defaut;
+}
+const TAILLE_CARTE = tailleCarteDepuisAdresse(typeof location !== 'undefined' ? location.search : '', typeof CARTES !== 'undefined' ? CARTES : null);
+const COLS = TAILLE_CARTE.cols, LIGNES = TAILLE_CARTE.lignes;
 const LARG = COLS * TUILE, HAUT = LIGNES * TUILE;
 let popMax = 60;          // effectif maximal par camp (une mission peut le changer)
 const HAUTEUR_VOL = 55;   // altitude des unités aériennes sans champ « alt » (drones)
@@ -450,9 +466,11 @@ function definirCampLocal(id){
   }
   return true;
 }
-const CAMPS_JOUEURS = ['J', 'I', 'K', 'L'];              // ordre fixe : emplacements, bandeau, boucles
-const COULEURS_CAMPS = {J:'#3fa7ff', I:'#e2533f', K:'#58c96b', L:'#e8c33f'};
-const NOMS_COULEURS = {J:'Bleu', I:'Rouge', K:'Vert', L:'Jaune'};
+// Huit camps au plus depuis novembre 2026 (grande carte, hors ligne) ; N et X sont pris (neutres, envahisseurs).
+const CAMPS_JOUEURS = ['J', 'I', 'K', 'L', 'M', 'O', 'P', 'Q'];   // ordre fixe : emplacements, bandeau, boucles
+const COULEURS_CAMPS = {J:'#3fa7ff', I:'#e2533f', K:'#58c96b', L:'#e8c33f', M:'#f08a2e', O:'#a878e8', P:'#3fd0c4', Q:'#f07fb4'};
+const CAMPS_EN_LIGNE = CAMPS_JOUEURS.slice(0, 4);                  // le jeu en ligne ne connaît que J, I, K, L
+const NOMS_COULEURS = {J:'Bleu', I:'Rouge', K:'Vert', L:'Jaune', M:'Orange', O:'Violet', P:'Turquoise', Q:'Rose'};
 // Camps de joueurs présents dans la partie (2 en mission et en duel, jusqu'à 4 en escarmouche).
 function campsEnJeu(){ return CAMPS_JOUEURS.filter(id => camps[id]); }
 function campsIA(){ return campsEnJeu().filter(id => camps[id].ia); }
@@ -656,7 +674,9 @@ const gS = new Float32Array(NB), fS = new Float32Array(NB), parent = new Int32Ar
 // d'exploration, mêmes égalités, même plafond de 7 000 itérations : chemins identiques (vérifié sur
 // 720 trajets tirés au hasard), environ 2,8 fois plus rapide.
 const VOISIN_C = [1,-1,0,0,1,1,-1,-1], VOISIN_R = [0,0,1,-1,1,-1,1,-1], VOISIN_COUT = [1,1,1,1,1.414,1.414,1.414,1.414];
-const MAX_ITER_CHEMIN = 7000;
+// 7 000 pour 80 × 56 (inchangé) ; une carte plus grande reçoit un plafond en proportion de sa grille, pour
+// qu'un long trajet autour d'une crête ou de la ville ne retombe pas sur la ligne droite.
+const MAX_ITER_CHEMIN = Math.max(7000, Math.ceil(7000*COLS*LIGNES/(80*56)));
 const TAS = new Int32Array(8*MAX_ITER_CHEMIN + 16);   // au plus 8 ajouts par case retirée, plus le départ
 function ligneLibre(x0,y0,x1,y1){
   const d = Math.hypot(x1-x0,y1-y0), n = Math.ceil(d/10);
@@ -8219,8 +8239,13 @@ function afficherEscarmouche(){
   el('sousTitre').textContent = 'ESCARMOUCHE · CARTE : ' + (CARTE ? CARTE.nom : '').toUpperCase();
   construireChoixCarte();
   construireEmplacements();
+  // Une carte hors ligne (grande carte à huit camps) ne s'héberge pas : le bouton est absent.
+  const bH = el('bHeberger'); if(bH) bH.classList.toggle('cache', carteHorsLigne(CARTE));
   jouerMusique('menu');
 }
+// Carte réservée au jeu hors ligne : champ horsLigne, ou taille différente de 80 × 56 (le jeu en ligne ne
+// transporte que des positions de la carte habituelle et quatre camps). Fonction pure.
+function carteHorsLigne(c){ return !!(c && (c.horsLigne || c.taille)); }
 
 // ---------- Escarmouche : emplacements, factions et équipes ----------
 // Quatre emplacements. Le premier est le joueur (Halden ou Karsk, équipe A à D) ; les trois autres :
@@ -8230,18 +8255,37 @@ const CLE_CAMPS = 'frontDeSel.camps';
 const CHOIX_EMPLACEMENT = [['halden', 'Halden'], ['karsk', 'Karsk'], ['aleatoire', 'Aléatoire'], ['ferme', 'Fermé']];
 const CONFIG_DEFAUT = {joueur:{faction:'halden', equipe:'A'}, autres:[{choix:'karsk', equipe:'B'}, {choix:'ferme', equipe:'C'}, {choix:'ferme', equipe:'D'}]};
 let configEcran = null;
+// Grande carte (novembre 2026) : une carte de plus de quatre emplacements offre un ordinateur par emplacement
+// restant (sept au plus), huit équipes, et garde sa propre configuration mémorisée (clé à part), pour que
+// l'écran des autres cartes reste exactement celui d'avant. Fonctions pures, sauf la lecture de CARTE.
+function nbOrdinateursEcran(){
+  const n = CARTE ? emplacementsCarte(CARTE).length : 0;
+  return n > 4 ? Math.min(CAMPS_JOUEURS.length, n) - 1 : 3;
+}
+function equipesEcran(){ return nbOrdinateursEcran() > 3 ? EQUIPES_SOLO : EQUIPES; }
+function cleConfigCamps(){ const n = nbOrdinateursEcran(); return n > 3 ? CLE_CAMPS + (n + 1) : CLE_CAMPS; }
+function configDefautCamps(){
+  const n = nbOrdinateursEcran();
+  if(n <= 3) return CONFIG_DEFAUT;
+  // Par défaut sur la grande carte : chacun pour soi, tous les emplacements ouverts ; le camp du joueur est
+  // celui qu'il avait choisi sur l'écran des autres cartes.
+  let f = 'halden';
+  try { const c = JSON.parse(localStorage.getItem(CLE_CAMPS) || 'null'); if(c && c.joueur && c.joueur.faction === 'karsk') f = 'karsk'; } catch(err){ /* Halden */ }
+  return {joueur:{faction:f, equipe:'A'}, autres:Array.from({length:n}, (_, i) => ({choix:i === 0 ? (f === 'halden' ? 'karsk' : 'halden') : 'aleatoire', equipe:EQUIPES_SOLO[i + 1]}))};
+}
 function lireConfigCamps(){
   let c = null;
-  try { c = JSON.parse(localStorage.getItem(CLE_CAMPS) || 'null'); } catch(err){ c = null; }
-  const ok = c && c.joueur && ['halden', 'karsk'].includes(c.joueur.faction) && EQUIPES.includes(c.joueur.equipe) && Array.isArray(c.autres) && c.autres.length === 3 &&
-    c.autres.every(a => a && CHOIX_EMPLACEMENT.some(x => x[0] === a.choix) && EQUIPES.includes(a.equipe));
-  return JSON.parse(JSON.stringify(ok ? c : CONFIG_DEFAUT));
+  const n = nbOrdinateursEcran(), eq = equipesEcran();
+  try { c = JSON.parse(localStorage.getItem(cleConfigCamps()) || 'null'); } catch(err){ c = null; }
+  const ok = c && c.joueur && ['halden', 'karsk'].includes(c.joueur.faction) && eq.includes(c.joueur.equipe) && Array.isArray(c.autres) && c.autres.length === n &&
+    c.autres.every(a => a && CHOIX_EMPLACEMENT.some(x => x[0] === a.choix) && eq.includes(a.equipe));
+  return JSON.parse(JSON.stringify(ok ? c : configDefautCamps()));
 }
-function memoriserConfigCamps(){ try { localStorage.setItem(CLE_CAMPS, JSON.stringify(configEcran)); } catch(err){ /* sans mémorisation */ } }
+function memoriserConfigCamps(){ try { localStorage.setItem(cleConfigCamps(), JSON.stringify(configEcran)); } catch(err){ /* sans mémorisation */ } }
 // Configuration de l'écran -> liste des camps pour demarrer (le tirage « Aléatoire » est fait ici).
 function listeDepuisConfig(cfg, tirer){
   const liste = [{id:'J', faction:cfg.joueur.faction, equipe:cfg.joueur.equipe, ia:false}];
-  const ids = ['I', 'K', 'L'];
+  const ids = CAMPS_JOUEURS.slice(1);
   for(const a of cfg.autres){
     if(a.choix === 'ferme') continue;
     const f = a.choix === 'aleatoire' ? (tirer ? (Math.random() < 0.5 ? 'halden' : 'karsk') : 'halden') : a.choix;
@@ -8257,13 +8301,19 @@ const RACCOURCIS_CAMPS = [
   ['1c3', '1 contre 3', ['A', 'B', 'B', 'B']],
   ['2c1', '2 contre 1', ['A', 'B', 'A', null]],
 ];
+// Raccourcis en plus sur la grande carte (les emplacements absents d'une liste sont fermés).
+const RACCOURCIS_GRANDE_CARTE = [
+  ['chacun8', 'Chacun pour soi à 8', ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']],
+  ['4c4', '4 contre 4', ['A', 'B', 'A', 'B', 'A', 'B', 'A', 'B']],
+];
+function raccourcisEcran(){ return nbOrdinateursEcran() > 3 ? RACCOURCIS_CAMPS.concat(RACCOURCIS_GRANDE_CARTE) : RACCOURCIS_CAMPS; }
 function appliquerRaccourci(cle){
-  const R = RACCOURCIS_CAMPS.find(r => r[0] === cle); if(!R) return;
+  const R = raccourcisEcran().find(r => r[0] === cle); if(!R) return;
   const eq = R[2];
   configEcran.joueur.equipe = eq[0];
   configEcran.autres.forEach((a, i) => {
     const e = eq[i + 1];
-    if(e === null){ a.choix = 'ferme'; return; }
+    if(e == null){ a.choix = 'ferme'; return; }
     // « Duel » : l'Ordinateur 1 prend toujours le camp contraire à celui du joueur.
     if(a.choix === 'ferme' || (cle === 'duel' && i === 0)) a.choix = i === 0 ? (configEcran.joueur.faction === 'halden' ? 'karsk' : 'halden') : 'aleatoire';
     a.equipe = e;
@@ -8274,12 +8324,12 @@ function construireEmplacements(){
   const boite = el('emplacementsCamps'); if(!boite) return;
   if(!configEcran) configEcran = lireConfigCamps();
   const racc = el('raccourcisCamps');
-  if(racc && !racc.childElementCount) for(const [cle, nom] of RACCOURCIS_CAMPS){
+  if(racc && !racc.childElementCount) for(const [cle, nom] of raccourcisEcran()){
     const b = document.createElement('button'); b.type = 'button'; b.className = 'petit'; b.textContent = nom;
     b.onclick = () => appliquerRaccourci(cle); racc.appendChild(b);
   }
-  const optEq = v => EQUIPES.map(e => `<option value="${e}"${e === v ? ' selected' : ''}>Équipe ${e}</option>`).join('');
-  const ids = ['I', 'K', 'L'];
+  const optEq = v => equipesEcran().map(e => `<option value="${e}"${e === v ? ' selected' : ''}>Équipe ${e}</option>`).join('');
+  const ids = CAMPS_JOUEURS.slice(1);
   let n = 0;
   const lignes = [`<div class="empl"><span class="pastille" style="background:${COULEURS_CAMPS.J}"></span><b class="qui">Vous</b>
     <select data-i="j" data-k="faction"><option value="halden"${configEcran.joueur.faction === 'halden' ? ' selected' : ''}>Halden</option>
@@ -8366,7 +8416,9 @@ function construireChoixCarte(){
 // ponts, routes, bois, crêtes, structures, champs de minerai et emplacements de départ (pleins : les deux
 // de l'escarmouche ; creux : les deux autres).
 function dessinerApercuCarte(cv, carte){
-  const g = cv.getContext('2d'), k = cv.width / LARG, H = cv.height;
+  // Échelle de la carte dessinée (et non de la carte chargée dans la page) : une grande carte a sa propre largeur.
+  const largCarte = ((carte.taille && Number.isInteger(carte.taille.cols) ? carte.taille.cols : 80))*TUILE;
+  const g = cv.getContext('2d'), k = cv.width / largCarte, H = cv.height;
   const T = (x, y) => [x*k, y*k];
   g.fillStyle = {midi:'#c2ad7c', aube:'#b49c86', crepuscule:'#8f7a62', brume:'#a9a690'}[carte.ambiance] || '#b6a377';
   g.fillRect(0, 0, cv.width, H);
@@ -8398,7 +8450,7 @@ function dessinerApercuCarte(cv, carte){
     const ondes = (carte.cote.ondes || []).filter(o => Array.isArray(o) && o.length >= 2);
     const yc = x => ondes.reduce((y, o) => y + nombre(o[0], 0)*Math.sin(x/(nombre(o[1], 100) || 100) + nombre(o[2], 0)), carte.cote.base);
     g.beginPath(); g.moveTo(0, H);
-    for(let x = 0; x <= LARG; x += 20) g.lineTo(x*k, Math.min(H, yc(x)*k));
+    for(let x = 0; x <= largCarte; x += 20) g.lineTo(x*k, Math.min(H, yc(x)*k));
     g.lineTo(cv.width, H); g.closePath(); g.fillStyle = '#245f80'; g.fill();
   }
   g.fillStyle = '#7fe0ff';
@@ -9784,11 +9836,13 @@ function doterCollecteurs(camp, qg){
 // Une configuration est la liste ordonnée des camps : [{id, faction, equipe, ia}, ...]. Le premier est
 // le joueur local (id 'J'), les suivants I, K, L. Sans configuration : duel classique J contre I.
 const EQUIPES = ['A', 'B', 'C', 'D'];
+// Hors ligne, jusqu'à huit équipes (chacun pour soi à huit) ; en ligne, EQUIPES reste la liste admise.
+const EQUIPES_SOLO = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 // Effectif maximal par camp selon le nombre de camps (fluidité). Baissé le 13 novembre 2026 (avant :
 // 45 et 35) après une mesure à 4 camps : le décor seul fait ~150 appels de dessin et 1,3 million de
 // triangles ; une unité, moins d'un appel (modèles instanciés) et 1 000 à 3 400 triangles ; un
 // bâtiment, 6 à 15 appels. Le gain de cette baisse reste modeste (voir NOTES-CONCEPTION.md).
-const POP_PAR_CAMPS = {2:60, 3:40, 4:30};
+const POP_PAR_CAMPS = {2:60, 3:40, 4:30, 5:30, 6:30, 7:30, 8:30};   // 5 à 8 : 30, décidé par le propriétaire le 25 novembre 2026
 function configurationDuel(facJ){
   const f = FACTIONS[facJ] && facJ !== 'neutre' && facJ !== 'aliens' ? facJ : 'halden';
   return [{id:'J', faction:f, equipe:'A', ia:false}, {id:'I', faction:f === 'halden' ? 'karsk' : 'halden', equipe:'B', ia:true}];
@@ -9796,14 +9850,14 @@ function configurationDuel(facJ){
 // Contrôle d'une configuration (fonction pure) : renvoie null si elle est jouable, sinon la raison.
 function problemeConfiguration(liste, nbEmplacements){
   if(!Array.isArray(liste) || liste.length < 2) return 'Il faut au moins deux camps.';
-  if(liste.length > CAMPS_JOUEURS.length) return 'Quatre camps au plus.';
+  if(liste.length > CAMPS_JOUEURS.length) return 'Huit camps au plus.';
   if(!liste[0] || liste[0].id !== 'J' || liste[0].ia) return 'Le premier camp doit être le joueur (J).';
   const ids = new Set();
   for(const k of liste){
     if(!k || !CAMPS_JOUEURS.includes(k.id) || ids.has(k.id)) return 'Camp invalide : ' + (k && k.id);
     ids.add(k.id);
     if(k.faction !== 'halden' && k.faction !== 'karsk') return 'Faction invalide pour ' + k.id + '.';
-    if(!EQUIPES.includes(k.equipe)) return 'Équipe invalide pour ' + k.id + '.';
+    if(!EQUIPES_SOLO.includes(k.equipe)) return 'Équipe invalide pour ' + k.id + '.';
   }
   if(!liste.some(k => k.equipe !== liste[0].equipe)) return 'Aucun ennemi : mettez au moins un camp dans une autre équipe.';
   if(nbEmplacements != null && liste.length > nbEmplacements) return 'Cette carte n’a que ' + nbEmplacements + ' emplacements de départ.';
@@ -11122,6 +11176,8 @@ function chargerScriptReseau(){
 // J (confié à l'ordinateur), l'invité I ; K et L (si la carte a 4 emplacements, &camps=4) sont des ordinateurs.
 // L'écran montre la vue de l'invité : on joue I à la souris, ses ordres partent chez l'hôte.
 async function lancerEcho(params){
+  // Une carte hors ligne (grande carte) ne passe pas par le codec du jeu en ligne : pas de mode ?echo.
+  if(carteHorsLigne(CARTE)){ echo.pret = false; echo.erreur = 'Cette carte ne se joue pas en ligne.'; console.warn('[Echo] ' + echo.erreur); el('menu').classList.remove('cache'); afficherEscarmouche(); return; }
   modeReseau = 'echo'; echo.pret = false; echo.erreur = null;
   // ?echo&galeries=1 : galeries de tir dans les deux mondes (20 novembre 2026, outil d'essai) ; sans lui, réglage décoché.
   galeriesEnLigne = params.get('galeries') === '1';
@@ -11448,6 +11504,7 @@ function listeDepuisSalon(L, tirer){
 // ---------- Hôte : ouverture du salon et lancement ----------
 async function ouvrirSalon(){
   if(enLigne.occupe) return;
+  if(carteHorsLigne(CARTE)){ enLigne.erreur = 'Cette carte ne se joue pas en ligne : choisissez-en une autre.'; rendreSalon(); return; }
   const saisi = (el('salonPseudo').value || '').trim(), pseudo = saisi || 'Hôte';
   if(saisi) memoriserPseudo(saisi);
   enLigne.erreur = ''; enLigne.info = ''; enLigne.etapeTexte = ''; enLigne.etapeRecherche = null; enLigne.occupe = true; rendreSalon();
@@ -11683,8 +11740,14 @@ async function rejoindreSalon(saisie, pseudo, o){
   // Carte de l'hôte : la page est rechargée sur elle (le décor 3D n'est construit qu'une fois), puis rejoint seule.
   // Seule une carte du catalogue est admise (clé propre de CARTES), et une seule fois (&auto=1 : pas de boucle).
   const d = S.description() || {};
+  // Carte hors ligne (grande carte) : jamais en ligne, que l'hôte l'annonce ou que la page de l'invité soit
+  // déjà dessus sans carte annoncée.
+  if(carteHorsLigne(CARTE) && (!d.carte || d.carte === CARTE.id)){
+    enLigne.erreur = 'Cette carte ne se joue pas en ligne : choisissez-en une autre avant de rejoindre.';
+    try { await S.quitter(); } catch(err){} libererVerrouSiege(); rendreSalon(); return;
+  }
   if(d.carte && (!CARTE || d.carte !== CARTE.id)){
-    const connue = typeof CARTES !== 'undefined' && aCle(CARTES, d.carte) && CARTES[d.carte] && typeof CARTES[d.carte].nom === 'string';
+    const connue = typeof CARTES !== 'undefined' && aCle(CARTES, d.carte) && CARTES[d.carte] && typeof CARTES[d.carte].nom === 'string' && !carteHorsLigne(CARTES[d.carte]);
     const dejaRecharge = new URLSearchParams(location.search).get('auto') === '1';
     if(!connue || dejaRecharge){ enLigne.erreur = connue ? 'Impossible d’ouvrir la carte de l’hôte : rechargez la page (Ctrl+F5).' : 'Carte inconnue de cette version du jeu.'; try { await S.quitter(); } catch(err){} libererVerrouSiege(); rendreSalon(); return; }
     enLigne.info = 'Chargement de la carte de l’hôte (' + CARTES[d.carte].nom + ')…'; rendreSalon();
@@ -11776,9 +11839,10 @@ async function identifiantPrisParUnAutreOnglet(code){
 function campsDuDebut(debut){
   if(!debut || typeof debut !== 'object' || !Array.isArray(debut.camps) || debut.camps.length < 2 || debut.camps.length > 4) return null;
   if(debut.carte != null && (!CARTE || debut.carte !== CARTE.id)) return null;
+  if(carteHorsLigne(CARTE)) return null;   // grande carte : jamais en ligne
   const nbEmpl = emplacementsCarte(CARTE).length, vusId = new Set(), vusEmpl = new Set(), liste = [];
   for(const k of debut.camps){
-    if(!k || typeof k !== 'object' || !CAMPS_JOUEURS.includes(k.id) || vusId.has(k.id)) return null;
+    if(!k || typeof k !== 'object' || !CAMPS_EN_LIGNE.includes(k.id) || vusId.has(k.id)) return null;
     if(k.faction !== 'halden' && k.faction !== 'karsk') return null;
     if(!EQUIPES.includes(k.equipe)) return null;
     if(!entierEntre(k.emplacement, 0, nbEmpl - 1) || vusEmpl.has(k.emplacement)) return null;
