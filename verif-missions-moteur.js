@@ -798,7 +798,7 @@ function partieOrdinateurs(liste, duree, opts){
   const compta = Object.fromEntries(ids.map(id => [id, {depart:camps[id].reserves, collecte:0, charge:0, dechargements:0, secours:0, depenses:0, unites:0, commandes:0, renforts:0}]));
   // Instruments (remis en place à la fin).
   const orig = {majCollecteur:window.majCollecteur, commander:window.commander, construireBatiment:window.construireBatiment, revenuSecours:window.revenuSecours, creerUnite:window.creerUnite, activerPouvoir:window.activerPouvoir,
-    commanderMissile:window.commanderMissile, commanderMunition:window.commanderMunition};
+    commanderMissile:window.commanderMissile, commanderMunition:window.commanderMunition, commanderMissileLourd:window.commanderMissileLourd};
   let enProduction = 0;
   // Défense antimissile (19 novembre 2026) : le prix des munitions d'interception compte aussi. Option décochée,
   // commanderMunition n'est jamais appelée : rien ne change.
@@ -813,6 +813,13 @@ function partieOrdinateurs(liste, duree, opts){
   window.commanderMissile = function(b){
     const C = b && camps[b.camp], r0 = C ? C.reserves : 0;
     const ok = orig.commanderMissile.apply(this, arguments);
+    if(C && compta[b.camp]) compta[b.camp].depenses += r0 - C.reserves;
+    return ok;
+  };
+  // Missile lourd (25 novembre 2026) : son prix compte aussi (l'ordinateur en commande depuis le réglage du même jour).
+  window.commanderMissileLourd = function(b){
+    const C = b && camps[b.camp], r0 = C ? C.reserves : 0;
+    const ok = orig.commanderMissileLourd.apply(this, arguments);
     if(C && compta[b.camp]) compta[b.camp].depenses += r0 - C.reserves;
     return ok;
   };
@@ -4096,8 +4103,9 @@ function testerDefense(quoi, numero){
   function essaisOrdinateurLotB(){
     const batsDe = id => ents.filter(e => e.camp === id && e.est === 'batiment' && !e.mort);
     // 1. Commande du lourd (fabriquerMissileIA) : I (Karsk) face à J, qui a une Parasol terminée et pas de Zénith.
-    const essaiCommande = (niveau, reserves, avecParasol) => {
-      scene();
+    // (25 novembre 2026 : aucun lourd avant LOURD_IA.apres s de jeu ; les cas d'origine sont posés à 700 s.)
+    const essaiCommande = (niveau, reserves, avecParasol, t) => {
+      scene(); temps = t == null ? 700 : t;
       confierAOrdinateur('I', niveau); etatIA('I').active = false;
       const gI = poser('terrier', 'I');
       if(avecParasol) poser('parasol', 'J');
@@ -4106,10 +4114,44 @@ function testerDefense(quoi, numero){
       fabriquerMissileIA(camps.I, batsDe('I'), 0);
       return {niveau, reserves, avecParasol, fabLourd:gI.gal.fabLourd, fabLeger:gI.gal.fab, paye:r0 - camps.I.reserves};
     };
-    const cas = [essaiCommande('difficile', 5000, true), essaiCommande('ultra', 5000, true), essaiCommande('difficile', 1000, true), essaiCommande('normal', 5000, true), essaiCommande('facile', 5000, true)];
-    V('ordinateur lot B : Difficile et Ultra commandent un lourd (800) galerie vide, réserves suffisantes, Parasol adverse sans Zénith ; pas sous 800 + 300 (léger à la place) ; Normale : léger ; Facile : rien',
+    const cas = [essaiCommande('difficile', 5000, true), essaiCommande('ultra', 5000, true), essaiCommande('difficile', 850, true), essaiCommande('normal', 5000, true), essaiCommande('facile', 5000, true)];
+    V('ordinateur lot B : Difficile et Ultra commandent un lourd (800) galerie vide, réserves suffisantes, Parasol adverse sans Zénith ; pas sous 800 + 100 (léger à la place) ; Normale : léger ; Facile : rien',
       cas[0].fabLourd === 1 && cas[0].paye === 800 && cas[1].fabLourd === 1 && cas[2].fabLourd === 0 && cas[2].fabLeger === 1 && cas[3].fabLourd === 0 && cas[3].fabLeger === 1
       && cas[4].fabLourd === 0 && cas[4].fabLeger === 0, cas);
+    // 1 bis. Réglage du 25 novembre 2026 : pas de lourd avant 480 s ; ensuite « projet lourd » (épargne, plus de léger).
+    {
+      const tot = essaiCommande('difficile', 5000, true, 300);
+      V('ordinateur lot B, réglage : avant 480 s de jeu, Difficile riche commande un léger, pas un lourd', tot.fabLourd === 0 && tot.fabLeger === 1, tot);
+      const projet = niveau => {
+        scene(); temps = 700;
+        confierAOrdinateur('I', niveau); etatIA('I').active = false;
+        const gI = poser('terrier', 'I'); poser('parasol', 'J');
+        camps.I.reserves = 600;
+        const M = memoireGalerieIA('I');
+        const ep0 = projetLourdIA(camps.I, batsDe('I'), [], 0), ouvert = !!M.projetLourd;
+        fabriquerMissileIA(camps.I, batsDe('I'), 0);
+        const sansLeger = gI.gal.fab === 0 && gI.gal.fabLourd === 0 && camps.I.reserves === 600;
+        temps += 2; const ep1 = projetLourdIA(camps.I, batsDe('I'), [], 0);
+        camps.I.reserves = 1000; fabriquerMissileIA(camps.I, batsDe('I'), 0);
+        const commande = gI.gal.fabLourd === 1 && camps.I.reserves === 200 && !M.projetLourd;
+        return {niveau, ep0, ouvert, sansLeger, ep1, commande, journal:M.journal.map(l => l.quoi)};
+      };
+      const pD = projet('difficile'), pU = projet('ultra'), pN = projet('normal');
+      V('ordinateur lot B, réglage : après 480 s, galerie vide et Parasol adverse sans Zénith, Difficile et Ultra ouvrent un projet lourd (aucun léger, épargne de 8 par s), puis commandent le lourd à 800 + 100 ; Normale : aucun projet, un léger',
+        pD.ouvert && pD.sansLeger && pD.ep0 === 0 && pD.ep1 === 16 && pD.commande && pU.ouvert && pU.sansLeger && pU.commande && !pN.ouvert && !pN.sansLeger && !pN.commande, {pD, pU, pN});
+      scene(); temps = 700;
+      confierAOrdinateur('I', 'difficile'); etatIA('I').active = false;
+      const gI = poser('terrier', 'I'); poser('parasol', 'J');
+      camps.I.reserves = 600;
+      const M = memoireGalerieIA('I');
+      projetLourdIA(camps.I, batsDe('I'), [], 0);
+      temps += 241; const epA = projetLourdIA(camps.I, batsDe('I'), [], 0), abandonne = !M.projetLourd;
+      fabriquerMissileIA(camps.I, batsDe('I'), 0);
+      const leger = gI.gal.fab;
+      gI.gal.fab = 0; temps += 10; projetLourdIA(camps.I, batsDe('I'), [], 0);
+      V('ordinateur lot B, réglage : projet lourd abandonné après 240 s sans la somme (retour au léger), aucun nouveau projet pendant la pause de 180 s',
+        abandonne && epA === 0 && leger === 1 && !M.projetLourd, {abandonne, epA, leger, pause:M.lourdPauseT, journal:M.journal.map(l => l.quoi)});
+    }
     // 2. Justification par la cible, sans Parasol adverse : un groupe de bâtiments serrés (le rayon du lourd en prend
     //    davantage) le justifie ; une Zénith adverse ne retire pas la justification par la valeur.
     scene();

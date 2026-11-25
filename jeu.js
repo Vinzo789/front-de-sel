@@ -2773,7 +2773,10 @@ function economieIA(C, F, bats, ouvriers, armee, qg){
   // a déjà subi un tir de galerie : voir defenseDueIA.)
   const veutGalerie = !!F.galerie && plan.includes(F.galerie);
   const defD = galeriesActives() ? defenseDueIA(C, bats, armee, gardeC, galDue, veutGalerie) : SANS_DEFENSE_DUE;
-  const epD = defD.ep, epGD = epG + epD;
+  // Projet lourd (25 novembre 2026, Difficile et Ultra, option cochée, après LOURD_IA.apres s) : son épargne est
+  // gardée avec les deux autres. 0 option décochée, à Normale et Facile, et avant LOURD_IA.apres.
+  const epL = galeriesActives() ? projetLourdIA(C, bats, armee, gardeC) : 0;
+  const epD = defD.ep, epGD = epG + epD + epL;
   if(!chantiers.length && (!premierAvion || galerieLibre)){
     const compte = {};
     // Galerie épargnée : elle passe avant les bâtiments manquants qui la précèdent (batterie qui attend le
@@ -3589,7 +3592,19 @@ const PLACE_GALERIE = {bord:3, degage:2, rayon:380, angle:1.05, distMin:120, dis
 //   reserve   : réserve de sécurité gardée au-delà du prix du lourd (celle du léger est reserveMissile) ;
 //   recherche : s entre deux évaluations de la cible (calcul coûteux : toutes les zones adverses, deux rayons).
 // Le tir d'un lourd suit la règle du léger (tirGalerieIA), au rayon du lourd, valeur minimale valeurMin × son prix.
-const LOURD_IA = {facteur:1.5, reserve:300, recherche:6};
+// Réglage du 25 novembre 2026 (demande du propriétaire : « à partir du mode difficile, si la partie dure
+// suffisamment »). Constat : sur 17 parties de 900 s, aucun lourd commandé ; l'ordinateur rachète un léger dès qu'il
+// a 300 à 400 crédits, sa galerie n'est presque jamais vide avec 1 100 crédits en caisse. Désormais, passé apres s de
+// jeu, galerie vide et fermée, cible justifiée : il ouvre un « projet lourd » (projetLourdIA) : plus de léger
+// commandé, et le prix du lourd + reserve épargné peu à peu (epargneTaux par s, rien tant qu'il est en difficulté,
+// comme l'épargne de la galerie). Le lourd est commandé dès que ses réserves le couvrent. Sans lourd commandé après
+// patience s, le projet est abandonné (retour au léger) et aucun autre n'est ouvert avant pause s.
+// Après le tir d'un lourd, pause s de légers avant le projet suivant (l'ordinateur alterne).
+// Mesure du 25 novembre 2026 (partieDefense, 14 parties de 1 500 s au plus, graines fixes), sans l'alternance :
+// apres 600 : 4 lourds commandés, 2 tirés sur 10 parties (beaucoup finissent avant 600 s) ; apres 480 : 10 commandés,
+// 5 tirés sur 14 parties, plus aucun léger tiré après 480 s (d'où l'alternance). Ultra : aucune galerie dans ces parties.
+//   apres : s de jeu avant lesquelles l'ordinateur ne commande aucun lourd (choix fait sans le propriétaire).
+const LOURD_IA = {facteur:1.5, reserve:100, recherche:6, apres:480, epargneTaux:8, patience:240, pause:180};
 const IA_GALERIE = {
   normal:   {reserveMissile:150, valeurMin:0.9,  attenteSeul:90, retenueValeur:500, retenueRayon:600, retenueAir:0,    recherche:4,
              riposteSuper:false, contreTir:false, esquive:false, apres:0,
@@ -3858,9 +3873,11 @@ function fabriquerMissileIA(C, bats, retenue){
   // Lot B (22 novembre 2026, § 12.6) : galerie vide et lourd justifié → un lourd à la place du léger. Sans lot B
   // (case décochée, ou en ligne avant l'étape « en ligne ») ou à Normale, R.lourd est sans effet : comme avant.
   if(lourdVouluIA(C, b, R)){
-    if(commanderMissileLourd(b)) noterGalerieIA(C.id, {quoi:'commandeLourd'});
+    if(commanderMissileLourd(b)){ memoireGalerieIA(C.id).projetLourd = null; noterGalerieIA(C.id, {quoi:'commandeLourd'}); }
     return;
   }
+  // Projet lourd ouvert (25 novembre 2026) : pas de léger en attendant que l'épargne couvre le lourd.
+  if(memoireGalerieIA(C.id).projetLourd) return;
   if(C.reserves < G.coutMissile + R.reserveMissile || empechementFabrication(b)) return;
   if(commanderMissile(b)) noterGalerieIA(C.id, {quoi:'commande', stock:b.gal.stock, fab:b.gal.fab});
 }
@@ -3871,12 +3888,45 @@ function lourdVouluIA(C, b, R){
   const L = R.lourd, G = b.def.galerie, g = b.gal;
   if(!L || !G.lourd || !galeriesActives()) return false;
   if(g.stock > 0 || g.fab > 0 || g.lourd > 0 || g.fabLourd > 0) return false;
+  if(temps < (L.apres || 0)) return false;
   if(C.reserves < G.lourd.cout + L.reserve || empechementFabricationLourd(b)) return false;
   const M = memoireGalerieIA(C.id);
+  if(M.projetLourd) return true;   // cible déjà jugée à l'ouverture du projet
   if(M.lourdT != null && temps < M.lourdT) return M.lourdOk === true;
   M.lourdT = temps + L.recherche;
   M.lourdOk = lourdJustifieIA(C.id, G, L);
   return M.lourdOk;
+}
+// Projet lourd (25 novembre 2026, voir LOURD_IA) : rend la somme à garder pour le lourd (0 sans projet). Ouvre le
+// projet quand la partie a duré L.apres s, que la galerie est fermée et vide, qu'aucune pause ne court et que la
+// cible le justifie (même jugement que lourdVouluIA, gardé L.recherche s) ; le ferme quand un lourd est commandé ou
+// prêt, quand la galerie n'est plus vide, ou après L.patience s. Appelée option cochée seulement.
+function projetLourdIA(C, bats, armee, gardeC){
+  const b = galerieDuCamp(bats), R = b && reglagesGalerieIA(C.id), L = R && R.lourd;
+  if(!L || !L.epargneTaux || !b.def.galerie.lourd || temps < L.apres) return 0;
+  const M = memoireGalerieIA(C.id), g = b.gal, G = b.def.galerie;
+  const dt = M.lourdEpT == null ? 0 : Math.min(2, Math.max(0, temps - M.lourdEpT));
+  M.lourdEpT = temps;
+  // Tant qu'un lourd est commandé ou prêt, la pause est repoussée : après son tir, L.pause s de légers (alternance).
+  if(g.lourd > 0 || g.fabLourd > 0){ M.projetLourd = null; M.lourdPauseT = temps + L.pause; return 0; }
+  if(g.stock > 0 || g.fab > 0){ M.projetLourd = null; return 0; }
+  if(M.projetLourd){
+    if(temps - M.projetLourd.t0 > L.patience){
+      M.projetLourd = null; M.lourdPauseT = temps + L.pause;
+      noterGalerieIA(C.id, {quoi:'projetLourdAbandonne'});
+      return 0;
+    }
+  } else {
+    if(g.t0 !== null || temps < (M.lourdPauseT || 0)) return 0;
+    if(M.lourdT == null || temps >= M.lourdT){ M.lourdT = temps + L.recherche; M.lourdOk = lourdJustifieIA(C.id, G, L); }
+    if(!M.lourdOk) return 0;
+    M.projetLourd = {t0:temps, ep:0};
+    noterGalerieIA(C.id, {quoi:'projetLourd'});
+  }
+  const P = M.projetLourd;
+  if(enDifficulteGalerieIA(C.id, armee, bats, R, M)) return 0;
+  P.ep = Math.min(G.lourd.cout + L.reserve, P.ep + L.epargneTaux*dt, Math.max(0, C.reserves - gardeC));
+  return P.ep;
 }
 // La cible justifie-t-elle un lourd ? Parasol hostile sans Zénith, ou meilleure zone au rayon du lourd ≥ facteur ×
 // meilleure zone au rayon du léger. Fonction de lecture (ce que tout joueur voit).

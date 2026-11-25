@@ -1222,6 +1222,32 @@ d'altitude validé sur `travaux/galerie/maquette-altitude.html`. Règles complè
   75 % gardés avec radars ; réserve de sécurité de 300 pour le lourd de l'ordinateur ; barre de construction à 6
   colonnes au-delà de 10 boutons ; l'écran d'altitude remplace aussi le demi-disque du missile léger.
 
+#### Réglage du 25 novembre 2026 (`?v=47`) : l'ordinateur tire des missiles lourds
+
+Lot B publié le 25 novembre 2026 (`?v=46`). Constat : sur 17 parties, aucun lourd commandé par l'ordinateur.
+Demande du propriétaire : « À partir du mode difficile, si la partie dure suffisamment ».
+
+- **Règle** (`LOURD_IA`, `projetLourdIA` dans `jeu.js`) : Difficile et Ultra seulement, case cochée, après 480 s
+  de jeu (8 minutes). Galerie fermée et vide, cible justifiée (règles du § 12.6, inchangées) : l'ordinateur ouvre
+  un « projet lourd » : il ne commande plus de léger et met de côté 8 crédits par seconde (rien tant qu'il est en
+  difficulté), jusqu'au prix du lourd + 100 ; il commande alors le lourd. Sans la somme après 240 s : projet
+  abandonné, retour au léger. Après chaque lourd tiré (ou projet abandonné), 180 s de légers avant le projet
+  suivant. Avant 480 s : aucun lourd, même riche.
+- **Mesure** (`partieDefense`, graines fixes, parties de 1 500 s au plus) : seuil à 600 s, 4 lourds commandés et
+  2 tirés sur 10 parties ; seuil à 480 s sans alternance, 10 commandés et 5 tirés sur 14 parties, plus aucun
+  léger après 480 s ; réglage retenu (480 s, alternance), 7 commandés, 4 tirés et 2 légers sur 8 parties. Aucune
+  erreur, contrôle anti-triche à 0 (l'outil compte maintenant le prix du lourd).
+- **Vérifié par l'orchestrateur** (volet masqué) : case décochée, pages neuves, premier appel : duel `7d442efb`,
+  quatre camps `69b4664e`, inchangés ; `testerDefense()` 83 sur 83 (trois verdicts ajoutés) ;
+  `avecGraine(7, () => testerGaleries())` 72 sur 72 ; `testerDefenseEnLigne()` 21 sur 21, `testerGaleriesEnLigne()` 19 sur 19 ; console sans erreur.
+- **Ce qui change** : seulement les parties case cochée avec un ordinateur Difficile ou Ultra, après 480 s. Case
+  décochée, Normale et Facile : rien.
+- **Non vérifié, limites** : aucun ordinateur Ultra n'a bâti de galerie dans les parties mesurées (il gagne avant
+  ou s'en passe) : son projet lourd n'est prouvé que par une situation posée à la main. Aucune Zénith bâtie par
+  un ordinateur en réponse dans ces parties. Pas de relecture indépendante de ce réglage. Pas d'essai à la souris.
+- **Choix faits sans le propriétaire, à valider** : seuil de 8 minutes ; épargne de 8 par seconde ; réserve de
+  sécurité du lourd ramenée de 300 à 100 ; abandon après 4 minutes ; 3 minutes de légers entre deux lourds.
+
 ### Commandes
 
 Souris pour sélectionner et ordonner, molette ou touches + et − (rangée
