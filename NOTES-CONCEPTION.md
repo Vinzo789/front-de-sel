@@ -1152,6 +1152,59 @@ Documents de travail (non publiés) : `travaux/ia-ultra/` (`CAHIER.md`, `DIAGNOS
   changé aux mesures) ; sur Port-Calmes, le côté droit collecte moins à tous les niveaux, ce qui fausse les
   séries ; les séries `testerGaleries('parties')` et `testerDefense('parties')` n'ont pas été rechoisies.
 
+### Défense antimissile, lot B : missile lourd, Batterie Zénith, écran d'altitude (22 novembre 2026, `?v=46`)
+Règles validées par le propriétaire le 21 novembre 2026 (« Je valide toutes tes recommandations », puis « Sans
+radar, il faut pouvoir tenter une interception, mais avec un taux de réussite faible comme 15 % ») ; écran
+d'altitude validé sur `travaux/galerie/maquette-altitude.html`. Règles complètes :
+`travaux/galerie/CAHIER-DES-CHARGES.md`, § 12. Derrière la case « Galeries de tir », en solo et en ligne.
+- **Missile lourd** : fabriqué par la même galerie (second bouton de sa fiche). Il prend toute la place : la
+  galerie contient soit ses missiles légers, soit un lourd. Halden : 900 réserves, 240 s, 2 000 de dégâts, rayon
+  130. Karsk : 800, 220 s, 1 800, rayon 160, dispersion 30 px, un seul lanceur. Vol de 8 s en haute altitude.
+  L'alerte d'ouverture dit à tous « missile lourd » ; le point visé reste caché jusqu'au départ.
+- **Batterie Zénith** (900 réserves, 35 s, 1 100 PV, une par camp, après l'usine) : zone de 900 px (22 cases),
+  munition à 300 fabriquée en 60 s, 2 au plus. Chances : 15 % sans radar, puis 42, 58 et 75 %. Rencontre à la 5e
+  seconde du vol.
+- **Partage strict** : la Parasol ne tire que sur le missile léger, la Zénith que sur le lourd. Sans la bonne
+  batterie : pas de fenêtre, un message court.
+- **Fenêtre d'interception** : la même pour les deux batteries, touches I et L ; deux galeries ouvertes, l'une en
+  léger, l'autre en lourd : une ligne par batterie, une seule réponse.
+- **Écran radar d'altitude** : il remplace le demi-disque du lot A dans la fenêtre de résultat, pour le léger
+  comme pour le lourd : vue de profil à deux étages (basse altitude, Parasol ; haute altitude, Zénith).
+- **Ordinateur** : Facile rien ; Normale reste au léger et ne bâtit pas de Zénith ; Difficile et Ultra commandent
+  un lourd quand leurs réserves dépassent son prix + 300 et qu'une cible le justifie (zone valant 1,5 fois celle
+  du léger, ou Parasol adverse sans Zénith), et bâtissent une Zénith après une ouverture adverse en tir lourd
+  (Ultra aussi quand sa défense légère est complète). Réglages : `LOURD_IA`, `IA_GALERIE`, `IA_DEFENSE`.
+  **Mesuré : sur 17 parties d'ordinateurs de 900 s, case cochée, aucun lourd commandé ni tiré, aucune Zénith
+  bâtie** (galeries tardives, réserves rarement au-dessus de 1 100 quand la galerie est vide). Les règles ne sont
+  prouvées que par des situations posées à la main. Réglage à faire, non traité.
+- **En ligne** : la case du salon couvre le lot B. Codec : bits 4, 5 et 6 de l'octet d'extension du bâtiment
+  (lourd prêt, lourd commandé, cycle lourd) ; missile lourd = `p2 + 16`, intercepteur de Zénith = `p2 + 2` ;
+  ordre `fabriquerMissileLourd` (code `fabLourd`) ; événement `interception` avec `lourd` et `genre`. `PROTO`
+  reste 2 ; une version 46 ne joue pas avec une 45 (contrôle de `?v=` existant).
+- **Vérifié par l'orchestrateur** (volet masqué, sans souris), sur le code final avant la dernière correction,
+  empreintes rejouées après : case décochée, pages neuves, premier appel : duel `7d442efb`, quatre camps
+  `69b4664e` ; `testerDefense()`, `avecGraine(7, () => testerGaleries())`, `testerDefenseEnLigne()`,
+  `testerGaleriesEnLigne()` tous bons (comptes dans le message de publication) ; console sans erreur ; images du
+  rendu et de l'interface regardées (`travaux/galerie/images/lotb-*`).
+- **Rapporté par les agents, non rejoué par l'orchestrateur** : `essai-codec.html?essai=tout` 100 sur 100 ; vrai
+  salon HiveMQ à deux onglets, case cochée (Zénith, lourd et interception dans les deux sens, mêmes états des
+  deux côtés) puis décochée (ni Zénith ni lourd, ordres refusés) ; 17 parties d'ordinateurs sans erreur,
+  contrôle anti-triche à 0.
+- **Relecture indépendante** (lecture seule) : rien de bloquant ; un défaut important corrigé (avec deux
+  batteries, la fenêtre disparaissait quand la batterie de la proposition la plus pressante était détruite :
+  `propositionEnCours` écarte maintenant les propositions sans batterie), deux verdicts ajoutés.
+- **Non vérifié** : le jeu à la souris ; entre deux ordinateurs ; la 3D chez un invité, à l'œil ; le retour d'un
+  invité au milieu d'un cycle lourd ; l'allure de nuit ; la vignette de la Zénith dans la barre (volet masqué :
+  dessin générique) ; un lourd ou une Zénith de l'ordinateur dans une vraie partie.
+- **Limites connues** : la rencontre en haute altitude sort de l'écran au zoom normal (l'écran d'altitude la
+  montre) ; le cadre de couleur d'un allié flotte autour des tubes de la Zénith (comme la Parasol) ; chez
+  l'invité, l'écran d'altitude est une vue approchée ; l'ordinateur rebâtit sa Zénith sans frein (comme sa
+  Parasol) ; le type de missile en stock et l'issue d'une interception voyagent en clair (limite L1).
+- **Choix faits sans le propriétaire, à valider** : vol de 8 s ; rencontre à la 5e seconde ; un seul lourd par
+  tir pour Karsk ; une seule réponse pour les deux batteries ; message court sans la bonne batterie ; 42, 58 et
+  75 % gardés avec radars ; réserve de sécurité de 300 pour le lourd de l'ordinateur ; barre de construction à 6
+  colonnes au-delà de 10 boutons ; l'écran d'altitude remplace aussi le demi-disque du missile léger.
+
 ### Commandes
 
 Souris pour sélectionner et ordonner, molette ou touches + et − (rangée

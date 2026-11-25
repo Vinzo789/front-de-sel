@@ -254,13 +254,21 @@ const BATIMENTS = {
   //   dispersion : écart maximal (px) de chaque missile autour du point visé.
   // Pas de champ « arme » sur le bâtiment : il ne tire pas comme une tourelle (et les tables du réseau,
   // construites à partir des armes des bâtiments, ne changent pas).
+  // Missile lourd (21 novembre 2026, cahier des charges § 12.1, lot B de la défense antimissile) : sous-objet
+  //   galerie.lourd = {cout, temps, degats, rayon, dispersion, vol} : prix et durée (s) de fabrication, explosion de
+  //   zone à l'impact (même arme 'missileGalerie'), écart maximal autour du point visé, durée du vol (s). Un seul
+  //   lourd par tir, même pour Karsk (un seul lanceur sort) ; il prend toute la galerie (ni légers en même temps).
+  //   Le missile d'avant s'appelle désormais « léger ».
   aiguille:{nom:'Galerie Aiguille', taille:3, pv:1500, cout:1200, temps:40, requiert:'usine',
-    galerie:{lanceurs:1, coutMissile:400, tempsMissile:120, degats:1200, rayon:70, dispersion:0},   // 1 200 depuis le 20 novembre 2026 (600 avant), demande du propriétaire
+    galerie:{lanceurs:1, coutMissile:400, tempsMissile:120, degats:1200, rayon:70, dispersion:0,   // 1 200 depuis le 20 novembre 2026 (600 avant), demande du propriétaire
+      lourd:{cout:900, temps:240, degats:2000, rayon:130, dispersion:0, vol:8}},
     // (Descriptions courtes : au-delà d'environ 170 signes, la fiche de 1280 × 720 n'affiche plus la ligne d'état.)
-    desc:'Propre à Halden. Galerie enterrée : un missile lourd et précis, n’importe où sur la carte. Une fois bâtie et fermée, elle est intouchable ; vulnérable 17,5 s à chaque tir. Jamais réparée.'},
+    // (22 novembre 2026, lot B : les descriptions disent le missile lourd ; le missile d'avant est le « léger ».)
+    desc:'Propre à Halden. Galerie enterrée : un missile précis, ou un lourd, n’importe où. Fermée, intouchable ; vulnérable 17,5 s à chaque tir. Jamais réparée.'},
   terrier:{nom:'Terrier des Brisants', taille:3, pv:1900, cout:1000, temps:45, requiert:'usine',
-    galerie:{lanceurs:2, coutMissile:220, tempsMissile:60, degats:600, rayon:95, dispersion:45},   // 600 par missile, 1 200 la salve, depuis le 20 novembre 2026 (330 avant)
-    desc:'Propre à Karsk. Galerie enterrée : une salve de deux missiles moins précis, n’importe où sur la carte. Une fois bâtie et fermée, elle est intouchable ; vulnérable 17,5 s à chaque tir. Jamais réparée.'},
+    galerie:{lanceurs:2, coutMissile:220, tempsMissile:60, degats:600, rayon:95, dispersion:45,   // 600 par missile, 1 200 la salve, depuis le 20 novembre 2026 (330 avant)
+      lourd:{cout:800, temps:220, degats:1800, rayon:160, dispersion:30, vol:8}},
+    desc:'Propre à Karsk. Galerie enterrée : une salve de deux missiles, ou un lourd, n’importe où. Fermée, intouchable ; vulnérable 17,5 s à chaque tir. Jamais réparée.'},
   // Défense antimissile, lot A (19 novembre 2026, cahier des charges § 11) : les deux camps, mêmes règles, derrière
   // la même option que les galeries (galeriesActives). Placées après les galeries : l'ordre des bâtiments existants
   // ne change pas. Bâtiments ordinaires (vulnérables, réparables) ; pas de champ « arme » : ils ne tirent sur rien
@@ -272,10 +280,18 @@ const BATIMENTS = {
   //   chancesBase, chancesParRadar, chancesMax : chances d'interception en % (25 + 50/3 par radar, au plus 75).
   parasol:{nom:'Batterie Parasol', taille:2, pv:900, cout:600, temps:25, requiert:'usine',
     defense:{genre:'parasol', limite:1, zone:560, coutMunition:120, tempsMunition:30, stockMax:4, chancesBase:25, chancesParRadar:50/3, chancesMax:75},
-    desc:'Défense antimissile : peut abattre en vol un missile de galerie qui vise sa zone. Munitions à fabriquer d’avance. Ne tire sur rien d’autre. Une seule par camp.'},
+    desc:'Défense antimissile : peut abattre en vol un missile léger qui vise sa zone (pas le lourd, qui vole trop haut). Munitions à fabriquer d’avance. Une seule par camp.'},
   radar:{nom:'Radar de veille', taille:1, pv:350, cout:250, temps:14, requiert:'usine',
     defense:{genre:'radar', limite:3},
-    desc:'Chaque radar en service augmente les chances de la Batterie Parasol d’abattre un missile (25 % sans radar, 75 % avec trois). Fragile : à protéger.'},
+    desc:'Chaque radar en service augmente les chances de la Batterie Parasol (25 % sans radar, 75 % avec trois) ; il sert aussi à la Batterie Zénith. Fragile : à protéger.'},
+  // Défense antimissile, lot B (21 novembre 2026, cahier § 12.2) : Batterie Zénith, haute altitude, contre le missile
+  // lourd SEULEMENT (la Parasol, elle, ne tire que sur le léger). Placée en fin de table : l'ordre des bâtiments
+  // existants ne change pas. Mêmes champs que la Parasol, sauf le barème : chancesBase sans radar, puis
+  // chancesAvecRadars[n - 1] avec n radars (une table, ce n'est plus une droite : 15, puis 42, 58, 75 %).
+  // En ligne depuis le 22 novembre 2026 (lot B, étape « jeu en ligne », cahier § 12.7), au choix de l'hôte.
+  zenith:{nom:'Batterie Zénith', taille:2, pv:1100, cout:900, temps:35, requiert:'usine',
+    defense:{genre:'zenith', limite:1, zone:900, coutMunition:300, tempsMunition:60, stockMax:2, chancesBase:15, chancesAvecRadars:[42, 58, 75]},
+    desc:'Défense antimissile de haute altitude : peut abattre en vol un missile lourd qui vise sa zone (pas le léger). Une seule par camp.'},
 };
 // Une entité est-elle une galerie de tir ? (fonction pure ; faux pour tout ce qui n'est pas un bâtiment galerie)
 function estGalerie(e){ return !!(e && e.def && e.def.galerie); }
@@ -289,6 +305,10 @@ function galerieFermee(e){ return estGalerie(e) && !e.enCours && !!e.gal && e.ga
 // ce qui n'a pas de sous-objet defense, donc sans effet quand aucun de ces bâtiments n'existe).
 function estParasol(e){ return !!(e && e.def && e.def.defense && e.def.defense.genre === 'parasol'); }
 function estRadar(e){ return !!(e && e.def && e.def.defense && e.def.defense.genre === 'radar'); }
+// Lot B (21 novembre 2026) : Batterie Zénith ; estBatterie : l'une ou l'autre des deux batteries (celles qui ont des
+// munitions, b.para). Fonctions pures, fausses sans sous-objet defense.
+function estZenith(e){ return !!(e && e.def && e.def.defense && e.def.defense.genre === 'zenith'); }
+function estBatterie(e){ return estParasol(e) || estZenith(e); }
 
 // ---------- Factions ----------
 const FACTIONS = {
@@ -722,13 +742,17 @@ function creerBatiment(type, camp, c, r, fini){
   // (null : fermée) ; cx, cy : point visé ; n : missiles engagés ; tires : départs faits ; stock : missiles
   // prêts ; fab : missiles commandés non terminés ; fabT : secondes restantes du missile en cours.
   // galT, galN : champs lus par le rendu (secondes dans le cycle, null si fermée ; lanceurs engagés).
-  if(D.galerie) Object.assign(b, {gal:{t0:null, cx:0, cy:0, n:0, tires:0, stock:0, fab:0, fabT:0}, galT:null, galN:0});
+  // Missile lourd (21 novembre 2026, cahier § 12.1) : lourd = missile lourd prêt (0 ou 1) ; fabLourd = lourd commandé
+  // non terminé (0 ou 1) ; fabT sert aux deux (une seule fabrication à la fois) ; cycleLourd = vrai pendant un cycle
+  // de tir lourd. Le rendu lira b.galLourd (posé par le moteur pendant un cycle lourd seulement).
+  if(D.galerie) Object.assign(b, {gal:{t0:null, cx:0, cy:0, n:0, tires:0, stock:0, fab:0, fabT:0, lourd:0, fabLourd:0, cycleLourd:false}, galT:null, galN:0});
   // Batterie Parasol (19 novembre 2026) : état propre des munitions d'interception, sur le modèle de b.gal (ni
   // UNITES ni b.file ; aucun tirage au hasard). b.para = {stock, fab, fabT, autorise} : stock = munitions prêtes ;
   // fab = munitions commandées non terminées ; fabT = secondes restantes de celle en cours ; autorise = cycles de
   // galeries hostiles pour lesquels le camp a donné d'avance son accord d'interception, {cleCycleGalerie(g): true}.
   // Le rendu lira plus tard b.intT (heure du dernier tir d'intercepteur, absent avant) et b.angleT (caisson).
-  if(D.defense && D.defense.genre === 'parasol') b.para = {stock:0, fab:0, fabT:0, autorise:{}};
+  // Batterie Zénith (21 novembre 2026, cahier § 12.2) : même état b.para que la Parasol.
+  if(D.defense && (D.defense.genre === 'parasol' || D.defense.genre === 'zenith')) b.para = {stock:0, fab:0, fabT:0, autorise:{}};
   for(let rr=Math.max(0,r); rr<Math.min(LIGNES,r+t); rr++) for(let cc=Math.max(0,c); cc<Math.min(COLS,c+t); cc++) grille[rr*COLS+cc] = 3;
   ents.push(b);
   return b;
@@ -820,8 +844,8 @@ function allies(a, b){
 // gardent leur équilibre. Le collecteur, lui, est toujours autorisé (c'est la seule source de revenu).
 // Novembre 2026 (second lot) : DCA Rempart, hélicoptères, réparateurs et batterie mixte, de même.
 // Galeries de tir (novembre 2026) : réservées elles aussi, et de plus soumises à l'option (galeriesActives).
-// De même la défense antimissile (Batterie Parasol, Radar de veille, 19 novembre 2026).
-const RESERVES_ESCARMOUCHE = {batiments:new Set(['aeroport', 'batterie', 'aiguille', 'terrier', 'parasol', 'radar']),
+// De même la défense antimissile (Batterie Parasol, Radar de veille, 19 novembre 2026 ; Batterie Zénith, 21 novembre 2026).
+const RESERVES_ESCARMOUCHE = {batiments:new Set(['aeroport', 'batterie', 'aiguille', 'terrier', 'parasol', 'radar', 'zenith']),
   unites:new Set(['f15', 'f35', 'rafale', 'javelot', 'traqueur', 'grenadier', 'guetteur',
     'rempart', 'frelon', 'busard', 'taon', 'vautour', 'mecano', 'atelier', 'infirmier', 'depanneuse'])};
 function autorise(genre, type){
@@ -849,6 +873,9 @@ function batimentsConstructibles(F){
   // la barre, Karsk 9). Les factions sans galerie (neutre, envahisseurs) ne la reçoivent pas.
   // (20 novembre 2026, galeries en ligne : de même en ligne, réglage de l'hôte coché.)
   if(F.galerie && galeriesActives()) liste.push('parasol', 'radar');
+  // Lot B (21 novembre 2026, cahier § 12.2) : Batterie Zénith en dernier (Halden 11 boutons, Karsk 10). En ligne aussi
+  // depuis le 22 novembre 2026 (réglage de l'hôte, comme le reste des galeries).
+  if(F.galerie && galeriesActives()) liste.push('zenith');
   return liste;
 }
 // Option « Galeries de tir » en vigueur ? Jamais en mission, jamais dans la vitrine ?demo. En solo : la case de
@@ -858,6 +885,9 @@ function batimentsConstructibles(F){
 function galeriesActives(){
   return !MISSION && !window.MODE_DEMO && (modeReseau === null ? optionGaleries === true : galeriesEnLigne === true);
 }
+// Lot B de la défense antimissile (cahier § 12) : missile lourd et Batterie Zénith suivent la même case « Galeries de
+// tir » (galeriesActives), en solo comme en ligne. (Du 21 au 22 novembre 2026, une fonction armesLourdesActives les
+// tenait hors ligne le temps d'écrire le codec ; retirée à l'étape « jeu en ligne », § 12.7.)
 // Règle « une seule galerie par camp, chantier compris » (lecture seule, sans effet) : raison du refus, ou null.
 // Ne dit rien pour un bâtiment qui n'est pas une galerie : aucun effet sans galerie.
 const MOTIF_UNE_GALERIE = 'Une seule galerie par camp.';
@@ -868,7 +898,8 @@ function empechementGalerie(camp, type){
 }
 // Défense antimissile (19 novembre 2026) : limite par camp, chantiers compris (1 batterie, 3 radars). Lecture seule :
 // raison du refus, ou null ; ne dit rien (null, sans parcourir les entités) pour un type sans sous-objet defense.
-const MOTIFS_LIMITE_DEFENSE = {parasol:'Une seule Batterie Parasol par camp.', radar:'Trois radars de veille au plus par camp.'};
+const MOTIFS_LIMITE_DEFENSE = {parasol:'Une seule Batterie Parasol par camp.', radar:'Trois radars de veille au plus par camp.',
+  zenith:'Une seule Batterie Zénith par camp.'};
 function empechementDefense(camp, type){
   const D = BATIMENTS[type];
   if(!D || !D.defense) return null;
@@ -1999,11 +2030,55 @@ function empechementFabrication(b){
   if(!galeriesActives()) return MOTIF_SANS_GALERIES;
   if(b.enCours) return 'La galerie est encore en construction.';
   const g = b.gal, G = b.def.galerie;
+  // Lot B (21 novembre 2026, cahier § 12.1) : le lourd prend toute la galerie ; pas de léger s'il y en a un, prêt ou
+  // commandé. (Comparaisons « > 0 » : sans lourd, toujours faux, le refus d'avant est inchangé.)
+  if(g.lourd > 0 || g.fabLourd > 0) return MOTIF_GALERIE_LOURDE;
   if(g.stock + g.fab >= G.lanceurs) return G.lanceurs > 1 ? 'Les deux lanceurs ont déjà leur missile (prêt ou en fabrication).'
     : 'Le lanceur a déjà son missile (prêt ou en fabrication).';
   const C = camps[b.camp];
   if(!C || C.reserves < G.coutMissile) return MOTIF_RESERVES;
   return null;
+}
+// ---------- Missile lourd (21 novembre 2026, cahier § 12.1, lot B) ----------
+// Choix à la fabrication : la galerie contient soit ses légers (1 pour Halden, 2 au plus pour Karsk), soit UN lourd,
+// jamais les deux. On ne commande un lourd que galerie vide (ni léger prêt ni léger commandé) ; on ne commande un léger
+// que sans lourd prêt ni commandé (empechementFabrication). Prix payé à l'ordre, ni annulation ni remboursement ; la
+// fabrication (fabT, partagé avec le léger : une seule à la fois) n'avance que galerie fermée, comme le léger.
+const MOTIF_GALERIE_LOURDE = 'La galerie contient déjà un missile lourd (prêt ou en fabrication).';
+const MOTIF_LOURD_GALERIE_PLEINE = 'Un missile lourd demande une galerie vide : elle a déjà un missile léger (prêt ou en fabrication).';
+// Raison pour laquelle cette galerie ne peut pas commander un missile lourd maintenant, ou null (fonction pure).
+function empechementFabricationLourd(b){
+  if(!estGalerie(b) || b.mort || !b.def.galerie.lourd) return 'Ce bâtiment ne fabrique pas de missile lourd.';
+  if(!galeriesActives()) return MOTIF_SANS_GALERIES;
+  if(b.enCours) return 'La galerie est encore en construction.';
+  const g = b.gal, L = b.def.galerie.lourd;
+  if(g.lourd > 0 || g.fabLourd > 0) return MOTIF_GALERIE_LOURDE;
+  if(g.stock > 0 || g.fab > 0) return MOTIF_LOURD_GALERIE_PLEINE;
+  const C = camps[b.camp];
+  if(!C || C.reserves < L.cout) return MOTIF_RESERVES;
+  return null;
+}
+// Commande d'un missile lourd (sur le modèle de commanderMissile) : faux, rien de prélevé, si empechementFabricationLourd
+// refuse ; le motif est alors dit au camp.
+function commanderMissileLourd(b){
+  const motif = empechementFabricationLourd(b);
+  if(motif){ if(b && b.camp) notifier(b.camp, motif, motif === MOTIF_RESERVES ? 'alerte' : undefined); return false; }
+  const g = b.gal, L = b.def.galerie.lourd;
+  camps[b.camp].reserves -= L.cout;
+  g.fabLourd = 1; g.fabT = L.temps;
+  return true;
+}
+// Réglages du missile que la galerie CONTIENT (fonction pure, 22 novembre 2026) : le lourd s'il est prêt, sinon le léger.
+// Sert à la visée (cercle au rayon de ce qui partira) et à la fiche.
+function armeChargee(b){
+  const G = b.def.galerie;
+  return b.gal && b.gal.lourd > 0 && G.lourd ? G.lourd : {degats:G.degats, rayon:G.rayon, dispersion:G.dispersion, vol:CYCLE_GALERIE.vol};
+}
+// Réglages du missile du cycle en cours (fonction pure) : ceux du lourd pendant un cycle lourd, sinon ceux du léger, sous
+// une forme commune {degats, rayon, dispersion, vol}.
+function armeDuCycle(b){
+  const G = b.def.galerie;
+  return b.gal && b.gal.cycleLourd === true && G.lourd ? G.lourd : {degats:G.degats, rayon:G.rayon, dispersion:G.dispersion, vol:CYCLE_GALERIE.vol};
 }
 // Commande d'un missile : payé tout de suite, sans annulation ni remboursement. Faux (rien de prélevé) si
 // empechementFabrication refuse ; sur le modèle de commander, le motif est alors dit au camp.
@@ -2023,7 +2098,8 @@ function empechementTirGalerie(b, x, y){
   if(!galeriesActives()) return MOTIF_SANS_GALERIES;
   if(b.enCours) return 'La galerie est encore en construction.';
   if(b.gal.t0 !== null) return 'Tir déjà en cours.';
-  if(b.gal.stock < 1) return b.gal.fab > 0 ? 'Aucun missile prêt : fabrication en cours.' : 'Aucun missile prêt : fabriquez-en un d’abord.';
+  // (Lot B, 21 novembre 2026 : un missile lourd prêt suffit aussi ; « tirer » tire ce que la galerie contient.)
+  if(b.gal.stock < 1 && !(b.gal.lourd > 0)) return b.gal.fab > 0 || b.gal.fabLourd > 0 ? 'Aucun missile prêt : fabrication en cours.' : 'Aucun missile prêt : fabriquez-en un d’abord.';
   if(!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > LARG || y > HAUT) return 'Cible hors de la carte.';
   return null;
 }
@@ -2034,14 +2110,22 @@ function ouvrirGalerie(b, x, y){
   const motif = empechementTirGalerie(b, x, y);
   if(motif){ if(b && b.camp) notifier(b.camp, motif, 'alerte'); return false; }
   const g = b.gal, camp = b.camp;
-  g.n = Math.min(g.stock, b.def.galerie.lanceurs); g.stock -= g.n;
+  // Missile lourd (21 novembre 2026, cahier § 12.1) : un seul lanceur sort, même pour Karsk ; b.galLourd (rendu) est
+  // vrai tout le cycle. Le type du missile est dit à tous dès l'ouverture (le point visé, lui, reste caché).
+  const lourd = g.lourd > 0;
+  if(lourd){ g.lourd = 0; g.n = 1; g.cycleLourd = true; b.galLourd = true; }
+  else { g.n = Math.min(g.stock, b.def.galerie.lanceurs); g.stock -= g.n; }
   g.t0 = temps; g.cx = x; g.cy = y; g.tires = 0;
   b.galT = 0; b.galN = g.n;
-  for(const v of campsEnJeu()) if(hostile(camp, v)) alertes[v] = {t:temps, x:b.x, y:b.y};
+  for(const v of campsEnJeu()) if(hostile(camp, v)){
+    alertes[v] = {t:temps, x:b.x, y:b.y};
+    // Ordinateur (lot B) : il a vu une ouverture pour un tir lourd (l'alerte le dit à tous) ; mémoire de sa défense.
+    if(lourd && etatsIA[v] && etatsIA[v].defense) etatsIA[v].defense.lourdVu = true;
+  }
   const depart = CYCLE_GALERIE.departs[0];
-  notifier('tous', v => v === camp ? {texte:b.def.nom + ' : ouverture, départ dans ' + nombreFr(depart) + ' s.', genre:'succes'}
-    : allies(camp, v) ? {texte:'Notre allié ouvre sa galerie de tir.', genre:'info'}
-    : {texte:'Galerie ennemie en ouverture ! (Espace)', genre:'alerte'});
+  notifier('tous', v => v === camp ? {texte:b.def.nom + ' : ouverture' + (lourd ? ', missile lourd' : '') + ', départ dans ' + nombreFr(depart) + ' s.', genre:'succes'}
+    : allies(camp, v) ? {texte:lourd ? 'Notre allié ouvre sa galerie de tir : missile lourd.' : 'Notre allié ouvre sa galerie de tir.', genre:'info'}
+    : {texte:lourd ? 'Galerie ennemie en ouverture : missile lourd ! (Espace)' : 'Galerie ennemie en ouverture ! (Espace)', genre:'alerte'});
   proposerInterceptions(b);   // défense antimissile (19 novembre 2026) : sans Batterie Parasol, ne fait rien
   return true;
 }
@@ -2052,14 +2136,17 @@ function ouvrirGalerie(b, x, y){
 // dt : pas en cours. Le départ a lieu pendant la mise à jour des bâtiments, avant le décompte des événements
 // du même pas : le demi-pas ajouté fait tomber l'impact au pas qui suit le départ de 5 s, sans dépendre
 // des arrondis.
+// Missile lourd (21 novembre 2026, cahier § 12.1) : mêmes étapes avec ses propres réglages (armeDuCycle : dégâts,
+// rayon, dispersion, vol de 8 s) ; l'effet « missile » porte lourd:true (cloche haute au rendu).
 function departMissileGalerie(b, rang, dt){
-  const g = b.gal, G = b.def.galerie, camp = b.camp, vol = CYCLE_GALERIE.vol;
+  const g = b.gal, G = armeDuCycle(b), camp = b.camp, vol = G.vol, lourd = g.cycleLourd === true;
   let x = g.cx, y = g.cy;
   if(G.dispersion > 0){
     const a = Math.random()*Math.PI*2, d = Math.sqrt(Math.random())*G.dispersion;
     x = Math.max(0, Math.min(LARG, x + Math.cos(a)*d)); y = Math.max(0, Math.min(HAUT, y + Math.sin(a)*d));
   }
-  const fMissile = effet('missile', {x, y, duree:vol, camp, galerie:rang + 1, x0:b.x, y0:b.y});
+  const fMissile = effet('missile', lourd ? {x, y, duree:vol, camp, galerie:rang + 1, x0:b.x, y0:b.y, lourd:true}
+    : {x, y, duree:vol, camp, galerie:rang + 1, x0:b.x, y0:b.y});
   const fMarqueur = effet('marqueur', {x, y, camp, r:G.rayon, duree:vol, couleur:faction(camp).couleur, pouvoir:'galerie'});
   if(rang === 0){
     // La touche Espace mène maintenant au point d'impact (elle menait à la galerie depuis l'ouverture) :
@@ -2069,14 +2156,14 @@ function departMissileGalerie(b, rang, dt){
       // Ordinateur : il a subi un tir de galerie (mémoire de sa défense, si elle existe ; voir defenseDueIA).
       if(etatsIA[v] && etatsIA[v].defense) etatsIA[v].defense.subi = true;
     }
-    notifier('tous', v => v === camp ? {texte:(g.n > 1 ? 'Salve partie' : 'Missile parti') + ' : impact dans ' + vol + ' s.', genre:'succes'}
-      : allies(camp, v) ? {texte:'Notre allié a lancé un missile.', genre:'info'}
-      : {texte:'Missile ennemi en approche ! (Espace)', genre:'alerte'});
+    notifier('tous', v => v === camp ? {texte:(lourd ? 'Missile lourd parti' : g.n > 1 ? 'Salve partie' : 'Missile parti') + ' : impact dans ' + vol + ' s.', genre:'succes'}
+      : allies(camp, v) ? {texte:lourd ? 'Notre allié a lancé un missile lourd.' : 'Notre allié a lancé un missile.', genre:'info'}
+      : {texte:lourd ? 'Missile lourd ennemi en approche ! (Espace)' : 'Missile ennemi en approche ! (Espace)', genre:'alerte'});
   }
   // Défense antimissile (19 novembre 2026, cahier § 11.3) : les batteries hostiles qui ont autorisé tentent
   // leur chance maintenant. Abattu : l'impact n'est jamais planifié (ni dégâts, ni explosion, ni brûlure) ; le
   // camp n'en est informé qu'à la rencontre. Sans proposition ouverte pour ce cycle, rien n'est fait ni tiré.
-  if(tenterInterceptions(b, x, y, fMissile, fMarqueur, dt)) return;
+  if(tenterInterceptions(b, x, y, fMissile, fMarqueur, dt, lourd)) return;
   const auteur = {camp, est:'galerie', galerie:true};
   planifier(vol + dt*0.5, () => {
     // Abattu en vol par un second défenseur, après la rencontre manquée du premier (20 novembre 2026).
@@ -2100,6 +2187,13 @@ function majGalerie(b, dt){
         g.fabT = g.fab > 0 ? g.fabT + G.tempsMissile : 0;
         notifier(b.camp, b.def.nom + ' : missile prêt' + (G.lanceurs > 1 ? ' (' + g.stock + ' sur ' + G.lanceurs + ').' : '.'), 'succes');
       }
+    } else if(g.fabLourd > 0){
+      // Missile lourd (21 novembre 2026) : un seul à la fois, même compte à rebours fabT ; galerie fermée seulement.
+      g.fabT -= dt;
+      if(g.fabT <= 0){
+        g.fabLourd = 0; g.lourd = 1; g.fabT = 0;
+        notifier(b.camp, b.def.nom + ' : missile lourd prêt.', 'succes');
+      }
     }
     return;
   }
@@ -2107,6 +2201,7 @@ function majGalerie(b, dt){
   while(g.tires < g.n && t >= C.departs[g.tires] - eps){ departMissileGalerie(b, g.tires, dt); g.tires++; }
   if(t >= C.duree - eps){
     g.t0 = null; g.n = 0; g.tires = 0; b.galT = null; b.galN = 0;
+    if(g.cycleLourd){ g.cycleLourd = false; b.galLourd = false; }   // fin du cycle lourd (21 novembre 2026)
     notifier(b.camp, b.def.nom + ' : fermeture terminée, de nouveau intouchable.');
     return;
   }
@@ -2116,14 +2211,17 @@ function majGalerie(b, dt){
 // ---------- Défense antimissile, lot A : munitions et chances (19 novembre 2026, cahier § 11) ----------
 // Tout ce qui suit ne sert que si une Batterie Parasol existe (b.para), ce qui demande galeriesActives().
 const MOTIF_MUNITIONS_PLEINES = 'Quatre munitions au plus, prêtes ou en fabrication.';
+const MOTIF_MUNITIONS_PLEINES_ZENITH = 'Deux munitions au plus, prêtes ou en fabrication.';   // Batterie Zénith (21 novembre 2026)
 // Raison pour laquelle cette batterie ne peut pas commander une munition maintenant, ou null (fonction pure : lit
 // l'état, n'écrit rien). Une munition à la fois en fabrication ; stock + commandes ≤ stockMax.
 function empechementMunition(b){
-  if(!estParasol(b) || b.mort || !b.para) return 'Ce bâtiment ne fabrique pas de munition.';
+  // (21 novembre 2026, lot B : les deux batteries, Parasol et Zénith ; la Zénith, en solo seulement à cette étape.)
+  if(!estBatterie(b) || b.mort || !b.para) return 'Ce bâtiment ne fabrique pas de munition.';
   if(!galeriesActives()) return MOTIF_SANS_GALERIES;
   if(b.enCours) return 'La batterie est encore en construction.';
   const p = b.para, D = b.def.defense;
-  if(p.stock + p.fab >= D.stockMax) return D.stockMax === 4 ? MOTIF_MUNITIONS_PLEINES : D.stockMax + ' munitions au plus, prêtes ou en fabrication.';
+  if(p.stock + p.fab >= D.stockMax) return D.stockMax === 4 ? MOTIF_MUNITIONS_PLEINES : D.stockMax === 2 ? MOTIF_MUNITIONS_PLEINES_ZENITH
+    : D.stockMax + ' munitions au plus, prêtes ou en fabrication.';
   const C = camps[b.camp];
   if(!C || C.reserves < D.coutMunition) return MOTIF_RESERVES;
   return null;
@@ -2161,12 +2259,19 @@ function radarsActifs(camp){
 }
 // Chances d'interception (en %, non arrondies) avec n radars en service : 25 + 50/3 par radar, au plus 75
 // (25, 41,7, 58,3, 75). Fonction pure ; l'affichage arrondit (42 %, 58 %).
-function chancesDepuisRadars(n){
+// genre (21 novembre 2026, lot B) : 'parasol' (par défaut, le barème d'avant) ou 'zenith' : 15 % sans radar, puis la table
+// chancesAvecRadars (42, 58, 75 % avec 1, 2, 3 radars ; au-delà, la dernière valeur).
+function chancesDepuisRadars(n, genre){
+  if(genre === 'zenith'){
+    const Z = BATIMENTS.zenith.defense, k = Math.max(0, Math.floor(n));
+    return k === 0 ? Z.chancesBase : Z.chancesAvecRadars[Math.min(k, Z.chancesAvecRadars.length) - 1];
+  }
   const D = BATIMENTS.parasol.defense;
   return Math.min(D.chancesMax, D.chancesBase + D.chancesParRadar*Math.max(0, n));
 }
-// Chances d'interception du camp au moment présent (radars terminés et vivants de ce camp seulement, pas des alliés).
-function chancesInterception(camp){ return chancesDepuisRadars(radarsActifs(camp)); }
+// Chances d'interception du camp au moment présent (radars terminés et vivants de ce camp seulement, pas des alliés),
+// pour sa batterie du genre donné (Parasol par défaut).
+function chancesInterception(camp, genre){ return chancesDepuisRadars(radarsActifs(camp), genre); }
 
 // ---------- Défense antimissile, lot A : la règle d'interception (19 novembre 2026, cahier § 11.2 et 11.3) ----------
 // Déroulé : à l'ordre de tir d'une galerie (ouvrirGalerie), chaque camp hostile qui a une Batterie Parasol
@@ -2180,9 +2285,22 @@ function chancesInterception(camp){ return chancesDepuisRadars(radarsActifs(camp
 const RENCONTRE_INTERCEPTION = 3;   // secondes de vol du missile au moment de la rencontre (« vers la 3e seconde »)
 const ECART_RENCONTRES = 0.5;       // défenseur suivant (allié), s'il doit tenter à son tour : 0,5 s plus tard
 const DUREE_RESULTAT = 6;           // secondes pendant lesquelles le résultat reste lisible par l'interface
-// Batterie Parasol terminée et vivante du camp, ou null (une seule par camp : la première trouvée).
-function batterieDe(camp){
-  for(const e of ents) if(e.camp === camp && e.para && !e.mort && !e.enCours) return e;
+// Lot B (21 novembre 2026, cahier § 12.3) : partage strict des rôles. La Parasol (basse altitude) ne reçoit de
+// proposition et ne tire que contre un missile LÉGER, la Zénith (haute altitude) que contre un LOURD. Chaque proposition
+// et chaque résultat portent donc genre ('parasol' ou 'zenith', la batterie concernée) et lourd (vrai ou faux). Dates
+// propres à chaque missile : rencontre (secondes de vol du missile à la rencontre du premier défenseur ; 3 sur 5 pour le
+// léger, 5 sur 8 pour le lourd) et volSuivant (vol de l'intercepteur d'un défenseur suivant, qui tire à la rencontre
+// manquée du précédent : rencontre vers 4,5 s pour le léger, vers 7 s pour le lourd).
+const INTERCEPTION_MISSILE = {
+  leger:{genre:'parasol', rencontre:RENCONTRE_INTERCEPTION, volSuivant:1.5},
+  lourd:{genre:'zenith', rencontre:5, volSuivant:2},
+};
+const reglesInterception = lourd => lourd ? INTERCEPTION_MISSILE.lourd : INTERCEPTION_MISSILE.leger;
+// Batterie terminée et vivante du camp, du genre demandé ('parasol' par défaut, comme avant le lot B ; 'zenith'), ou null
+// (une seule de chaque par camp : la première trouvée).
+function batterieDe(camp, genre){
+  const voulu = genre || 'parasol';
+  for(const e of ents) if(e.camp === camp && e.para && !e.mort && !e.enCours && e.def.defense.genre === voulu) return e;
   return null;
 }
 // Le point (x, y) est-il dans la zone protégée de cette batterie (disque centré sur elle) ? Fonction pure.
@@ -2192,7 +2310,9 @@ function dansZoneProtegee(bat, x, y){ return Math.hypot(x - bat.x, y - bat.y) <=
 function avanceMissile(f){ return 0.65*f + 0.35*f*f*(3 - 2*f); }
 // Hauteur approximative du missile à la fraction f de son vol, pour une portée d (même cloche que le dessin, qui
 // recale de toute façon la rencontre sur le missile dessiné). Fonction pure.
-function hauteurRencontre(d, f){ return Math.max(200, Math.min(560, d*0.3))*4*f*(1 - f); }
+// lourd (21 novembre 2026) : cloche haute du missile lourd, plafonnée à 760 (le codec de l'étape en ligne garde h/3 sur
+// un octet, jusqu'à 765) ; à la rencontre (5 s sur 8), 0,94 fois ce sommet.
+function hauteurRencontre(d, f, lourd){ return (lourd ? Math.max(420, Math.min(760, d*0.45)) : Math.max(200, Math.min(560, d*0.3)))*4*f*(1 - f); }
 // Galerie d'une proposition, si son cycle de tir est toujours celui de la proposition et qu'il reste au moins un
 // missile à partir ; sinon null (galerie détruite, cycle terminé, tous les missiles partis).
 // (20 novembre 2026, défense en ligne : chez l'invité, t0 de la galerie vient du codec, au 1/50 s, d'où 0,02 s
@@ -2205,14 +2325,16 @@ function galerieDeProposition(p){
   return null;
 }
 // Note la réponse d'un camp : dans la proposition, et dans l'accord d'avance de sa batterie (b.para.autorise).
+// (21 novembre 2026, lot B : la batterie du genre de la proposition, p.genre ; absent, la Parasol, comme avant.)
 function fixerReponse(camp, p, oui){
   p.reponse = !!oui;
-  const bat = batterieDe(camp);
+  const bat = batterieDe(camp, p.genre);
   if(bat){ if(oui) bat.para.autorise[p.cle] = true; else delete bat.para.autorise[p.cle]; }
 }
 // Ordinateur (sans triche : il ne voit que la proposition et sa propre batterie) : oui s'il a une munition prête.
+// (Zénith sans radar comprise, à 15 % : cahier § 12.6.)
 function reponseOrdinateur(camp, p){
-  const bat = batterieDe(camp);
+  const bat = batterieDe(camp, p.genre);
   fixerReponse(camp, p, !!(bat && bat.para.stock > 0));
 }
 // Oublie les propositions dont le cycle est fini et les résultats qui ne se lisent plus (rangement, à chaque
@@ -2223,21 +2345,33 @@ function oublierInterceptionsFinies(camp, E){
     const r = E.resultats[cle];
     if(r.tires === r.rencontres && (r.t === null || temps - r.t > DUREE_RESULTAT)) delete E.resultats[cle];
   }
-  const bat = batterieDe(camp);
-  if(bat) for(const cle in bat.para.autorise) if(!E.propositions[cle]) delete bat.para.autorise[cle];
+  for(const genre of GENRES_BATTERIES){
+    const bat = batterieDe(camp, genre);
+    if(bat) for(const cle in bat.para.autorise) if(!E.propositions[cle]) delete bat.para.autorise[cle];
+  }
 }
+const GENRES_BATTERIES = ['parasol', 'zenith'];
 // À l'ordre de tir de la galerie g (appelée par ouvrirGalerie) : une proposition pour chaque camp hostile, en vie,
-// qui a une Batterie Parasol terminée. L'ordinateur répond tout de suite ; le joueur, par repondreInterception.
+// qui a la batterie terminée qui correspond au missile annoncé (Parasol pour un léger, Zénith pour un lourd : lot B,
+// 21 novembre 2026). L'ordinateur répond tout de suite ; le joueur, par repondreInterception. Un camp qui n'a que
+// l'autre batterie ne reçoit rien, sinon un message court, une fois par cycle (cahier § 12.4).
 function proposerInterceptions(g){
-  const cle = cleCycleGalerie(g), C = CYCLE_GALERIE;
+  const cle = cleCycleGalerie(g), C = CYCLE_GALERIE, lourd = !!(g.gal && g.gal.cycleLourd === true), R = reglesInterception(lourd);
   for(const v of campsEnJeu()){
     if(!hostile(g.camp, v) || !enVie(v)) continue;
-    if(!batterieDe(v)) continue;
+    if(!batterieDe(v, R.genre)){
+      // (Sans Zénith, batterieDe(v, 'zenith') est toujours nul : aucun message possible pour un léger, comme avant.)
+      if(lourd && batterieDe(v, 'parasol')) notifier(v, 'Missile lourd : la Batterie Parasol ne peut rien.', 'info');
+      else if(!lourd && batterieDe(v, 'zenith')) notifier(v, 'Missile léger : la Batterie Zénith ne peut rien.', 'info');
+      continue;
+    }
     const Cv = camps[v];
     if(!Cv.interception) Cv.interception = {propositions:{}, resultats:{}};
     oublierInterceptionsFinies(v, Cv.interception);
+    // genre, lourd (21 novembre 2026) : la batterie concernée et le missile annoncé (l'interface et l'étape en ligne
+    // les liront). Une proposition sans ces champs (reçue d'une version 45) vaut Parasol et léger.
     const p = {cle, camp:v, galerie:g.id, tireur:g.camp, gx:g.x, gy:g.y, t0:g.gal.t0,
-      depart:g.gal.t0 + C.departs[0], n:g.gal.n, reponse:null};
+      depart:g.gal.t0 + C.departs[0], n:g.gal.n, reponse:null, genre:R.genre, lourd};
     Cv.interception.propositions[cle] = p;
     if(Cv.ia) reponseOrdinateur(v, p);
   }
@@ -2276,18 +2410,50 @@ function propositionsOuvertes(camp, exclues){
 //   restants (pas encore partis), chances (%, non arrondi), radars, munitions (prêtes), fabrication (commandées),
 //   reponse (null : pas de réponse ; vrai : interception autorisée ; faux : laisser passer).
 function propositionEnCours(camp, exclues){
-  const liste = exclues ? propositionsOuvertes(camp, exclues) : null;
-  const p = liste ? liste[0] : propositionOuverte(camp), bat = p && batterieDe(camp);
+  // 22 novembre 2026 (relecture du lot B) : une proposition dont la batterie est détruite ne compte plus. Avec deux
+  // batteries par camp, la plus pressante peut viser une Parasol morte alors que la Zénith attend encore une réponse
+  // (et l'inverse) : sans ce tri, la fenêtre disparaissait, ou ne passait jamais à « interception ordonnée ».
+  const vivante = q => !!batterieDe(camp, q.genre);
+  const liste = exclues ? propositionsOuvertes(camp, exclues).filter(vivante) : null;
+  let p = liste ? liste[0] : propositionOuverte(camp);
+  if(p && !liste && !vivante(p)) p = propositionsOuvertes(camp).filter(vivante)[0];
+  const bat = p && batterieDe(camp, p.genre);
   if(!bat) return null;
+  // Lot B (21 novembre 2026) : genre (batterie concernée), lourd (missile annoncé), et pour la liste, genres (celui de
+  // chaque proposition ouverte, dans le même ordre que cles) ; chances, munitions et fabrication sont ceux de la
+  // batterie de CETTE proposition (la plus pressante).
+  const genre = bat.def.defense.genre;
   const g = galerieDeProposition(p), prochain = g.gal.t0 + CYCLE_GALERIE.departs[g.gal.tires];
   // Invité (20 novembre 2026, défense en ligne) : son affichage a RESEAU.retard de retard et sa réponse met un aller
   // jusqu'à l'hôte ; le décompte est raccourci de RESEAU.margeInterception (à zéro, il est trop tard pour être sûr).
   const marge = roleMonde === 'invite' ? RESEAU.margeInterception : 0;
   return {cle:p.cle, camp, galerie:p.galerie, tireur:p.tireur, gx:p.gx, gy:p.gy, depart:p.depart,
     prochainDepart:prochain, departDans:Math.max(0, prochain - temps - marge), n:p.n, restants:g.gal.n - g.gal.tires,
-    chances:chancesInterception(camp), radars:radarsActifs(camp), munitions:bat.para.stock, fabrication:bat.para.fab,
+    chances:chancesInterception(camp, genre), radars:radarsActifs(camp), munitions:bat.para.stock, fabrication:bat.para.fab,
     reponse:p.reponse, ouvertes:liste ? liste.length : 1, armees:liste ? liste.filter(q => q.reponse === true).length : (p.reponse === true ? 1 : 0),
-    cles:liste ? liste.map(q => q.cle) : [p.cle]};
+    cles:liste ? liste.map(q => q.cle) : [p.cle], genre, lourd:p.lourd === true,
+    genres:liste ? liste.map(q => q.genre || 'parasol') : [genre], lignes:lignesProposition(camp, liste || [p])};
+}
+// Une ligne par batterie concernée par les propositions ouvertes (22 novembre 2026, cahier § 12.4 : deux galeries
+// adverses ouvertes en même temps, l'une en léger, l'autre en lourd : une fenêtre, deux lignes, une réponse), dans
+// l'ordre de la plus pressante. Lecture seule. Chaque ligne : genre, lourd, chances (%), munitions, fabrication,
+// fabDans (s avant la prochaine munition, null sans fabrication), ouvertes (propositions de cette batterie), armees.
+// Une batterie détruite n'a pas de ligne.
+function lignesProposition(camp, liste){
+  const L = [];
+  for(const q of liste){
+    const genre = q.genre || 'parasol';
+    let l = L.find(x => x.genre === genre);
+    if(!l){
+      const b = batterieDe(camp, genre);
+      if(!b) continue;
+      l = {genre, lourd:genre === 'zenith', chances:chancesInterception(camp, genre), munitions:b.para.stock, fabrication:b.para.fab,
+        fabDans:b.para.fab > 0 ? Math.max(0, b.para.fabT) : null, ouvertes:0, armees:0};
+      L.push(l);
+    }
+    l.ouvertes++; if(q.reponse === true) l.armees++;
+  }
+  return L;
 }
 // Réponse du joueur (interface : boutons « Intercepter » / « Laisser passer », touches I et L). Valable jusqu'au
 // départ du dernier missile du cycle ; cle : une proposition précise, sinon celle en cours. Vrai si notée.
@@ -2295,7 +2461,7 @@ function repondreInterception(camp, oui, cle){
   const C = camps[camp], E = C && C.interception;
   if(!E) return false;
   const p = cle ? E.propositions[cle] : propositionOuverte(camp);
-  if(!p || !galerieDeProposition(p) || !batterieDe(camp)) return false;
+  if(!p || !galerieDeProposition(p) || !batterieDe(camp, p.genre)) return false;
   fixerReponse(camp, p, oui);
   return true;
 }
@@ -2303,9 +2469,11 @@ function repondreInterception(camp, oui, cle){
 // missiles (partis alors que le camp avait autorisé et une batterie), horsZone, sansMunition, tires (intercepteurs
 // partis), rencontres (intercepteurs arrivés), abattus (par ce camp), parAllie (abattus par un allié avant son
 // tour) ; impactT : heure de jeu de l'impact d'un missile manqué ; t : heure de la dernière chose DITE (null : rien).
+// genre, lourd (21 novembre 2026, lot B) : la batterie du camp concernée et le type du missile, repris de la proposition.
 function resultatDuCycle(E, p){
   return E.resultats[p.cle] || (E.resultats[p.cle] = {cle:p.cle, galerie:p.galerie, tireur:p.tireur, n:p.n, missiles:0,
-    horsZone:0, sansMunition:0, tires:0, rencontres:0, abattus:0, parAllie:0, impactT:null, t:null});
+    horsZone:0, sansMunition:0, tires:0, rencontres:0, abattus:0, parAllie:0, impactT:null, t:null,
+    genre:p.genre || 'parasol', lourd:p.lourd === true});
 }
 // Issue d'un résultat, d'après ce qui a déjà été dit (fonction pure) : 'enVol' (intercepteur pas encore arrivé),
 // 'reussie' (tous les missiles abattus), 'partielle' (un sur deux), 'manquee', 'horsZone', 'sansMunition', ou null.
@@ -2348,57 +2516,66 @@ function resultatInterception(camp){
 // entre 3 s et 3 s plus un pas, et il était sauté une fois sur deux. Les essais, à pas fixe, ne le voyaient pas.)
 const VOL_INTERCEPTEUR_SUIVANT = 1.5, MARGE_DERNIERE_RENCONTRE = 0.25;
 const RAFALE_BATTERIE = 1.5;        // second tir dans ce délai (salve) : le caisson reste levé (b.intT inchangé)
-function tenterInterceptions(g, x, y, fMissile, fMarqueur, dt){
+// lourd (21 novembre 2026, lot B) : missile lourd (vol de 8 s, rencontre à 5 s, Batterie Zénith) ; absent ou faux, le
+// missile léger d'avant (les essais appellent encore tenterInterceptions avec six arguments).
+function tenterInterceptions(g, x, y, fMissile, fMarqueur, dt, lourd){
   const cle = cleCycleGalerie(g), file = [];
   for(const v of campsEnJeu()){
     const E = camps[v].interception, p = E && E.propositions[cle];
     if(!p || !enVie(v)) continue;
     if(camps[v].ia && p.reponse !== true) reponseOrdinateur(v, p);   // une munition a pu être prête depuis
     if(p.reponse !== true) continue;               // pas de réponse, ou « laisser passer » : rien n'est dépensé
-    if(!batterieDe(v)) continue;                   // batterie détruite avant le départ : elle ne tire pas
+    if(!batterieDe(v, p.genre)) continue;          // batterie détruite avant le départ : elle ne tire pas
     file.push({v, E, p});
   }
   if(!file.length) return false;
-  return tirSuivantInterception({g, x, y, fMissile, fMarqueur, file, i:0, t0:temps, attente:[]}, dt*0.5);
+  const vol = lourd ? g.def.galerie.lourd.vol : CYCLE_GALERIE.vol;
+  return tirSuivantInterception({g, x, y, fMissile, fMarqueur, file, i:0, t0:temps, attente:[], lourd:!!lourd, vol}, dt*0.5);
 }
 // Tour du défenseur S.file[S.i] (puis des suivants s'il ne peut pas tirer). S.attente : résultats des camps qui
 // ont manqué ou n'avaient pas de munition, à créditer si un allié abat ensuite le missile. marge : demi-pas ajouté
 // au premier tir (il a lieu pendant la mise à jour des bâtiments, avant le décompte des événements du même pas).
 function tirSuivantInterception(S, marge){
-  const vol = CYCLE_GALERIE.vol, {g, x, y} = S, ecoule = temps - S.t0;
+  // (Lot B, 21 novembre 2026 : vol, rencontre et vol de l'intercepteur suivant selon le missile, INTERCEPTION_MISSILE ;
+  // pour le léger, exactement les valeurs d'avant.)
+  const R = reglesInterception(S.lourd), vol = S.vol || CYCLE_GALERIE.vol, {g, x, y} = S, ecoule = temps - S.t0;
   for(; S.i < S.file.length; S.i++){
-    const {v, E, p} = S.file[S.i], bat = enVie(v) ? batterieDe(v) : null;
+    const {v, E, p} = S.file[S.i], bat = enVie(v) ? batterieDe(v, p.genre) : null;
     if(!bat) continue;                             // batterie détruite entre-temps
-    // Heure de la rencontre, en secondes de vol du missile : vers la 3e seconde au départ ; pour un défenseur
-    // suivant, VOL_INTERCEPTEUR_SUIVANT après son tir, s'il reste assez de temps avant l'impact.
+    // Heure de la rencontre, en secondes de vol du missile : vers la 3e seconde au départ (5e pour le lourd) ; pour
+    // un défenseur suivant, VOL_INTERCEPTEUR_SUIVANT (2 s pour le lourd) après son tir, s'il reste assez de temps
+    // avant l'impact.
     const suivant = ecoule > 0;
-    const tV = suivant ? ecoule + VOL_INTERCEPTEUR_SUIVANT : RENCONTRE_INTERCEPTION;
+    const tV = suivant ? ecoule + (S.lourd ? R.volSuivant : VOL_INTERCEPTEUR_SUIVANT) : R.rencontre;
     if(tV > vol - MARGE_DERNIERE_RENCONTRE + 1e-6) continue;
     // Son accord est relu à son tour : il a pu l'annuler depuis le départ du missile.
     if(suivant && p.reponse !== true) continue;
     const r = resultatDuCycle(E, p);
     r.missiles++;
+    const trajet = trajetVu(r, S);
     if(!dansZoneProtegee(bat, x, y)){
-      r.horsZone++;
+      r.horsZone++; trajet.issue = 'horsZone';
       if(r.horsZone === 1) notifier(v, 'Missile hors de la zone protégée : pas d’interception.', 'info');
       r.t = temps; continue;
     }
     if(bat.para.stock < 1){
-      r.sansMunition++;
+      r.sansMunition++; trajet.issue = 'sansTir';
       notifier(v, 'Aucune munition prête : notre batterie ne tire pas.', 'alerte');
-      r.t = temps; S.attente.push({r, sansMunition:true}); continue;
+      r.t = temps; S.attente.push({r, sansMunition:true, trajet}); continue;
     }
     // La batterie tire : munition consommée, un tirage (chances du moment, radars compris).
     bat.para.stock--;
-    const reussi = Math.random()*100 < chancesInterception(v);
+    const reussi = Math.random()*100 < chancesInterception(v, bat.def.defense.genre);
     const duree = tV - ecoule, f = tV/vol, k = avanceMissile(f), rx = g.x + (x - g.x)*k, ry = g.y + (y - g.y)*k;
     // Contrat du rendu (cahier § 11.6). Salve : au second tir, 0,6 s après le premier, le caisson reste levé
     // (20 novembre 2026 : b.intT reposé le faisait retomber, et le premier intercepteur ne sortait jamais).
     if(!(temps - bat.intT < RAFALE_BATTERIE)) bat.intT = temps;
     bat.angleT = Math.atan2(ry - bat.y, rx - bat.x);
-    effet('intercepteur', {x0:bat.x, y0:bat.y, x:rx, y:ry, h:hauteurRencontre(Math.hypot(x - g.x, y - g.y), f),
-      duree, camp:v, reussi});
+    // (Lot B : intercepteur de la Zénith marqué lourd:true, départ vertical et rencontre en haute altitude au rendu.)
+    effet('intercepteur', S.lourd ? {x0:bat.x, y0:bat.y, x:rx, y:ry, h:hauteurRencontre(Math.hypot(x - g.x, y - g.y), f, true), duree, camp:v, reussi, lourd:true}
+      : {x0:bat.x, y0:bat.y, x:rx, y:ry, h:hauteurRencontre(Math.hypot(x - g.x, y - g.y), f), duree, camp:v, reussi});
     r.tires++; r.t = temps;
+    trajet.tir = temps; trajet.rencontre = temps + duree;
     if(reussi){
       S.fMissile.abattuA = tV;
       // Les alliés qui ont manqué ou n'avaient pas de munition comptent le missile comme abattu par un allié, à la
@@ -2406,36 +2583,50 @@ function tirSuivantInterception(S, marge){
       // est dit : ils n'étaient pas visés).
       const credites = S.attente.slice();
       for(let j = S.i + 1; j < S.file.length; j++){
-        const s = S.file[j], b2 = enVie(s.v) ? batterieDe(s.v) : null;
+        const s = S.file[j], b2 = enVie(s.v) ? batterieDe(s.v, s.p.genre) : null;
         if(b2 && dansZoneProtegee(b2, x, y)){
           // (t posé tout de suite : une fiche sans date serait effacée par une nouvelle proposition avant la rencontre.)
           const r2 = resultatDuCycle(s.E, s.p); if(r2.t === null) r2.t = temps;
-          credites.push({r:r2, nouveau:true});
+          credites.push({r:r2, nouveau:true, trajet:trajetVu(r2, S)});
         }
       }
       S.i = S.file.length;
-      planifier(duree + marge, () => rencontreReussieA(v, r, g.camp, S.fMarqueur, credites));
+      planifier(duree + marge, () => rencontreReussieA(v, r, g.camp, S.fMarqueur, credites, trajet));
       return S.t0 === temps;
     }
     const impactT = S.t0 + vol;
-    S.attente.push({r});
+    S.attente.push({r, trajet});
     S.i++;
-    planifier(duree + marge, () => { rencontreManquee(v, r, impactT); tirSuivantInterception(S, 0); });
+    planifier(duree + marge, () => { rencontreManquee(v, r, impactT, trajet); tirSuivantInterception(S, 0); });
     return false;
   }
   return false;
 }
+// Trajet d'un missile tel que le voit un camp défenseur (22 novembre 2026, lot B, écran radar d'altitude, cahier
+// § 12.5) : r.trajets, un par missile compté dans r.missiles, {depart (heure de jeu du départ), vol (s), lourd, tir et
+// rencontre (heures de jeu de son propre intercepteur, null sans tir), issue (null tant que rien n'est dit, puis
+// 'abattu', 'manque', 'horsZone', 'sansTir'), abattuA (secondes de vol à la destruction, par lui ou par un allié)}.
+// L'issue n'est posée qu'au moment où elle est DITE (à la rencontre), comme le reste du résultat. Affichage seulement :
+// rien du jeu ne lit ces champs, et ils ne voyagent pas en ligne (interceptionPourReseau copie des champs nommés).
+function trajetVu(r, S){
+  if(!r.trajets) r.trajets = [];
+  const t = {depart:S.t0, vol:S.vol || CYCLE_GALERIE.vol, lourd:!!S.lourd, tir:null, rencontre:null, issue:null, abattuA:null};
+  r.trajets.push(t);
+  return t;
+}
 // Rencontre manquée : seul le défenseur l'apprend (le tireur n'est prévenu de rien de plus).
-function rencontreManquee(v, r, impactT){
+function rencontreManquee(v, r, impactT, trajet){
   r.rencontres++; r.impactT = impactT; r.t = temps;
+  if(trajet) trajet.issue = 'manque';
   const reste = Math.max(1, Math.ceil(impactT - temps - 1e-6));
   notifier(v, 'Interception manquée — impact dans ' + reste + ' s.', 'alerte');
 }
 // Rencontre réussie : le marqueur au sol s'efface, chacun l'apprend selon son point de vue. credites : alliés
 // qui comptent ce missile comme abattu par un allié, [{r, sansMunition, nouveau}] (sansMunition : il était compté
 // « sans munition » ; nouveau : il n'avait pas encore eu son tour, le missile ne lui était pas encore compté).
-function rencontreReussieA(v, r, tireur, fMarqueur, credites){
+function rencontreReussieA(v, r, tireur, fMarqueur, credites, trajet){
   r.rencontres++; r.abattus++; r.t = temps;
+  if(trajet){ trajet.issue = 'abattu'; trajet.abattuA = temps - trajet.depart; }
   if(fMarqueur) fMarqueur.vie = 0;
   // En ligne (20 novembre 2026) : l'invité efface lui aussi le marqueur (effet réseau 'abattu', jamais passé à
   // effet()). En solo, journalReseau est nul : rien.
@@ -2445,6 +2636,7 @@ function rencontreReussieA(v, r, tireur, fMarqueur, credites){
     if(c.nouveau) a.missiles++;
     if(c.sansMunition) a.sansMunition--;
     a.parAllie++; a.t = temps;
+    if(c.trajet) c.trajet.abattuA = temps - c.trajet.depart;   // abattu par un allié (écran d'altitude)
   }
   notifier('tous', w => w === v ? {texte:'Interception réussie : missile abattu.', genre:'succes'}
     : w === tireur ? {texte:'Missile intercepté !', genre:'alerte'}
@@ -3387,16 +3579,27 @@ function meilleurGroupe(camp, delai){
 // base très encombrée n'offre parfois qu'une ou deux cases admises (capMorvent, base de I : une seule), la galerie
 // y retombe alors souvent au même endroit.
 const PLACE_GALERIE = {bord:3, degage:2, rayon:380, angle:1.05, distMin:120, distMax:300, choix:4};
+// Missile lourd de l'ordinateur (22 novembre 2026, lot B, cahier § 12.6 ; Difficile et Ultra, IA_GALERIE[...].lourd ;
+// Normale et Facile : null, jamais de lourd). Il commande un lourd à la place d'un léger quand sa galerie est vide
+// (ni missile ni commande), que ses réserves dépassent le prix du lourd + reserve, et qu'une cible le justifie :
+//   facteur   : la meilleure zone adverse dans le rayon du lourd vaut au moins facteur × la meilleure dans le rayon
+//               du léger (salve complète pour Karsk) ;
+//   ou un camp hostile a une Batterie Parasol terminée et pas de Batterie Zénith (chantier compris) : bâtiments
+//               visibles de tous. (Il ne lit ni le point visé, ni le stock, ni la fabrication d'une galerie adverse.)
+//   reserve   : réserve de sécurité gardée au-delà du prix du lourd (celle du léger est reserveMissile) ;
+//   recherche : s entre deux évaluations de la cible (calcul coûteux : toutes les zones adverses, deux rayons).
+// Le tir d'un lourd suit la règle du léger (tirGalerieIA), au rayon du lourd, valeur minimale valeurMin × son prix.
+const LOURD_IA = {facteur:1.5, reserve:300, recherche:6};
 const IA_GALERIE = {
   normal:   {reserveMissile:150, valeurMin:0.9,  attenteSeul:90, retenueValeur:500, retenueRayon:600, retenueAir:0,    recherche:4,
              riposteSuper:false, contreTir:false, esquive:false, apres:0,
-             epargneTaux:6, epargneMissile:false, retard:0.8, calme:45, domine:0, place:PLACE_GALERIE},
+             epargneTaux:6, epargneMissile:false, retard:0.8, calme:45, domine:0, place:PLACE_GALERIE, lourd:null},
   difficile:{reserveMissile:100, valeurMin:0.75, attenteSeul:90, retenueValeur:500, retenueRayon:600, retenueAir:0,    recherche:3,
              riposteSuper:true,  contreTir:true,  esquive:true,  apres:0,
-             epargneTaux:6, epargneMissile:false, retard:0.8, calme:45, domine:0, place:PLACE_GALERIE},
+             epargneTaux:6, epargneMissile:false, retard:0.8, calme:45, domine:0, place:PLACE_GALERIE, lourd:LOURD_IA},
   ultra:    {reserveMissile:100, valeurMin:0.75, attenteSeul:90, retenueValeur:500, retenueRayon:600, retenueAir:1200, recherche:3,
              riposteSuper:true,  contreTir:true,  esquive:false, apres:0,
-             retard:1, place:PLACE_GALERIE},
+             retard:1, place:PLACE_GALERIE, lourd:LOURD_IA},
 };
 // Lot 3 (19 novembre 2026, cahier § 10, défauts 1 à 3) : quand et comment l'ordinateur paie sa galerie.
 // Mesures : serieGaleries / lancerSeriesGaleries / avancerSeriesGaleries (verif-missions-moteur.js), 9 affrontements
@@ -3652,8 +3855,42 @@ function fabriquerMissileIA(C, bats, retenue){
   // (Contrôle du 19 novembre 2026 : avec « retenue » en plus, l'économie de l'ordinateur ne réunissait presque
   // jamais la somme, et la galerie de Halden, bâtie pour 1 200, restait sans missile. La galerie est payée :
   // le missile passe maintenant avant le prochain bâtiment ; seule la réserve de sécurité du niveau reste.)
+  // Lot B (22 novembre 2026, § 12.6) : galerie vide et lourd justifié → un lourd à la place du léger. Sans lot B
+  // (case décochée, ou en ligne avant l'étape « en ligne ») ou à Normale, R.lourd est sans effet : comme avant.
+  if(lourdVouluIA(C, b, R)){
+    if(commanderMissileLourd(b)) noterGalerieIA(C.id, {quoi:'commandeLourd'});
+    return;
+  }
   if(C.reserves < G.coutMissile + R.reserveMissile || empechementFabrication(b)) return;
   if(commanderMissile(b)) noterGalerieIA(C.id, {quoi:'commande', stock:b.gal.stock, fab:b.gal.fab});
+}
+// Le missile lourd est-il voulu maintenant (cahier § 12.6) ? Galerie vide, réserves au-delà du prix + R.lourd.reserve,
+// empechementFabricationLourd muet, et une cible qui le justifie (LOURD_IA). L'évaluation de la cible est gardée
+// R.lourd.recherche s dans la mémoire de la galerie (M.lourdT, M.lourdOk). Lecture seule, hors cette mémoire.
+function lourdVouluIA(C, b, R){
+  const L = R.lourd, G = b.def.galerie, g = b.gal;
+  if(!L || !G.lourd || !galeriesActives()) return false;
+  if(g.stock > 0 || g.fab > 0 || g.lourd > 0 || g.fabLourd > 0) return false;
+  if(C.reserves < G.lourd.cout + L.reserve || empechementFabricationLourd(b)) return false;
+  const M = memoireGalerieIA(C.id);
+  if(M.lourdT != null && temps < M.lourdT) return M.lourdOk === true;
+  M.lourdT = temps + L.recherche;
+  M.lourdOk = lourdJustifieIA(C.id, G, L);
+  return M.lourdOk;
+}
+// La cible justifie-t-elle un lourd ? Parasol hostile sans Zénith, ou meilleure zone au rayon du lourd ≥ facteur ×
+// meilleure zone au rayon du léger. Fonction de lecture (ce que tout joueur voit).
+function lourdJustifieIA(id, G, L){
+  const camps_ = {};
+  for(const e of ents) if(e.est === 'batiment' && !e.mort && hostile(id, e.camp) && e.camp !== 'X'){
+    const c = camps_[e.camp] || (camps_[e.camp] = {parasol:false, zenith:false});
+    if(estParasol(e) && !e.enCours) c.parasol = true;
+    if(estZenith(e)) c.zenith = true;
+  }
+  for(const k in camps_) if(camps_[k].parasol && !camps_[k].zenith) return true;
+  const leger = meilleureZoneGalerie(id, G, G.lanceurs, 0);
+  const lourd = meilleureZoneGalerie(id, G.lourd, 1, 0, delaiTirGalerie(1) - CYCLE_GALERIE.vol + G.lourd.vol);
+  return !!lourd && lourd.valeur > 0 && lourd.valeur >= L.facteur * (leger ? leger.valeur : 0);
 }
 
 // ---------- Défense antimissile de l'ordinateur (19 novembre 2026, cahier § 11.4) ----------
@@ -3675,10 +3912,17 @@ function fabriquerMissileIA(C, bats, retenue){
 //                     unité ennemie près de sa base ;
 //   distanceRadar   : px du QG où chercher la place d'un radar (dans la base), dans la direction la plus éloignée
 //                     des autres radars et de la batterie.
+// Lot B (22 novembre 2026, cahier § 12.6) : Batterie Zénith.
+//   zenith          : null (Normale : jamais) ; 'lourd' (Difficile : après la Parasol et un premier radar, seulement
+//                     après qu'un camp hostile a ouvert sa galerie pour un tir lourd, alerte publique) ; 'complet'
+//                     (Ultra : de même, et aussi dès que sa défense légère est complète, Parasol, radars voulus et
+//                     stockVise munitions, si son armée n'est pas en retard) ;
+//   stockViseZenith : munitions de Zénith prêtes ou commandées visées (cahier : 1).
+// Même épargne progressive et mêmes précautions que la Parasol (defenseDueIA).
 const IA_DEFENSE = {
-  normal:   {radars:1, stockVise:2, reserveMunition:100, epargneTaux:6, partageGalerie:0.5, retard:0.8, calme:45, domine:0, distanceRadar:260},
-  difficile:{radars:2, stockVise:2, reserveMunition:100, epargneTaux:6, partageGalerie:0.5, retard:0.8, calme:45, domine:0, distanceRadar:260},
-  ultra:    {radars:3, stockVise:2, reserveMunition:100, epargneTaux:6, partageGalerie:0.5, retard:0.8, calme:45, domine:0, distanceRadar:260},
+  normal:   {radars:1, stockVise:2, reserveMunition:100, epargneTaux:6, partageGalerie:0.5, retard:0.8, calme:45, domine:0, distanceRadar:260, zenith:null, stockViseZenith:0},
+  difficile:{radars:2, stockVise:2, reserveMunition:100, epargneTaux:6, partageGalerie:0.5, retard:0.8, calme:45, domine:0, distanceRadar:260, zenith:'lourd', stockViseZenith:1},
+  ultra:    {radars:3, stockVise:2, reserveMunition:100, epargneTaux:6, partageGalerie:0.5, retard:0.8, calme:45, domine:0, distanceRadar:260, zenith:'complet', stockViseZenith:1},
 };
 function reglagesDefenseIA(id){ return IA_DEFENSE[niveauIA(id)] || null; }
 // Mémoire de la défense d'un ordinateur (créée seulement option cochée, niveau Normale et au-dessus) : menace =
@@ -3700,15 +3944,32 @@ function galerieHostileVue(id){
 }
 // Prochain bâtiment de défense à poser (fonction de lecture) : la batterie d'abord, puis les radars jusqu'à R.radars ;
 // rien tant qu'un chantier de défense est en cours (un à la fois), ni pour un radar avant la batterie terminée.
-function prochaineDefenseIA(bats, R){
-  let parasol = null, radars = 0;
+// zenithVoulue (lot B, 22 novembre 2026) : la Zénith passe alors après la Parasol et le premier radar, avant les autres
+// radars ; faux (toujours, hors lot B ou à Normale) : exactement la règle d'avant.
+function prochaineDefenseIA(bats, R, zenithVoulue){
+  let parasol = null, radars = 0, zenith = null;
   for(const b of bats){
     if(estParasol(b)) parasol = b;
     else if(estRadar(b)){ if(b.enCours) return null; radars++; }
+    else if(estZenith(b)) zenith = b;
   }
   if(!parasol) return 'parasol';
   if(parasol.enCours) return null;
+  if(zenithVoulue && !zenith && radars >= 1) return 'zenith';
+  if(zenith && zenith.enCours) return null;
   return radars < R.radars ? 'radar' : null;
+}
+// La Zénith est-elle voulue (cahier § 12.6) ? Difficile et Ultra : un camp hostile a ouvert sa galerie pour un tir
+// lourd (M.lourdVu, noté à l'alerte d'ouverture, publique) ; Ultra aussi quand sa défense légère est complète
+// (Parasol terminée, R.radars radars terminés, R.stockVise munitions prêtes) et que son armée n'est pas en retard.
+function zenithVoulueIA(id, R, M, bats){
+  if(!R.zenith || !galeriesActives()) return false;
+  if(M.lourdVu) return true;
+  if(R.zenith !== 'complet') return false;
+  const p = bats.find(b => estParasol(b) && !b.enCours);
+  if(!p || p.para.stock < R.stockVise || bats.filter(b => estRadar(b) && !b.enCours).length < R.radars) return false;
+  const R2 = reglagesGalerieIA(id);
+  return !!R2 && !armeeEnRetardUltra(etatUltra(id), R2);
 }
 const SANS_DEFENSE_DUE = Object.freeze({due:false, quoi:null, ep:0});
 // Radars perdus (correction du 20 novembre 2026, constat du contrôle : l'ordinateur Normale rebâtissait sans fin
@@ -3750,7 +4011,7 @@ function defenseDueIA(C, bats, armee, garde, galDue, veutGalerie){
   // (galeriePosee : une galerie déjà bâtie puis détruite ne remet pas la défense en attente.)
   if(!M.galeriePosee && bats.some(b => estGalerie(b))) M.galeriePosee = true;
   if(veutGalerie && !M.subi && !M.galeriePosee){ M.epargneT = null; return SANS_DEFENSE_DUE; }
-  let quoi = prochaineDefenseIA(bats, R);
+  let quoi = prochaineDefenseIA(bats, R, zenithVoulueIA(C.id, R, M, bats));
   if(quoi === 'radar' && !radarPermisIA(M)) quoi = null;
   if(!quoi){ M.epargneT = null; return SANS_DEFENSE_DUE; }
   const dt = M.epargneT == null ? 0 : Math.min(2, Math.max(0, temps - M.epargneT));
@@ -3769,11 +4030,13 @@ function defenseDueIA(C, bats, armee, garde, galDue, veutGalerie){
 // qui est la plus loin des autres radars et de la batterie (pas tous détruits d'un même coup), à 3 cases du bord au
 // moins ; trouverEmplacement cherche ensuite une case libre autour, comme pour ses autres bâtiments.
 function emplacementDefenseIA(type, bats, qg, R, perdus){
-  if(type === 'parasol'){
+  // (Lot B, 22 novembre 2026 : la Zénith au même endroit que la Parasol, trouverEmplacement prenant la case libre
+  // la plus proche ; sa zone de 900 px couvre de là toute la base.)
+  if(type === 'parasol' || type === 'zenith'){
     const u = bats.find(b => b.type === 'usine' && !b.enCours);
     return trouverEmplacement(type, u ? {x:(qg.x + u.x)/2, y:(qg.y + u.y)/2} : qg);
   }
-  const autres = bats.filter(b => estRadar(b) || estParasol(b)), m = TUILE*3;
+  const autres = bats.filter(b => estRadar(b) || estBatterie(b)), m = TUILE*3;
   let point = qg, loin = -1;
   for(let k = 0; k < 8; k++){
     const a = k*Math.PI/4;
@@ -3804,10 +4067,17 @@ function construireDefenseIA(C, d, bats, ouvriers, qg, garde){
 // les messages du camp d'un refus ; commanderMunition prélève le prix.
 function munitionsDefenseIA(C, garde){
   const R = reglagesDefenseIA(C.id), b = R && batterieDe(C.id);
-  if(!b) return;
-  const p = b.para, D = b.def.defense;
-  if(p.stock + p.fab >= R.stockVise || C.reserves - garde < D.coutMunition + R.reserveMunition || empechementMunition(b)) return;
-  if(commanderMunition(b)) noterDefenseIA(C.id, {quoi:'munition', stock:p.stock, fab:p.fab});
+  if(b){
+    const p = b.para, D = b.def.defense;
+    if(!(p.stock + p.fab >= R.stockVise || C.reserves - garde < D.coutMunition + R.reserveMunition || empechementMunition(b)))
+      if(commanderMunition(b)) noterDefenseIA(C.id, {quoi:'munition', stock:p.stock, fab:p.fab});
+  }
+  // Batterie Zénith (lot B, 22 novembre 2026) : R.stockViseZenith munitions (cahier : 1). Sans Zénith : rien.
+  const z = R && R.stockViseZenith ? batterieDe(C.id, 'zenith') : null;
+  if(!z) return;
+  const q = z.para, X = z.def.defense;
+  if(q.stock + q.fab >= R.stockViseZenith || C.reserves - garde < X.coutMunition + R.reserveMunition || empechementMunition(z)) return;
+  if(commanderMunition(z)) noterDefenseIA(C.id, {quoi:'munitionZenith', stock:q.stock, fab:q.fab});
 }
 // Dégâts attendus d'un tir sur une entité à d px (bord compris) du point visé : n missiles, chute linéaire
 // jusqu'à la moitié au bord (explosionZone, bord 0,5), efficacité de l'arme « missileGalerie ». La dispersion
@@ -3862,8 +4132,9 @@ function valeurZoneGalerie(G, n, liste, x, y){
 // sinon, la meilleure de toutes (groupes d'unités compris). La zone retenue est ensuite recentrée une fois
 // sur le barycentre (pondéré par la valeur) de ce qu'elle touche, si cela vaut davantage.
 // Renvoie {x, y, valeur, cible} (cible : entité au centre) ou null.
-function meilleureZoneGalerie(id, G, n, seuil){
-  const liste = ciblesGalerieIA(id, delaiTirGalerie(n));
+// delai (lot B, 22 novembre 2026) : s entre l'ordre et l'impact, si ce n'est pas celui du léger (lourd : vol de 8 s).
+function meilleureZoneGalerie(id, G, n, seuil, delai){
+  const liste = ciblesGalerieIA(id, delai != null ? delai : delaiTirGalerie(n));
   let best = null, bestBat = null;
   for(const c of liste.cibles){
     const v = valeurZoneGalerie(G, n, liste, c.x, c.y);
@@ -3912,18 +4183,22 @@ function tirGalerieIA(id, bats){
   const b = galerieDuCamp(bats), R = b && reglagesGalerieIA(id);
   if(!R) return;
   const M = memoireGalerieIA(id), g = b.gal, G = b.def.galerie;
-  if(g.t0 !== null || g.stock < 1){ M.pretT = null; return; }
+  // Lot B (22 novembre 2026) : un lourd prêt part comme une salve complète, au rayon du lourd, et ne part que s'il
+  // vaut valeurMin × son prix. Sans lourd (toujours, hors lot B), exactement comme avant.
+  const lourd = g.lourd > 0 && !!G.lourd;
+  if(g.t0 !== null || (g.stock < 1 && !lourd)){ M.pretT = null; return; }
   if(M.pretT === null) M.pretT = temps;
-  const n = Math.min(g.stock, G.lanceurs);
-  if(n < G.lanceurs && temps - M.pretT < R.attenteSeul) return;
+  const n = lourd ? 1 : Math.min(g.stock, G.lanceurs);
+  if(!lourd && n < G.lanceurs && temps - M.pretT < R.attenteSeul) return;
   if(temps < M.rechercheT) return;
   M.rechercheT = temps + R.recherche;
   if(retenueGalerieIA(id, b, R)) return;
-  const seuil = R.valeurMin * G.coutMissile * n, z = meilleureZoneGalerie(id, G, n, seuil);
+  const seuil = lourd ? R.valeurMin * G.lourd.cout : R.valeurMin * G.coutMissile * n;
+  const z = lourd ? meilleureZoneGalerie(id, G.lourd, 1, seuil, CYCLE_GALERIE.departs[0] + G.lourd.vol) : meilleureZoneGalerie(id, G, n, seuil);
   if(!z || z.valeur < seuil || empechementTirGalerie(b, z.x, z.y)) return;
   if(ouvrirGalerie(b, z.x, z.y)){
     M.pretT = null;
-    noterGalerieIA(id, {quoi:'tir', n, x:Math.round(z.x), y:Math.round(z.y), valeur:z.valeur, cible:z.cible.type, camp:z.cible.camp, cibleId:z.cible.id});
+    noterGalerieIA(id, {quoi:lourd ? 'tirLourd' : 'tir', n, x:Math.round(z.x), y:Math.round(z.y), valeur:z.valeur, cible:z.cible.type, camp:z.cible.camp, cibleId:z.cible.id});
   }
 }
 
@@ -5420,7 +5695,7 @@ function dessinerCalque(){
   if(mode && mode.type === 'galerie'){
     const b = entiteParId(mode.id);
     if(b && estGalerie(b)){
-      const G = b.def.galerie;
+      const G = armeChargee(b);   // (22 novembre 2026, lot B : rayon et dispersion de ce que la galerie contient, léger ou lourd)
       g.strokeStyle = '#ffd27a'; g.lineWidth = 2; g.setLineDash([8,6]); cercleSol(g, souris.mx, souris.my, G.rayon, 48); g.stroke();
       if(G.dispersion > 0){ g.globalAlpha = 0.45; g.lineWidth = 1.5; cercleSol(g, souris.mx, souris.my, G.rayon + G.dispersion, 56); g.stroke(); g.globalAlpha = 1; }
       g.setLineDash([]);
@@ -5484,11 +5759,11 @@ function dessinerCalque(){
 // n'est pas un secret, c'est une distance fixe autour du bâtiment). Couleur du camp, pointillés, fond très léger.
 function dessinerZonesProtegees(g){
   const zones = [];
-  if(mode && mode.type === 'placer' && BATIMENTS[mode.bat] && BATIMENTS[mode.bat].defense && BATIMENTS[mode.bat].defense.genre === 'parasol'){
+  if(mode && mode.type === 'placer' && BATIMENTS[mode.bat] && BATIMENTS[mode.bat].defense && BATIMENTS[mode.bat].defense.genre !== 'radar'){   // (Parasol ou Zénith, 21 novembre 2026)
     const {c, r, t} = cellulePlacement();
     zones.push({x:(c+t/2)*TUILE, y:(r+t/2)*TUILE, r:BATIMENTS[mode.bat].defense.zone, c:couleurCamp(campJoueur)});
   }
-  for(const e of selection) if(estParasol(e) && !e.mort) zones.push({x:e.x, y:e.y, r:e.def.defense.zone, c:couleurCamp(e.camp)});
+  for(const e of selection) if(estBatterie(e) && !e.mort) zones.push({x:e.x, y:e.y, r:e.def.defense.zone, c:couleurCamp(e.camp)});
   if(!zones.length) return;
   g.save(); g.lineWidth = 2; g.setLineDash([10, 7]);
   for(const z of zones){
@@ -5772,15 +6047,23 @@ function construirePanneau(){
         ' La fabrication n’avance que galerie fermée.',
         () => ordonner({type:'fabriquerMissile', id}),
         b => { b.dataset.galFab = '1'; b.dataset.titre = b.title; });
-      ajouter(`Tirer<span class="c">${G.lanceurs > 1 ? G.lanceurs + ' × ' : ''}${G.degats} dégâts</span>`,
+      // Missile lourd (22 novembre 2026, cahier § 12.1 et 12.4) : troisième bouton, entre « Fabriquer un missile » et
+      // « Tirer », grisé avec sa raison (empechementFabricationLourd) ; absent hors du lot B (en ligne à cette étape).
+      if(G.lourd) ajouter(`Fabriquer un missile lourd<span class="c">${G.lourd.cout} réserves</span>`,
+        'Fabrique un missile lourd (' + G.lourd.temps + ' s, payé à la commande, sans remboursement) : ' + G.lourd.degats + ' dégâts, rayon ' + G.lourd.rayon +
+        ', vol de ' + G.lourd.vol + ' s en haute altitude (seule la Batterie Zénith peut l’abattre). Il prend toute la galerie : seulement galerie vide, et pas de missile léger avec lui.',
+        () => ordonner({type:'fabriquerMissileLourd', id}),
+        b => { b.dataset.galLourd = '1'; b.dataset.titre = b.title; });
+      ajouter(`Tirer<span class="c">${etiquetteTirGalerie(e)}</span>`,
         'Choisir un point de la carte (vue ou minicarte). La galerie s’ouvre et devient vulnérable pendant ' + nombreFr(CYCLE_GALERIE.duree) +
-        ' s ; départ à ' + nombreFr(CYCLE_GALERIE.departs[0]) + ' s, impact ' + CYCLE_GALERIE.vol + ' s plus tard. Tous les missiles prêts partent. L’ordre ne s’annule pas.',
+        ' s ; départ à ' + nombreFr(CYCLE_GALERIE.departs[0]) + ' s, impact ' + CYCLE_GALERIE.vol + ' s plus tard (' + (G.lourd ? G.lourd.vol : 8) + ' s pour un missile lourd). Tout ce que la galerie contient part. L’ordre ne s’annule pas.',
         () => commencerViseeGalerie(id),
         b => { b.dataset.galTir = '1'; b.dataset.titre = b.title; });
     }
     // Batterie Parasol terminée (19 novembre 2026) : un bouton, grisé avec sa raison en tête de l'infobulle
     // (rafraichirPanneau), comme « Fabriquer un missile ».
-    if(estParasol(e) && galeriesActives()){
+    // (21 novembre 2026, lot B : de même pour la Batterie Zénith ; fiche complète à l'étape « interface ».)
+    if(estBatterie(e) && galeriesActives()){
       const X = e.def.defense, id = e.id;
       ajouter(`Fabriquer une munition<span class="c">${X.coutMunition} réserves</span>`,
         'Fabrique une munition d’interception (' + X.tempsMunition + ' s, payée à la commande, sans remboursement). ' +
@@ -5796,13 +6079,15 @@ function construirePanneau(){
 // Rend {etat, chances} : deux textes.
 function ligneEtatDefense(b, proprietaire){
   const X = b.def.defense;
-  if(X.genre === 'parasol'){
+  // (21 novembre 2026, lot B : la Batterie Zénith a la même fiche que la Parasol, avec son barème.)
+  if(X.genre === 'parasol' || X.genre === 'zenith'){
     if(!proprietaire || !b.para) return {etat:'Défense antimissile · zone protégée de ' + Math.round(X.zone/TUILE) + ' cases de rayon', chances:''};
     const p = b.para;
     let etat = 'Munitions : ' + p.stock + ' / ' + X.stockMax;
     if(p.fab > 0) etat += ' · fabrication ' + Math.max(1, Math.ceil(p.fabT - 1e-6)) + ' s' + (p.fab > 1 ? ' (+' + (p.fab - 1) + ' en attente)' : '');
     const n = radarsActifs(b.camp), max = BATIMENTS.radar.defense.limite;
-    return {etat, chances:'Chances : ' + Math.round(chancesDepuisRadars(n)) + ' % — ' + n + ' radar' + (n > 1 ? 's' : '') + ' sur ' + max};
+    if(X.genre === 'zenith' && n === 0) return {etat, chances:'Chances : ' + Math.round(chancesDepuisRadars(0, 'zenith')) + ' % — aucun radar'};
+    return {etat, chances:'Chances : ' + Math.round(chancesDepuisRadars(n, X.genre)) + ' % — ' + n + ' radar' + (n > 1 ? 's' : '') + ' sur ' + max};
   }
   const n = radarsActifs(b.camp);
   const etat = 'En service · radars du camp : ' + n + ' sur ' + X.limite;
@@ -5817,6 +6102,9 @@ function ligneEtatGalerie(b, proprietaire){
   if(!g) return '';
   if(g.t0 === null){
     if(!proprietaire) return 'Fermée — intouchable';
+    // Missile lourd (21 novembre 2026) : prêt, ou en fabrication (même compte à rebours fabT).
+    if(g.lourd > 0) return 'Fermée — missile lourd prêt';
+    if(g.fabLourd > 0) return 'Fermée — missile lourd : fabrication ' + Math.max(1, Math.ceil(g.fabT - 1e-6)) + ' s';
     if(g.stock === 0 && g.fab === 0) return 'Fermée — aucun missile (à fabriquer)';
     const s = g.stock > 1 ? 's' : '';
     const parts = [];
@@ -5827,14 +6115,22 @@ function ligneEtatGalerie(b, proprietaire){
   }
   if(!proprietaire) return 'Ouverte — vulnérable !';
   const t = b.galT !== null && b.galT !== undefined ? b.galT : temps - g.t0;
-  const impact = g.n > 0 ? C.departs[g.n - 1] + C.vol : 0;   // dernier impact du cycle
+  const impact = g.n > 0 ? C.departs[g.n - 1] + armeDuCycle(b).vol : 0;   // dernier impact du cycle (vol de 8 s pour un lourd)
   let phase;
   if(t < C.ouverture) phase = 'Ouverture…';
   else if(g.tires < g.n) phase = 'Tir dans ' + Math.max(1, Math.ceil(C.departs[g.tires] - t - 1e-6)) + ' s';
   else if(t < impact) phase = 'Impact dans ' + Math.max(1, Math.ceil(impact - t - 1e-6)) + ' s';
   else if(t < C.rentree) phase = 'Repli…';
   else phase = 'Fermeture…';
-  return phase + ' (vulnérable)';
+  // (22 novembre 2026, lot B : un cycle lourd le dit, la fiche ayant perdu la ligne « missile lourd prêt ».)
+  return (g.cycleLourd === true ? 'Lourd : ' : '') + phase + ' (vulnérable)';
+}
+// Étiquette du bouton « Tirer » (fonction pure, 22 novembre 2026) : les dégâts de ce qui partira. Galerie vide ou
+// légers : comme avant (« 2 × 600 dégâts », « 1200 dégâts ») ; missile lourd prêt : « lourd, 2000 dégâts ».
+function etiquetteTirGalerie(b){
+  const G = b.def.galerie;
+  if(b.gal && b.gal.lourd > 0 && G.lourd) return 'lourd, ' + G.lourd.degats + ' dégâts';
+  return (G.lanceurs > 1 ? G.lanceurs + ' × ' : '') + G.degats + ' dégâts';
 }
 // Bouton « Tirer » : passe en visée (curseur en croix, cercle au sol, clic gauche sur la vue ou la minicarte).
 // Rien n'est payé ni engagé avant le clic qui valide ; clic droit ou Échap : annuler.
@@ -5905,15 +6201,17 @@ function rafraichirPanneau(){
       if(b.dataset.helico && e && e.def.aeroport) b.classList.toggle('grise', helicosPlein(e));
     }
     // Galerie de tir (novembre 2026) : boutons « Fabriquer un missile » et « Tirer », grisés avec leur raison.
-    if((b.dataset.galFab || b.dataset.galTir) && e && estGalerie(e)){
-      const raison = b.dataset.galFab ? empechementFabrication(e) : empechementTirGalerie(e, e.x, e.y);
+    if((b.dataset.galFab || b.dataset.galTir || b.dataset.galLourd) && e && estGalerie(e)){
+      const raison = b.dataset.galFab ? empechementFabrication(e) : b.dataset.galLourd ? empechementFabricationLourd(e) : empechementTirGalerie(e, e.x, e.y);
+      // « Tirer » : l'étiquette dit ce qui partira (22 novembre 2026, lot B : légers ou lourd).
+      if(b.dataset.galTir){ const c = b.querySelector('.c'), t = etiquetteTirGalerie(e); if(c && c.textContent !== t) c.textContent = t; }
       if(b.disabled !== !!raison) b.disabled = !!raison;
       const titre = raison ? raison + ' ' + b.dataset.titre : b.dataset.titre;
       if(b.title !== titre) b.title = titre;
       if(b.dataset.galTir) b.classList.toggle('actif', !!(mode && mode.type === 'galerie' && mode.id === e.id));
     }
     // Batterie Parasol (19 novembre 2026) : « Fabriquer une munition », grisé avec sa raison.
-    if(b.dataset.paraFab && e && estParasol(e)){
+    if(b.dataset.paraFab && e && estBatterie(e)){
       const raison = empechementMunition(e);
       if(b.disabled !== !!raison) b.disabled = !!raison;
       const titre = raison ? raison + ' ' + b.dataset.titre : b.dataset.titre;
@@ -6059,6 +6357,8 @@ function construireFabrique(items){
   // Plus de 8 boutons (onglet Bâtiments, option « Galeries de tir » cochée : Halden 10, Karsk 9) : grille de
   // 5 colonnes (classe « cinq », front-de-sel.html). Jusqu'à 8, la classe est absente : affichage d'avant.
   zone.classList.toggle('cinq', items.length > 8);
+  // Plus de 10 (22 novembre 2026, lot B : Batterie Zénith, Halden 11) : 6 colonnes (classe « six » en plus).
+  zone.classList.toggle('six', items.length > 10);
   for(const o of ONGLETS_FAB){
     const b = document.createElement('button');
     b.className = 'onglet' + (o.cle === ongletFab ? ' actif' : ''); b.innerHTML = echapper(o.nom) + '<span class="tch">' + o.touche + '</span>';
@@ -6112,9 +6412,11 @@ function contenuInfobulle(it, raison){
   } else if(bat && D.defense){
     // Défense antimissile (19 novembre 2026) : ni arme ni portée ordinaires.
     const X = D.defense;
-    if(X.genre === 'parasol') lignes.push(['Cibles', 'missiles de galerie seulement'], ['Zone protégée', 'rayon de ' + Math.round(X.zone/TUILE) + ' cases (cercle en pointillés)'],
+    // (21 novembre 2026, lot B : la Batterie Zénith, même présentation, son barème et sa cible.)
+    if(X.genre === 'parasol' || X.genre === 'zenith') lignes.push(['Cibles', X.genre === 'zenith' ? 'missile lourd seulement' : 'missiles de galerie seulement'],
+      ['Zone protégée', 'rayon de ' + Math.round(X.zone/TUILE) + ' cases (cercle en pointillés)'],
       ['Munition', X.coutMunition + ' réserves, ' + X.tempsMunition + ' s (' + X.stockMax + ' au plus)'],
-      ['Chances', Math.round(chancesDepuisRadars(0)) + ' % sans radar, ' + Math.round(chancesDepuisRadars(3)) + ' % avec trois']);
+      ['Chances', Math.round(chancesDepuisRadars(0, X.genre)) + ' % sans radar, ' + Math.round(chancesDepuisRadars(3, X.genre)) + ' % avec trois']);
     else lignes.push(['Effet', 'chances d’interception : ' + [0, 1, 2, 3].map(n => Math.round(chancesDepuisRadars(n)) + ' %').join(' → ') + ' (0 à 3 radars)'], ['Portée', 'tout le camp']);
     lignes.push(['Limite', X.limite + ' par camp']);
   } else lignes.push(['Cibles', ciblesTexte(D)]);
@@ -6198,24 +6500,33 @@ function secondesDefense(s){ return Math.max(0, Math.ceil(s - 1e-6)); }
 // camp (sa propre batterie : rien d'autre que ce que le joueur sait déjà). pretAvant : une munition sera prête au
 // départ (en stock, ou en fabrication et finie avant) ; sinon le bouton « Intercepter » est grisé avec sa raison.
 function donneesProposition(p, bat){
-  const D = BATIMENTS.parasol.defense;
+  // (Lot B, 22 novembre 2026 : la batterie de la proposition, p.genre ; lignes : une par batterie quand des galeries
+  // ouvertes en même temps concernent les deux batteries, sinon absent, et la fenêtre est celle d'avant.)
+  const D = BATIMENTS[p.genre === 'zenith' ? 'zenith' : 'parasol'].defense;
   const fabDans = bat && bat.para && bat.para.fab > 0 ? Math.max(0, bat.para.fabT) : null;
-  return {cle:p.cle, n:p.n, restants:p.restants, departDans:p.departDans, delai:CYCLE_GALERIE.departs[0],
+  const lignes = p.lignes && p.lignes.length > 1 ? p.lignes.map(l => {
+    const X = BATIMENTS[l.genre].defense;
+    return {genre:l.genre, lourd:l.lourd, nom:BATIMENTS[l.genre].nom, chances:Math.round(l.chances), munitions:l.munitions, stockMax:X.stockMax,
+      pretAvant:l.munitions > 0 || (l.fabDans !== null && l.fabDans <= p.departDans)};
+  }) : null;
+  return {genre:D.genre, lourd:p.lourd === true, nomBatterie:BATIMENTS[D.genre].nom, cle:p.cle, n:p.n, restants:p.restants, departDans:p.departDans, delai:CYCLE_GALERIE.departs[0],
     chances:Math.round(p.chances), radars:p.radars, radarsMax:BATIMENTS.radar.defense.limite,
     munitions:p.munitions, stockMax:D.stockMax, fabDans,
-    pretAvant:p.munitions > 0 || (fabDans !== null && fabDans <= p.departDans),
-    ouvertes:p.ouvertes || 1, armees:p.armees || 0, armee:p.ouvertes > 1 ? p.armees >= p.ouvertes : p.reponse === true};
+    pretAvant:lignes ? lignes.some(l => l.pretAvant) : p.munitions > 0 || (fabDans !== null && fabDans <= p.departDans),
+    ouvertes:p.ouvertes || 1, armees:p.armees || 0, armee:p.ouvertes > 1 ? p.armees >= p.ouvertes : p.reponse === true, lignes};
 }
 // Signature de ce qui change la STRUCTURE de la fenêtre (pas le compte à rebours ni la jauge, réécrits à part
 // à chaque rafraîchissement) : reconstruire la fenêtre 10 fois par seconde ferait perdre un clic en cours.
 function signatureProposition(d){
-  return ['P', d.cle, d.armee, d.pretAvant, d.restants, d.ouvertes, d.armees, d.chances, d.radars, d.munitions, d.munitions === 0 && d.fabDans !== null].join('|');
+  return ['P', d.cle, d.genre, d.armee, d.pretAvant, d.restants, d.ouvertes, d.armees, d.chances, d.radars, d.munitions, d.munitions === 0 && d.fabDans !== null,
+    d.lignes ? d.lignes.map(l => l.genre + l.chances + ':' + l.munitions + (l.pretAvant ? '+' : '-')).join(',') : ''].join('|');
 }
 // Fenêtre de PROPOSITION (fonction pure, HTML). Les parties qui bougent (.sec, .jauge i, .fabDans) sont remplies
 // par afficherProposition.
 function htmlPropositionDefense(d){
   // salve : le cycle a commencé à deux missiles ; second : le premier est déjà parti (la fenêtre le dit, au lieu
   // de sembler annoncer une nouvelle attaque d'un seul missile). plusieurs : d'autres galeries s'ouvrent aussi.
+  if(d.lignes) return htmlPropositionDeuxBatteries(d);
   const salve = d.n > 1, second = salve && d.restants < d.n, vide = !d.pretAvant, plusieurs = d.ouvertes > 1;
   let boutons, pied;
   if(d.armee){
@@ -6229,23 +6540,48 @@ function htmlPropositionDefense(d){
       '<button data-touche="l">Laisser passer <span class="tch">(L)</span></button>';
     pied = vide ? (d.fabDans !== null
         ? '<div class="raison">Aucune munition prête avant le départ : la prochaine le sera dans <span class="fabDans"></span> s.</div>'
-        : '<div class="raison">Aucune munition prête : la batterie ne peut pas tirer. Fabriquez-en d’avance dans la fiche de la Batterie Parasol.</div>')
+        : '<div class="raison">Aucune munition prête : la batterie ne peut pas tirer. Fabriquez-en d’avance dans la fiche de la ' + (d.nomBatterie || 'Batterie Parasol') + '.</div>')
       : d.munitions === 0 ? '<div class="regle">Une munition sera prête dans <span class="fabDans"></span> s, avant le départ.</div>'
       : plusieurs && d.armees > 0 ? '<div class="regle">Interception déjà ordonnée pour ' + d.armees + ' galerie' + (d.armees > 1 ? 's' : '') + ' sur ' + d.ouvertes + '. Une munition par missile.</div>'
       : salve || plusieurs ? '<div class="regle">Une munition par missile. La batterie ne tire que sur ceux qui visent la zone qu’elle protège.</div>'
       : '<div class="regle">La batterie ne tire que si le missile vise la zone qu’elle protège.</div>';
   }
-  return '<div class="tete"><span class="titre">' + (plusieurs ? d.ouvertes + ' galeries ennemies en ouverture' : 'Galerie ennemie en ouverture') + '</span><span class="tch">Espace : voir</span></div>' +
+  // (Lot B : le titre du lourd, plus long, passe sur deux lignes au lieu d'être coupé ; le léger ne change pas.)
+  return '<div class="tete"><span class="titre"' + (d.lourd && !plusieurs ? ' style="white-space:normal"' : '') + '>' +
+    (plusieurs ? d.ouvertes + ' galeries ennemies en ouverture' : d.lourd ? 'Galerie ennemie en ouverture — missile lourd' : 'Galerie ennemie en ouverture') + '</span><span class="tch">Espace : voir</span></div>' +
     (plusieurs ? '<div class="sousTitre">Votre réponse vaut pour les ' + d.ouvertes + ' galeries</div>'
-      : second ? '<div class="sousTitre">Salve : premier missile parti</div>' : salve ? '<div class="sousTitre">Salve de deux missiles</div>' : '') +
+      : second ? '<div class="sousTitre">Salve : premier missile parti</div>' : salve ? '<div class="sousTitre">Salve de deux missiles</div>'
+      : d.lourd ? '<div class="sousTitre">' + d.nomBatterie + ' · haute altitude</div>' : '') +
     '<div class="compte"><span>' + (plusieurs ? 'Premier départ' : second ? 'Départ du second missile' : 'Départ ' + (salve ? 'des missiles' : 'du missile')) + ' dans</span><b class="sec"></b></div>' +
     '<div class="jauge"><i></i></div>' +
     '<div class="rang"><span class="lib">Chances d’interception</span><b class="gros">' + d.chances + ' %</b></div>' +
     '<div class="rang sous">' + htmlPastilles(d.radars, d.radarsMax) + '<span>' + d.radars + ' radar' + (d.radars > 1 ? 's' : '') + ' sur ' + d.radarsMax +
       (salve ? ' · chances par missile' : '') + '</span></div>' +
+    // Zénith sans radar (cahier § 12.4) : elle tire quand même, à 15 % ; une ligne de conseil le dit.
+    (d.genre === 'zenith' && d.radars === 0 ? '<div class="raison" style="margin:0 0 4px">Sans radar de veille, la Batterie Zénith tire presque à l’aveugle.</div>' : '') +
     '<div class="rang"><span class="lib">Munitions d’interception</span>' + htmlPastilles(d.munitions, d.stockMax, 'mun') +
       '<b' + (d.munitions === 0 ? ' class="zero"' : '') + '>' + d.munitions + '</b></div>' +
     '<div class="boutons">' + boutons + '</div>' + pied;
+}
+// Fenêtre de PROPOSITION quand les galeries ouvertes concernent les deux batteries (22 novembre 2026, cahier § 12.4) :
+// même tête, même compte à rebours, mêmes boutons et une seule réponse pour toutes ; une ligne par batterie (missile
+// visé, chances, munitions), les radars une fois (ils servent aux deux). Fonction pure.
+function htmlPropositionDeuxBatteries(d){
+  const vide = !d.pretAvant, sansMun = d.lignes.filter(l => !l.pretAvant);
+  const boutons = d.armee ? '<button class="actif" data-touche="i">Interception ordonnée</button><button class="etroit" data-touche="l">Annuler <span class="tch">(L)</span></button>'
+    : '<button class="principal"' + (vide ? ' disabled' : '') + ' data-touche="i">Intercepter <span class="tch">(I)</span></button><button data-touche="l">Laisser passer <span class="tch">(L)</span></button>';
+  const pied = sansMun.length ? '<div class="raison">' + sansMun.map(l => l.nom).join(' et ') + ' : aucune munition prête avant le départ.</div>'
+    : d.armee ? '<div class="regle">Chaque batterie tirera sur le missile qui la concerne, s’il vise la zone qu’elle protège.</div>'
+    : '<div class="regle">La Parasol tire sur le missile léger, la Zénith sur le lourd, s’il vise la zone qu’elle protège.</div>';
+  let s = '<div class="tete"><span class="titre">' + d.ouvertes + ' galeries ennemies en ouverture</span><span class="tch">Espace : voir</span></div>' +
+    '<div class="sousTitre">Votre réponse vaut pour les ' + d.ouvertes + ' galeries</div>' +
+    '<div class="compte"><span>Premier départ dans</span><b class="sec"></b></div><div class="jauge"><i></i></div>';
+  for(const l of d.lignes){
+    s += '<div class="rang"><span class="lib">' + l.nom + ' · missile ' + (l.lourd ? 'lourd' : 'léger') + '</span><b class="gros">' + l.chances + ' %</b></div>' +
+      '<div class="rang sous"><span>Munitions</span>' + htmlPastilles(l.munitions, l.stockMax, 'mun') + '<b' + (l.munitions === 0 ? ' class="zero"' : '') + '>' + l.munitions + '</b></div>';
+  }
+  s += '<div class="rang sous">' + htmlPastilles(d.radars, d.radarsMax) + '<span>' + d.radars + ' radar' + (d.radars > 1 ? 's' : '') + ' sur ' + d.radarsMax + ' (pour les deux)</span></div>';
+  return s + '<div class="boutons">' + boutons + '</div>' + pied;
 }
 // Présentation d'un résultat (fonction pure) : textes et couleurs de la maquette. Deux cas du moteur s'y ajoutent
 // dans la même forme : « aucune munition prête » au départ, et missile abattu par un allié.
@@ -6285,106 +6621,124 @@ function sortesRadar(r){
 // dite (r.t : le tir tant que l'intercepteur vole, puis la rencontre). Fonction pure de r et de l'heure t.
 function avancementRadar(r, t){
   const ecoule = Math.max(0, t - r.t);
-  if(r.issue === 'enVol') return Math.min(0.69, 0.22 + 0.48*ecoule/RENCONTRE_INTERCEPTION);
+  if(r.issue === 'enVol') return Math.min(0.69, 0.22 + 0.48*ecoule/reglesInterception(r.lourd === true).rencontre);
   return Math.min(1, 0.7 + 0.3*ecoule/1.5);
 }
-// Le petit écran radar (SVG, fonction pure de sortes et de p), repris de la maquette : vue de profil stylisée, la
-// batterie au centre du sol, des arcs de distance, un faisceau qui balaie ; le missile (rouge) descend depuis la
-// gauche, l'intercepteur (clair) monte à sa rencontre. p = 0 : le missile entre ; 0,7 : rencontre ; 1 : fin.
-// sortes : 'abattu', 'manque' (l'intercepteur passe derrière), 'horsZone', 'sansTir' (aucun intercepteur).
-function ecranRadarSvg(sortes, p){
-  const borne = (v, a, b) => Math.max(a, Math.min(b, v));
-  p = borne(p == null ? 1 : p, 0, 1);
-  const W = 276, H = 140, O = {x:138, y:116}, R = 104;
-  const VERT = '#6fd67c', ROUGE = '#ff7a5c', BLEU = '#3fa7ff', CLAIR = '#d6ecff';
-  const rad = d => d*Math.PI/180, f = n => n.toFixed(1);
-  const pol = (r, d) => ({x:O.x + r*Math.cos(rad(d)), y:O.y - r*Math.sin(rad(d))});
+// ---------- Écran radar d'altitude (22 novembre 2026, lot B, cahier § 12.5) ----------
+// Validé par le propriétaire le 21 novembre 2026 (« Oui, il convient », travaux/galerie/maquette-altitude.html) : il
+// REMPLACE le demi-disque du lot A dans la fenêtre de résultat, pour le missile léger comme pour le lourd. Vue de
+// profil (distance en travers, altitude en hauteur), deux étages nommés : en bas la basse altitude, domaine de la
+// Batterie Parasol ; en haut la haute altitude, domaine de la Batterie Zénith ; l'étage du missile est éclairé.
+// Différences avec la maquette : les vraies dates (avancement = temps de vol écoulé / durée du vol ; rencontre au vrai
+// instant, 3 s sur 5 pour le léger, 5 s sur 8 pour le lourd, ou plus tard pour un défenseur allié suivant) ; la salve
+// de deux légers de Karsk (deux missiles, comme l'ancien écran) ; un missile abattu par un allié ; le cas « batterie
+// aveugle » de la maquette n'existe plus (décision du 21 novembre 2026 : la Zénith tire à 15 % sans radar).
+// Vue d'un résultat pour l'écran (fonction pure de r et de l'heure t) : {lourd, e (secondes depuis le premier départ),
+// missiles:[{d (départ, s après le premier), vol, tir, renc (s après le premier départ, null sans tir), issue, fin
+// (s après le premier départ où il est détruit, null sinon)}]}. Sans r.trajets (résultat reçu en ligne de l'hôte, où
+// ces champs ne voyagent pas), une vue approchée est tirée de sortesRadar et avancementRadar, comme l'ancien écran.
+function vueAltitude(r, t){
+  const lourd = r.lourd === true;
+  if(r.trajets && r.trajets.length){
+    const L = r.trajets.slice(-2), d0 = L[0].depart;
+    return {lourd, e:t - d0, missiles:L.map(x => ({d:x.depart - d0, vol:x.vol, tir:x.tir === null ? null : x.tir - d0,
+      renc:x.rencontre === null ? null : x.rencontre - d0, issue:x.issue, fin:x.abattuA === null ? null : x.depart - d0 + x.abattuA}))};
+  }
+  const R = reglesInterception(lourd), vol = lourd ? 8 : CYCLE_GALERIE.vol, p = avancementRadar(r, t);
+  const e = p <= 0.7 ? p/0.7*R.rencontre : R.rencontre + (p - 0.7)/0.3*(vol - R.rencontre), dit = r.issue !== 'enVol';
+  return {lourd, e, missiles:sortesRadar(r).map((s, i) => {
+    const tire = s === 'abattu' || s === 'manque', d = i*0.6;
+    return {d, vol, tir:tire ? d : null, renc:tire ? d + R.rencontre : null, issue:dit ? s : null, fin:dit && s === 'abattu' ? d + R.rencontre : null};
+  })};
+}
+// L'écran (SVG 276 × 160, fonction pure de la vue). Reprise de altitudeSvg de la maquette, mêmes couleurs et mêmes
+// repères ; tant que l'issue n'est pas dite, l'intercepteur file vers le point de rencontre et s'y arrête (rien n'est
+// dévoilé avant l'heure, même à un pas près).
+function ecranAltitudeSvg(v){
+  const borne = (x, a, b) => Math.max(a, Math.min(b, x));
+  const W = 276, H = 160, SOL = 134, G = 34, D = 268, PLAFOND = 16, SEUIL = 86;   // SEUIL : limite entre les deux étages
+  const VERT = '#6fd67c', ROUGE = '#ff7a5c', BLEU = '#3fa7ff', CLAIR = '#d6ecff', OR = '#f0b64a';
+  const f = n => n.toFixed(1), lourd = v.lourd, e = v.e;
   const q = (A, B, C, t) => ({x:(1-t)*(1-t)*A.x + 2*t*(1-t)*B.x + t*t*C.x, y:(1-t)*(1-t)*A.y + 2*t*(1-t)*B.y + t*t*C.y});
-  const trace = (A, B, C, t0, t1) => { let d = ''; for(let i = 0; i <= 16; i++){ const P = q(A, B, C, t0 + (t1 - t0)*i/16); d += (i ? 'L' : 'M') + f(P.x) + ' ' + f(P.y); } return d; };
-  let s = '<svg class="ecranRadar" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '" role="img" aria-label="Écran radar de la batterie">';
+  const trace = (A, B, C, t0, t1) => { let d = ''; for(let i = 0; i <= 18; i++){ const P = q(A, B, C, t0 + (t1 - t0)*i/18); d += (i ? 'L' : 'M') + f(P.x) + ' ' + f(P.y); } return d; };
+  let s = '<svg class="ecranRadar" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '" role="img" aria-label="Écran radar d’altitude">';
   s += '<rect width="' + W + '" height="' + H + '" fill="#050b08"/>';
-  s += '<path d="M' + (O.x - R) + ' ' + O.y + 'A' + R + ' ' + R + ' 0 0 1 ' + (O.x + R) + ' ' + O.y + 'Z" fill="#0a1a12"/>';
-  // Faisceau : un secteur qui s'estompe derrière son bord d'attaque.
-  const a = 12 + ((50 + p*320) % 156);
-  for(const [d0, d1, op] of [[0, 6, .2], [6, 12, .14], [12, 18, .09], [18, 24, .05], [24, 30, .025]]){
-    const a0 = Math.max(0, a - d1), a1 = Math.max(0, a - d0);
-    if(a1 <= a0) continue;
-    const P0 = pol(R, a0), P1 = pol(R, a1);
-    s += '<path d="M' + O.x + ' ' + O.y + 'L' + f(P1.x) + ' ' + f(P1.y) + 'A' + R + ' ' + R + ' 0 0 1 ' + f(P0.x) + ' ' + f(P0.y) + 'Z" fill="' + VERT + '" fill-opacity="' + op + '"/>';
-  }
-  // Grille : arcs de distance et rayons.
+  s += '<rect x="' + G + '" y="' + PLAFOND + '" width="' + (D - G) + '" height="' + (SEUIL - PLAFOND) + '" fill="' + (lourd ? '#0d2417' : '#08130d') + '"/>';
+  s += '<rect x="' + G + '" y="' + SEUIL + '" width="' + (D - G) + '" height="' + (SOL - SEUIL) + '" fill="' + (lourd ? '#08130d' : '#0d2417') + '"/>';
   let grille = '';
-  for(const r of [R/3, 2*R/3, R]) grille += 'M' + f(O.x - r) + ' ' + O.y + 'A' + f(r) + ' ' + f(r) + ' 0 0 1 ' + f(O.x + r) + ' ' + O.y;
-  for(const d of [30, 60, 90, 120, 150]){ const P = pol(R, d); grille += 'M' + O.x + ' ' + O.y + 'L' + f(P.x) + ' ' + f(P.y); }
-  s += '<path d="' + grille + '" fill="none" stroke="' + VERT + '" stroke-opacity=".26"/>';
-  const bord = pol(R, a);
-  s += '<path d="M' + O.x + ' ' + O.y + 'L' + f(bord.x) + ' ' + f(bord.y) + '" stroke="' + VERT + '" stroke-opacity=".7" stroke-width="1.2"/>';
-  s += '<path d="M' + (O.x - R - 8) + ' ' + O.y + 'H' + (O.x + R + 8) + '" stroke="' + VERT + '" stroke-opacity=".55"/>';
-  // Zone protégée (au sol, autour de la batterie) et batterie.
-  const Z = 40;
-  s += '<path d="M' + (O.x - Z) + ' ' + (O.y + 3) + 'v4H' + (O.x + Z) + 'v-4" fill="none" stroke="' + BLEU + '" stroke-width="1.5"/>';
-  s += '<text x="' + O.x + '" y="' + (O.y + 19) + '" text-anchor="middle" fill="' + BLEU + '">zone protégée par la batterie</text>';
-  s += '<path d="M' + (O.x - 6.5) + ' ' + O.y + 'l3.5 -6.5h6l3.5 6.5z" fill="' + BLEU + '"/>';
-  // Missiles : E entrée dans l'écran, C point de courbure, T point visé au sol (géométries de la maquette).
-  const deux = sortes.length > 1, horsZone = sortes[0] === 'horsZone';
-  const geo = deux ? [{E:pol(R, 150), C:{x:106, y:70}, T:{x:148, y:O.y}}, {E:pol(R, 126), C:{x:142, y:44}, T:{x:170, y:O.y}}]
-    : horsZone ? [{E:pol(R, 148), C:{x:66, y:62}, T:{x:70, y:O.y}}] : [{E:pol(R, 141), C:{x:124, y:58}, T:{x:160, y:O.y}}];
-  const missiles = geo.map((g, i) => Object.assign({abattu:sortes[i] === 'abattu', horsZone:sortes[i] === 'horsZone',
-    sansTir:sortes[i] === 'horsZone' || sortes[i] === 'sansTir'}, g));
-  // Légende dans les coins (aucune étiquette flottante : rien ne se chevauche, même avec deux missiles).
-  const pluriel = deux ? 's' : '';
-  s += '<circle cx="11.5" cy="10.5" r="3.4" fill="' + ROUGE + '"/><text x="19.5" y="14" fill="#ffb4a0">missile' + pluriel + '</text>';
-  if(missiles.some(m => !m.sansTir)) s += '<path d="M190 10.5h12" stroke="' + CLAIR + '" stroke-width="2" stroke-linecap="round"/><text x="207" y="14" fill="' + CLAIR + '">intercepteur' + pluriel + '</text>';
+  for(let x = G; x <= D; x += 39) grille += 'M' + x + ' ' + PLAFOND + 'V' + SOL;
+  for(const y of [PLAFOND, 51, 110]) grille += 'M' + G + ' ' + y + 'H' + D;
+  s += '<path d="' + grille + '" fill="none" stroke="' + VERT + '" stroke-opacity=".16"/>';
+  s += '<path d="M' + G + ' ' + SEUIL + 'H' + D + '" stroke="' + VERT + '" stroke-opacity=".6" stroke-dasharray="5 4"/>';
+  s += '<path d="M' + (G - 4) + ' ' + SOL + 'H' + (D + 4) + '" stroke="' + VERT + '" stroke-opacity=".6"/>';
+  // Balayage vertical (un trait qui traverse l'écran, au rythme du temps de vol).
+  const bx = G + (((e/3.5) % 1 + 1) % 1)*(D - G);
+  s += '<rect x="' + f(Math.max(G, bx - 16)) + '" y="' + PLAFOND + '" width="' + f(Math.min(16, bx - G)) + '" height="' + (SOL - PLAFOND) + '" fill="' + VERT + '" fill-opacity=".06"/>';
+  s += '<path d="M' + f(bx) + ' ' + PLAFOND + 'V' + SOL + '" stroke="' + VERT + '" stroke-opacity=".5"/>';
+  s += '<text transform="translate(12 ' + ((PLAFOND + SEUIL)/2) + ') rotate(-90)" text-anchor="middle" fill="' + (lourd ? VERT : '#4f7a59') + '">HAUTE</text>';
+  s += '<text transform="translate(12 ' + ((SEUIL + SOL)/2) + ') rotate(-90)" text-anchor="middle" fill="' + (lourd ? '#4f7a59' : VERT) + '">BASSE</text>';
+  s += '<text transform="translate(24 ' + ((PLAFOND + SOL)/2) + ') rotate(-90)" text-anchor="middle" fill="#4f7a59">altitude</text>';
+  s += '<text x="' + (D - 4) + '" y="' + (PLAFOND + 12) + '" text-anchor="end" fill="' + (lourd ? OR : '#6d6a55') + '">Batterie Zénith</text>';
+  s += '<text x="' + (D - 4) + '" y="' + (SEUIL + 12) + '" text-anchor="end" fill="' + (lourd ? '#6d6a55' : OR) + '">Batterie Parasol</text>';
+  // Batterie (au sol) et zone protégée (plus large pour la Zénith).
+  const O = {x:196, y:SOL}, Z = lourd ? 62 : 40;
+  s += '<path d="M' + (O.x - Z) + ' ' + (SOL + 3) + 'v4H' + Math.min(D, O.x + Z) + 'v-4" fill="none" stroke="' + BLEU + '" stroke-width="1.5"/>';
+  s += '<text x="' + (O.x - 10) + '" y="' + (SOL + 20) + '" text-anchor="middle" fill="' + BLEU + '">zone protégée</text>';
+  s += '<path d="M' + (O.x - 6.5) + ' ' + SOL + 'l3.5 -6.5h6l3.5 6.5z" fill="' + BLEU + '"/>';
+  const deux = v.missiles.length > 1, tirs = v.missiles.some(m => m.tir !== null);
+  s += '<circle cx="' + (G + 8) + '" cy="8" r="3.2" fill="' + ROUGE + '"/><text x="' + (G + 15) + '" y="11.5" fill="#ffb4a0">' +
+    (deux ? 'missiles légers' : 'missile ' + (lourd ? 'lourd' : 'léger')) + '</text>';
+  if(tirs) s += '<path d="M178 8h12" stroke="' + CLAIR + '" stroke-width="2" stroke-linecap="round"/><text x="195" y="11.5" fill="' + CLAIR + '">intercepteur' + (deux ? 's' : '') + '</text>';
   let dessus = '';
-  for(const m of missiles){
-    const tAvant = 0.06 + 0.44*Math.min(p, 0.7)/0.7;                       // 0,5 à la rencontre
-    const tm = m.abattu ? tAvant : (p <= 0.7 ? tAvant : 0.5 + 0.32*(p - 0.7)/0.3);
-    const detruit = m.abattu && p >= 0.7;
-    const P = q(m.E, m.C, m.T, tm), M = q(m.E, m.C, m.T, 0.5);
-    // Trajet parcouru : trait et échos successifs.
-    s += '<path d="' + trace(m.E, m.C, m.T, 0, tm) + '" fill="none" stroke="' + ROUGE + '" stroke-opacity=".6" stroke-width="1.8"/>';
-    for(let t = 0.03; t < tm - 0.04; t += 0.075){ const K = q(m.E, m.C, m.T, t); s += '<circle cx="' + f(K.x) + '" cy="' + f(K.y) + '" r="2" fill="' + ROUGE + '" fill-opacity="' + (0.3 + 0.6*t/tm).toFixed(2) + '"/>'; }
-    // Trajet prévu (pointillé) et point d'impact, tant que le missile vole.
+  const eclat = (P, k) => {
+    let rayons = '';
+    for(let j = 0; j < 8; j++){ const c = Math.cos(j*Math.PI/4 + 0.3), sn = Math.sin(j*Math.PI/4 + 0.3); rayons += 'M' + f(14*c) + ' ' + f(14*sn) + 'L' + f(20.5*c) + ' ' + f(20.5*sn); }
+    return '<g transform="translate(' + f(P.x) + ' ' + f(P.y) + ') scale(' + k.toFixed(2) + ')"><circle r="11" fill="' + VERT + '" fill-opacity=".22" stroke="' + VERT + '" stroke-width="2"/>' +
+      '<path d="' + rayons + '" stroke="' + VERT + '" stroke-width="1.8" stroke-linecap="round"/><circle r="3.6" fill="#f2fff4"/></g>';
+  };
+  v.missiles.forEach((m, i) => {
+    // Missile : il vient de la gauche (la galerie adverse), en cloche haute (lourd) ou basse (léger).
+    // (Salve : le second missile vole un peu plus haut et vise un peu plus loin, pour que les deux rencontres se lisent.)
+    const E = {x:G, y:lourd ? 74 : 122 - i*16}, T = {x:m.issue === 'horsZone' ? 96 : (deux ? 180 + i*34 : 214), y:SOL};
+    const C = {x:(E.x + T.x)/2 + (m.issue === 'horsZone' ? 0 : 8), y:lourd ? -34 : 64 - i*34};
+    const pm = borne((e - m.d)/m.vol, 0, 1), detruit = m.fin !== null && e >= m.fin - 1e-6;
+    const tm = detruit ? borne((m.fin - m.d)/m.vol, 0, 1) : pm, P = q(E, C, T, tm);
+    if(e < m.d) return;   // second missile d'une salve, pas encore parti
+    s += '<path d="' + trace(E, C, T, 0, tm) + '" fill="none" stroke="' + ROUGE + '" stroke-opacity=".65" stroke-width="1.8"/>';
+    for(let t = 0.04; t < tm - 0.04; t += 0.08){ const K = q(E, C, T, t); s += '<circle cx="' + f(K.x) + '" cy="' + f(K.y) + '" r="2" fill="' + ROUGE + '" fill-opacity="' + (0.3 + 0.6*t/tm).toFixed(2) + '"/>'; }
     if(!detruit){
-      s += '<path d="' + trace(m.E, m.C, m.T, tm, 1) + '" fill="none" stroke="' + ROUGE + '" stroke-opacity=".8" stroke-width="1.4" stroke-dasharray="2.5 3.5"/>';
-      s += '<ellipse cx="' + m.T.x + '" cy="' + m.T.y + '" rx="8.5" ry="3" fill="' + ROUGE + '" fill-opacity=".28" stroke="' + ROUGE + '" stroke-width="1.3"/>';
-      dessus += '<circle cx="' + f(P.x) + '" cy="' + f(P.y) + '" r="7.5" fill="' + ROUGE + '" fill-opacity=".28"/><circle cx="' + f(P.x) + '" cy="' + f(P.y) + '" r="3.7" fill="' + ROUGE + '"/>';
-      if(m.horsZone) dessus += '<text x="' + (m.T.x + 13) + '" y="' + (m.T.y - 9) + '" fill="#ffb4a0">impact hors zone</text>';
-      else if(p > 0.7) dessus += '<text x="' + (m.T.x + 12) + '" y="' + (m.T.y - 6) + '" fill="#ffb4a0">impact</text>';
+      if(pm < 1) s += '<path d="' + trace(E, C, T, tm, 1) + '" fill="none" stroke="' + ROUGE + '" stroke-opacity=".8" stroke-width="1.4" stroke-dasharray="2.5 3.5"/>';
+      s += '<ellipse cx="' + T.x + '" cy="' + T.y + '" rx="8.5" ry="3" fill="' + ROUGE + '" fill-opacity="' + (pm >= 1 ? '.6' : '.28') + '" stroke="' + ROUGE + '" stroke-width="1.3"/>';
+      if(pm < 1) dessus += '<circle cx="' + f(P.x) + '" cy="' + f(P.y) + '" r="7.5" fill="' + ROUGE + '" fill-opacity=".28"/><circle cx="' + f(P.x) + '" cy="' + f(P.y) + '" r="3.7" fill="' + ROUGE + '"/>';
+      if(m.issue === 'horsZone') dessus += '<text x="' + (T.x + 12) + '" y="' + (T.y - 7) + '" fill="#ffb4a0">impact hors zone</text>';
+      else if(pm >= 1) dessus += '<text x="' + (T.x + (deux && i === 0 ? -40 : 12)) + '" y="' + (T.y - 7) + '" fill="#ffb4a0">impact</text>';
     }
-    if(m.sansTir) continue;
-    // Intercepteur : il part de la batterie. Réussite : il rejoint le missile. Échec : il passe derrière lui.
-    let fin, ti;
-    if(m.abattu){ fin = M; ti = borne((p - 0.22)/0.48, 0, 1); }
-    else {
-      const X = q(m.E, m.C, m.T, 0.38), n = Math.hypot(X.x - O.x, X.y - O.y);
-      fin = {x:X.x + (X.x - O.x)/n*24, y:X.y + (X.y - O.y)/n*24};
-      ti = borne((p - 0.22)/0.62, 0, 1);
+    // Intercepteur : de la batterie au point de rencontre (vrai instant). Abattu : éclat ; manqué : il passe derrière.
+    if(m.tir !== null && e >= m.tir){
+      const M = q(E, C, T, borne((m.renc - m.d)/m.vol, 0, 1)), Ci = {x:O.x + (M.x - O.x)*0.15, y:O.y + (M.y - O.y)*0.7};
+      const ti = borne((e - m.tir)/Math.max(0.01, m.renc - m.tir), 0, 1);
+      s += '<path d="' + trace(O, Ci, M, 0, ti) + '" fill="none" stroke="' + CLAIR + '" stroke-width="2" stroke-linecap="round"/>';
+      if(m.issue === 'abattu' && ti >= 1) dessus += eclat(M, 0.6 + 0.4*borne((e - m.renc)/0.3, 0, 1));
+      else if(m.issue === 'manque' && ti >= 1){
+        const n = Math.hypot(M.x - O.x, M.y - O.y) || 1, X = {x:M.x + (M.x - O.x)/n*20, y:M.y + (M.y - O.y)/n*20};
+        s += '<path d="M' + f(M.x) + ' ' + f(M.y) + 'L' + f(X.x) + ' ' + f(X.y) + '" stroke="' + CLAIR + '" stroke-width="2" stroke-linecap="round"/>';
+        dessus += '<path d="M' + f(X.x - 4.5) + ' ' + f(X.y - 4.5) + 'l9 9m0 -9l-9 9" stroke="' + CLAIR + '" stroke-width="1.8" stroke-linecap="round"/>';
+      } else { const I = q(O, Ci, M, ti); dessus += '<circle cx="' + f(I.x) + '" cy="' + f(I.y) + '" r="3" fill="' + CLAIR + '"/>'; }
     }
-    const Ci = {x:O.x + (fin.x - O.x)*0.2, y:O.y + (fin.y - O.y)*0.62};
-    if(ti > 0){
-      const I = q(O, Ci, fin, ti);
-      s += '<path d="' + trace(O, Ci, fin, 0, ti) + '" fill="none" stroke="' + CLAIR + '" stroke-width="2" stroke-linecap="round"/>';
-      if(detruit){
-        const e = 0.6 + 0.4*borne((p - 0.7)/0.2, 0, 1);
-        let rayons = '';
-        for(let k = 0; k < 8; k++){ const c = Math.cos(k*Math.PI/4 + 0.3), sn = Math.sin(k*Math.PI/4 + 0.3); rayons += 'M' + f(14*c) + ' ' + f(14*sn) + 'L' + f(20.5*c) + ' ' + f(20.5*sn); }
-        dessus += '<g transform="translate(' + f(M.x) + ' ' + f(M.y) + ') scale(' + e.toFixed(2) + ')">' +
-          '<circle r="11" fill="' + VERT + '" fill-opacity=".22" stroke="' + VERT + '" stroke-width="2"/>' +
-          '<path d="' + rayons + '" stroke="' + VERT + '" stroke-width="1.8" stroke-linecap="round"/><circle r="3.6" fill="#f2fff4"/></g>';
-      } else if(ti >= 1){
-        dessus += '<path d="M' + f(fin.x - 4.5) + ' ' + f(fin.y - 4.5) + 'l9 9m0 -9l-9 9" stroke="' + CLAIR + '" stroke-width="1.8" stroke-linecap="round"/>';
-      } else dessus += '<circle cx="' + f(I.x) + '" cy="' + f(I.y) + '" r="3" fill="' + CLAIR + '"/>';
+    // Abattu par un allié (après la rencontre manquée de notre batterie, ou sans tir de notre part).
+    if(detruit && m.issue !== 'abattu'){
+      dessus += eclat(P, 0.75);
+      dessus += '<text x="' + f(P.x) + '" y="' + f(Math.max(PLAFOND + 10, P.y - 16)) + '" text-anchor="middle" fill="' + VERT + '">allié</text>';
     }
-  }
+  });
   return s + dessus + '</svg>';
 }
 // Fenêtre de RÉSULTAT (fonction pure) : {classe, html}. munitions : stock actuel de la batterie du camp (null : elle
 // n'est plus là) ; t : heure de jeu (pour l'avancement de l'écran radar).
 function htmlResultatDefense(r, munitions, stockMax, t){
   const P = presentationResultat(r), fini = r.issue !== 'enVol';
-  let s = '<div class="tete"><span class="titre">Batterie Parasol</span><span class="tch">' + P.tch + '</span></div>' +
-    ecranRadarSvg(sortesRadar(r), avancementRadar(r, t));
+  let s = '<div class="tete"><span class="titre">' + (r.genre === 'zenith' ? BATIMENTS.zenith.nom : 'Batterie Parasol') + '</span><span class="tch">' + P.tch + '</span></div>' +
+    ecranAltitudeSvg(vueAltitude(r, t));   // (22 novembre 2026 : l'écran d'altitude remplace le demi-disque)
   if(fini){
     s += '<div class="verdict ' + P.ton + '">' + P.verdict + '</div>' + (P.impact ? '<div class="impact">' + P.impact + '</div>' : '') +
       '<div class="suite">' + P.suite + '</div>';
@@ -6398,7 +6752,7 @@ function cacherDefense(boite){
   if(boite){ boite.classList.add('cache'); boite.className = 'cache'; boite.innerHTML = ''; }
 }
 function afficherProposition(boite, p){
-  const d = donneesProposition(p, batterieDe(campLocal())), sig = signatureProposition(d);
+  const d = donneesProposition(p, batterieDe(campLocal(), p.genre)), sig = signatureProposition(d);
   if(FENETRE_DEFENSE.affiche !== 'proposition' || FENETRE_DEFENSE.sig !== sig){
     boite.className = ''; boite.setAttribute('role', 'dialog'); boite.innerHTML = htmlPropositionDefense(d);
     FENETRE_DEFENSE.affiche = 'proposition'; FENETRE_DEFENSE.sig = sig;
@@ -6410,12 +6764,12 @@ function afficherProposition(boite, p){
   if(f && d.fabDans !== null) ecrireTexte(f, Math.max(1, secondesDefense(d.fabDans)));
 }
 function afficherResultat(boite, r){
-  const bat = batterieDe(campLocal());
+  const bat = batterieDe(campLocal(), r.genre);
   // Salve : le moteur avance r.t à la première rencontre alors que le second intercepteur vole encore ; l'écran
   // radar garde l'heure du premier tir vu, pour ne pas revenir en arrière.
   if(!FENETRE_DEFENSE.vol || FENETRE_DEFENSE.vol.cle !== r.cle) FENETRE_DEFENSE.vol = {cle:r.cle, t:r.t};
   if(r.issue === 'enVol') r = Object.assign({}, r, {t:FENETRE_DEFENSE.vol.t});
-  const R = htmlResultatDefense(r, bat ? bat.para.stock : null, BATIMENTS.parasol.defense.stockMax, temps);
+  const R = htmlResultatDefense(r, bat ? bat.para.stock : null, BATIMENTS[r.genre === 'zenith' ? 'zenith' : 'parasol'].defense.stockMax, temps);
   const sig = 'R|' + R.classe + '|' + R.html;
   if(FENETRE_DEFENSE.affiche === 'resultat' && FENETRE_DEFENSE.sig === sig) return;
   boite.className = R.classe; boite.setAttribute('role', 'status'); boite.innerHTML = R.html;
@@ -6447,7 +6801,7 @@ function toucheDefense(k){
   // n'était visible qu'une fois la première finie, avec 2 s pour répondre ; constat du contrôle, 20 novembre 2026).
   const camp = campLocal(), p = propositionEnCours(camp, FENETRE_DEFENSE.fermees);
   if(!p) return false;
-  const d = donneesProposition(p, batterieDe(camp));
+  const d = donneesProposition(p, batterieDe(camp, p.genre));
   if(k === 'i'){
     if(!d.armee && d.pretAvant) for(const cle of p.cles) ordonner({type:'repondreInterception', oui:true, cle});
   } else if(k === 'l'){
@@ -6569,7 +6923,11 @@ function ordonner(ordre){
 //  Formats : voir travaux/multijoueur (compte rendu des étapes 1 et 2) et la liste ci-dessous.
 // =====================================================================
 const TYPES_ORDRES = ['droit', 'attaqueDeplacement', 'arret', 'ralliement', 'construire', 'produire', 'retirer',
-  'pouvoir', 'pause', 'abandon', 'alliance', 'proposerTreve', 'fabriquerMissile', 'tirGalerie', 'fabriquerMunition', 'repondreInterception'];
+  'pouvoir', 'pause', 'abandon', 'alliance', 'proposerTreve', 'fabriquerMissile', 'tirGalerie', 'fabriquerMunition', 'repondreInterception',
+  'fabriquerMissileLourd'];
+// Lot B (cahier § 12.1) : 'fabriquerMissileLourd' {id} ; code réseau 'fabLourd' depuis le 22 novembre 2026 (§ 12.7),
+// accepté en ligne quand l'hôte a coché « Galeries de tir ». 'fabriquerMunition' vaut pour les deux batteries, et
+// 'tirGalerie' tire ce que la galerie contient (légers ou lourd).
 // Défense antimissile (19 novembre 2026) : 'fabriquerMunition' {id} et 'repondreInterception' {oui, cle?} sont,
 // comme les ordres des galeries, des ordres de la partie locale : sans code réseau, refusés en ligne.
 // Galeries de tir (novembre 2026) : 'fabriquerMissile' {id} et 'tirGalerie' {id, x, y}. Depuis le 20 novembre 2026
@@ -6759,6 +7117,17 @@ function validerOrdre(camp, o){
       const m = empechementTirGalerie(b, o.x, o.y);
       return m ? non(m, dansCarte(o.x, o.y) ? 'galerie' : 'coordonnees', 'alerte') : {bat:b};
     }
+    // Missile lourd (21 novembre 2026) : mêmes contrôles que le moteur (empechementFabricationLourd), avant tout
+    // prélèvement (propriété, galerie vide, réserves).
+    case 'fabriquerMissileLourd': {
+      if(!galeriesActives()) return non(MOTIF_SANS_GALERIES, 'galerie', 'alerte');
+      const l = entitesDeLOrdre(camp, [o.id], 'batiment');
+      if(typeof l === 'string') return non(l, 'entites');
+      const b = l[0];
+      if(!estGalerie(b)) return non('Ce bâtiment n’est pas une galerie de tir.', 'type', 'alerte');
+      const m = empechementFabricationLourd(b);
+      return m ? non(m, m === MOTIF_RESERVES ? 'reserves' : 'galerie', 'alerte') : {bat:b};
+    }
     // Défense antimissile (19 novembre 2026) : mêmes contrôles que le moteur (empechementMunition, proposition encore
     // ouverte), faits ici avant tout prélèvement.
     case 'fabriquerMunition': {
@@ -6766,7 +7135,8 @@ function validerOrdre(camp, o){
       const l = entitesDeLOrdre(camp, [o.id], 'batiment');
       if(typeof l === 'string') return non(l, 'entites');
       const b = l[0];
-      if(!estParasol(b)) return non('Ce bâtiment n’est pas une Batterie Parasol.', 'type', 'alerte');
+      // (21 novembre 2026 : Parasol ou Zénith.)
+      if(!estBatterie(b)) return non('Ce bâtiment n’est pas une Batterie Parasol.', 'type', 'alerte');
       const m = empechementMunition(b);
       return m ? non(m, m === MOTIF_RESERVES ? 'reserves' : 'defense', 'alerte') : {bat:b};
     }
@@ -6778,7 +7148,7 @@ function validerOrdre(camp, o){
       const p = !E ? null : o.cle === undefined ? propositionOuverte(camp)
         : Object.prototype.hasOwnProperty.call(E.propositions, o.cle) ? E.propositions[o.cle] : null;
       if(!p || !galerieDeProposition(p)) return non('Aucune interception à décider.', 'etat');
-      if(!batterieDe(camp)) return non('Aucune Batterie Parasol en service.', 'etat');
+      if(!batterieDe(camp, p.genre)) return non(p.genre === 'zenith' ? 'Aucune Batterie Zénith en service.' : 'Aucune Batterie Parasol en service.', 'etat');
       return {};
     }
   }
@@ -6836,6 +7206,7 @@ function appliquerOrdre(camp, o, v){
     case 'proposerTreve': proposerAlliance(); return fait();
     case 'fabriquerMissile': return commanderMissile(v.bat) ? fait(null, {id:v.bat.id}) : {ok:false, motif:'Commande refusée.', code:'galerie'};
     case 'tirGalerie': return ouvrirGalerie(v.bat, o.x, o.y) ? fait(null, {id:v.bat.id}) : {ok:false, motif:'Tir refusé.', code:'galerie'};
+    case 'fabriquerMissileLourd': return commanderMissileLourd(v.bat) ? fait(null, {id:v.bat.id}) : {ok:false, motif:'Commande refusée.', code:'galerie'};
     case 'fabriquerMunition': return commanderMunition(v.bat) ? fait(null, {id:v.bat.id}) : {ok:false, motif:'Commande refusée.', code:'defense'};
     case 'repondreInterception': return repondreInterception(camp, o.oui, o.cle) ? fait() : {ok:false, motif:'Réponse refusée.', code:'etat'};
   }
@@ -9766,6 +10137,8 @@ function tablesReseau(){
   // dans la table (jusqu'au 20 novembre, galeries, Batterie Parasol et radars en étaient exclus). L'arme
   // missileGalerie y entre par la boucle ci-dessus (BATIMENTS[...].arme des galeries), sinon ci-dessous.
   if(!armes.has('missileGalerie')) armes.add('missileGalerie');
+  // (22 novembre 2026, lot B en ligne : la Batterie Zénith y entre, en dernier, comme dans BATIMENTS : les indices des
+  // bâtiments d'avant ne changent pas.)
   const t = {unites:Object.keys(UNITES), batiments:Object.keys(BATIMENTS), camps:['J', 'I', 'K', 'L', 'N', 'X'],
     pouvoirs:[...pouvoirs].sort(), projectiles:PROJECTILES_RESEAU, armes:[...armes].sort(), effets:EFFETS_RESEAU};
   t.armesEffet = [null].concat(t.armes); t.roles = [null].concat([...roles].sort());
@@ -9793,8 +10166,9 @@ function effetVersReseau(f){
     case 'explosion': return {type:'explosion', x:f.x, y:f.y, h1:f.h || 0, h2:0, duree:f.duree, p1:(f.grande ? 1 : 0) | (f.batiment ? 2 : 0), p2:octet(f.r)};
     // Missile de galerie (20 novembre 2026, galeries en ligne) : x2, y2 = galerie de départ, p1 = indice du camp + 1,
     // p2 = rang du missile + 1 (1 ou 2). Sans f.galerie (frappe d'un pouvoir) : comme avant.
+    // (22 novembre 2026, lot B : missile lourd, p2 + 16 ; sa durée de 8 s voyage dans duree.)
     case 'missile': if(f.galerie) return {type:'missile', x:f.x, y:f.y, duree:f.duree, x2:f.x0, y2:f.y0,
-      p1:indiceOu0(T.camps, f.camp) + 1, p2:octet(f.galerie)};
+      p1:indiceOu0(T.camps, f.camp) + 1, p2:(octet(f.galerie) & 15) | (f.lourd ? 16 : 0)};
       return {type:f.type, x:f.x, y:f.y, duree:f.duree};
     case 'fumee': return {type:f.type, x:f.x, y:f.y, duree:f.duree};
     case 'marqueur': return {type:'marqueur', x:f.x, y:f.y, duree:f.duree, p1:indiceOu0(T.camps, f.camp), p2:octet(f.r),
@@ -9806,8 +10180,9 @@ function effetVersReseau(f){
     // Défense antimissile (20 novembre 2026) : intercepteur, x, y = rencontre, x2, y2 = batterie, h1 = hauteur/3 (≤ 560),
     // p1 = camp, p2 = 1 si réussi. Limite acceptée : l'issue voyage dès le tir (le rendu en a besoin) ; un navigateur
     // modifié pourrait la lire 3 s avant la rencontre. Rien n'est affiché avant. abattu : marqueur à effacer.
+    // (22 novembre 2026, lot B : intercepteur de la Zénith, p2 + 2 ; hauteur jusqu'à 765, h1 = h/3 sur un octet.)
     case 'intercepteur': return {type:'intercepteur', x:f.x, y:f.y, x2:f.x0, y2:f.y0, h1:octet((f.h || 0)/3), h2:0, duree:f.duree,
-      p1:indiceOu0(T.camps, f.camp), p2:f.reussi ? 1 : 0};
+      p1:indiceOu0(T.camps, f.camp), p2:(f.reussi ? 1 : 0) | (f.lourd ? 2 : 0)};
     case 'abattu': return {type:'abattu', x:f.x, y:f.y, duree:0, p1:indiceOu0(T.camps, f.camp)};   // camp du tireur (relecture du 20 novembre 2026)
   }
   return null;
@@ -9827,9 +10202,10 @@ function effetDepuisReseau(e){
     case 'explosion': { const p = {x:e.x, y:e.y, h:e.h1 || 0, r:e.p2, duree:e.duree}; if(e.p1 & 1) p.grande = true; if(e.p1 & 2) p.batiment = true; effet('explosion', p); return; }
     case 'missile': {
       // Missile de galerie (20 novembre 2026) : camp connu, rang 1 ou 2, point de départ présent ; sinon, comme avant.
-      const camp = e.p1 >= 1 ? T.camps[e.p1 - 1] : null;
-      if(e.p2 >= 1 && e.p2 <= 2 && aCle(camps, camp) && estNombre(e.x2) && estNombre(e.y2)){
-        effet('missile', {x:e.x, y:e.y, duree:e.duree, camp, galerie:e.p2, x0:e.x2, y0:e.y2});
+      // (Lot B : bit 16 de p2 = missile lourd, un seul par cycle, rang 1.)
+      const camp = e.p1 >= 1 ? T.camps[e.p1 - 1] : null, rang = e.p2 & 15, lourd = (e.p2 & 16) !== 0;
+      if(rang >= 1 && rang <= 2 && (e.p2 & ~31) === 0 && !(lourd && rang !== 1) && aCle(camps, camp) && estNombre(e.x2) && estNombre(e.y2)){
+        effet('missile', lourd ? {x:e.x, y:e.y, duree:e.duree, camp, galerie:rang, x0:e.x2, y0:e.y2, lourd:true} : {x:e.x, y:e.y, duree:e.duree, camp, galerie:rang, x0:e.x2, y0:e.y2});
         return;
       }
       effet('missile', {x:e.x, y:e.y, duree:e.duree}); return;
@@ -9850,7 +10226,10 @@ function effetDepuisReseau(e){
     case 'intercepteur': {
       const camp = T.camps[e.p1];
       if(!aCle(camps, camp)) return;
-      effet('intercepteur', {x0:e.x2, y0:e.y2, x:e.x, y:e.y, h:(e.h1 || 0)*3, duree:e.duree, camp, reussi:e.p2 === 1});
+      // (Lot B : p2 bit 1 = réussi, bit 2 = intercepteur de la Zénith.)
+      const p = {x0:e.x2, y0:e.y2, x:e.x, y:e.y, h:(e.h1 || 0)*3, duree:e.duree, camp, reussi:(e.p2 & 1) === 1};
+      if(e.p2 & 2) p.lourd = true;
+      effet('intercepteur', p);
       return;
     }
     case 'abattu': {
@@ -9911,7 +10290,10 @@ function fabriquerInstantane(){
         angleT:e.angleT, bloque:!!e.bloque, file:e.file, avancement:D0 && D0.temps > 0 ? Math.min(1, e.prodT/D0.temps) : 0, rally:e.rally, tirT:e.tirT};
       // Galerie de tir terminée (20 novembre 2026, galeries en ligne, lot 1) : son état (extension du codec). Le point
       // visé (cx, cy) n'est jamais transmis : il n'est révélé qu'au départ du missile, par son marqueur.
-      if(e.gal && !e.enCours){ const g = e.gal; r.gal = {stock:g.stock, fab:g.fab, fabT:g.fabT, t0:g.t0, n:g.n, tires:g.tires}; }
+      if(e.gal && !e.enCours){ const g = e.gal; r.gal = {stock:g.stock, fab:g.fab, fabT:g.fabT, t0:g.t0, n:g.n, tires:g.tires};
+        // Missile lourd (22 novembre 2026, § 12.7) : seulement quand il y en a un (prêt, commandé, ou cycle lourd) ; sinon
+        // l'enregistrement est celui d'avant. Limite acceptée : le type en stock chez l'adversaire voyage (non affiché).
+        if(g.lourd > 0 || g.fabLourd > 0 || g.cycleLourd === true) Object.assign(r.gal, {lourd:g.lourd > 0 ? 1 : 0, fabLourd:g.fabLourd > 0 ? 1 : 0, cycleLourd:g.cycleLourd === true}); }
       // Batterie Parasol terminée (lot 2) : munitions, fabrication, heure du dernier tir (caisson). Les accords
       // d'avance (para.autorise) ne partent pas : l'invité lit sa réponse dans l'événement « interception ».
       if(e.para && !e.enCours){ const p = e.para; r.para = {stock:p.stock, fab:p.fab, fabT:p.fabT}; if(typeof e.intT === 'number') r.intT = e.intT; }
@@ -9957,10 +10339,10 @@ function interceptionPourReseau(id){
   const C = camps[id], E = C && C.interception;
   if(!E) return null;
   const P = Object.values(E.propositions).sort((a, b) => b.t0 - a.t0).slice(0, MAX_INTERCEPTIONS_RESEAU)
-    .map(p => ({cle:p.cle, galerie:p.galerie, tireur:p.tireur, gx:p.gx, gy:p.gy, t0:p.t0, depart:p.depart, n:p.n, reponse:p.reponse}));
+    .map(p => ({cle:p.cle, galerie:p.galerie, tireur:p.tireur, gx:p.gx, gy:p.gy, t0:p.t0, depart:p.depart, n:p.n, reponse:p.reponse, lourd:p.lourd === true}));
   const R = Object.values(E.resultats).sort((a, b) => (b.t == null ? -1 : b.t) - (a.t == null ? -1 : a.t)).slice(0, MAX_INTERCEPTIONS_RESEAU)
     .map(r => ({cle:r.cle, galerie:r.galerie, tireur:r.tireur, n:r.n, missiles:r.missiles, horsZone:r.horsZone, sansMunition:r.sansMunition,
-      tires:r.tires, rencontres:r.rencontres, abattus:r.abattus, parAllie:r.parAllie, impactT:r.impactT, t:r.t}));
+      tires:r.tires, rencontres:r.rencontres, abattus:r.abattus, parAllie:r.parAllie, impactT:r.impactT, t:r.t, genre:r.genre || 'parasol', lourd:r.lourd === true}));
   return {camp:id, propositions:P, resultats:R};
 }
 // Après chaque pas de simulation de l'hôte : un instantané toutes les RESEAU.periode s de jeu (force : tout de suite).
@@ -9987,7 +10369,8 @@ function ticHote(force){
 const CODES_ORDRES = {droit:'droit', attaqueDeplacement:'attaqueDep', arret:'arreter', ralliement:'rally', construire:'batir',
   produire:'produire', retirer:'retirer', pouvoir:'pouvoir',
   // Galeries de tir et défense antimissile en ligne (20 novembre 2026) ; mêmes codes dans REGLAGES.typesOrdres (reseau.js).
-  fabriquerMissile:'fabMissile', tirGalerie:'tirGalerie', fabriquerMunition:'fabMunition', repondreInterception:'repInter'};
+  fabriquerMissile:'fabMissile', tirGalerie:'tirGalerie', fabriquerMunition:'fabMunition', repondreInterception:'repInter',
+  fabriquerMissileLourd:'fabLourd'};   // lot B en ligne (22 novembre 2026) ; même code dans REGLAGES.typesOrdres
 const TYPES_ORDRES_RESEAU = Object.assign(Object.create(null), Object.fromEntries(Object.entries(CODES_ORDRES).map(([t, c]) => [c, t])));
 function ordreVersReseau(o){
   const code = Object.prototype.hasOwnProperty.call(CODES_ORDRES, o.type) ? CODES_ORDRES[o.type] : null;
@@ -10013,7 +10396,7 @@ function recevoirOrdreHote(camp, m){
   if(r.ok) H.acceptes++; else { H.refuses++; H.motifs[r.code || r.motif] = (H.motifs[r.code || r.motif] || 0) + 1; }
   // Réponse d'interception refusée (code etat) alors que la batterie est debout : elle est arrivée après le départ
   // (20 novembre 2026, cahier § 5) ; dit à l'invité, au lieu d'un refus muet.
-  if(!r.ok && o && o.type === 'repondreInterception' && o.oui === true && r.code === 'etat' && camps[camp] && batterieDe(camp))
+  if(!r.ok && o && o.type === 'repondreInterception' && o.oui === true && r.code === 'etat' && camps[camp] && (batterieDe(camp) || batterieDe(camp, 'zenith')))
     notifier(camp, 'Réponse arrivée trop tard : le missile était déjà parti.', 'alerte');
   else if(!r.ok && r.genre) notifier(camp, r.motif, r.genre);
   // Refus muets en solo mais utiles à un joueur distant, dont l'état affiché a un temps de retard (points dépensés,
@@ -10134,10 +10517,10 @@ function batimentRecu(b){
   return r;
 }
 // État d'une Batterie Parasol reçu (20 novembre 2026, défense en ligne) : seulement pour une batterie, entiers 0-15
-// (au plus stockMax), fabT fini borné ; sinon null. Fonction pure.
+// (au plus stockMax), fabT fini borné ; sinon null. Fonction pure. (22 novembre 2026 : ou une Batterie Zénith.)
 function batterieRecue(b){
   const p = b.para, D = BATIMENTS[b.type];
-  if(!p || typeof p !== 'object' || !D || !D.defense || D.defense.genre !== 'parasol') return null;
+  if(!p || typeof p !== 'object' || !D || !D.defense || !GENRES_BATTERIES.includes(D.defense.genre)) return null;
   const e = v => entierEntre(v, 0, D.defense.stockMax) ? v : 0;
   return {stock:e(p.stock), fab:e(p.fab), fabT:bornerNb(p.fabT, 0, 255, 0)};
 }
@@ -10148,8 +10531,12 @@ function galerieRecue(b){
   if(!g || typeof g !== 'object' || !D || !D.galerie) return null;
   const e15 = v => entierEntre(v, 0, 15) ? v : 0;
   const t0 = estNombre(g.t0) ? bornerNb(g.t0, 0, 1e7, 0) : null;
-  const n = Math.min(e15(g.n), D.galerie.lanceurs || 1);   // jamais plus que de lanceurs (dates du cycle)
-  return {stock:e15(g.stock), fab:e15(g.fab), fabT:bornerNb(g.fabT, 0, 255, 0), t0, n:t0 === null ? 0 : n, tires:t0 === null ? 0 : Math.min(e15(g.tires), n)};
+  // Missile lourd (22 novembre 2026, § 12.7) : lourd et fabLourd 0 ou 1, cycleLourd booléen strict ; un cycle lourd
+  // n'engage qu'un missile. Absents (galerie sans lourd) : 0, 0, faux.
+  const lourd = g.lourd === 1 ? 1 : 0, fabLourd = g.fabLourd === 1 ? 1 : 0, cycleLourd = g.cycleLourd === true && t0 !== null && !!D.galerie.lourd;
+  const n = Math.min(e15(g.n), cycleLourd ? 1 : D.galerie.lanceurs || 1);   // jamais plus que de lanceurs (dates du cycle)
+  return {stock:e15(g.stock), fab:e15(g.fab), fabT:bornerNb(g.fabT, 0, 255, 0), t0, n:t0 === null ? 0 : n, tires:t0 === null ? 0 : Math.min(e15(g.tires), n),
+    lourd, fabLourd, cycleLourd};
 }
 function projectileRecu(p){
   if(!p || !PROJECTILES_RESEAU.includes(p.genre) || !(p.arme == null || tablesReseau().ensembleArmes.has(p.arme))) return null;
@@ -10234,9 +10621,10 @@ function creerBatimentInvite(r){
     angleT:r.angleT, tirT:-99, recharge:0, scan:0, cible:null, rang:0, kills:0, dansAura:false, auraT:0, toucheT:-99, nom:null};
   // Galerie de tir (20 novembre 2026, galeries en ligne, lot 1) : mêmes champs que creerBatiment, tenus ensuite par
   // majBatimentInvite (état reçu) et majGaleriesInvite (galT, galN à chaque image).
-  if(D.galerie) Object.assign(b, {gal:{t0:null, cx:0, cy:0, n:0, tires:0, stock:0, fab:0, fabT:0}, galT:null, galN:0});
-  // Batterie Parasol (défense en ligne) : comme creerBatiment ; b.intT absent tant qu'elle n'a pas tiré.
-  if(D.defense && D.defense.genre === 'parasol') b.para = {stock:0, fab:0, fabT:0, autorise:{}};
+  if(D.galerie) Object.assign(b, {gal:{t0:null, cx:0, cy:0, n:0, tires:0, stock:0, fab:0, fabT:0, lourd:0, fabLourd:0, cycleLourd:false}, galT:null, galN:0});
+  // Batterie Parasol (défense en ligne) : comme creerBatiment ; b.intT absent tant qu'elle n'a pas tiré. (22 novembre
+  // 2026 : Batterie Zénith de même.)
+  if(D.defense && GENRES_BATTERIES.includes(D.defense.genre)) b.para = {stock:0, fab:0, fabT:0, autorise:{}};
   empreinteBatiment(b, true);
   ents.push(b); invite.index.set(b.id, b);
   return b;
@@ -10267,6 +10655,7 @@ function majBatimentInvite(b, r){
     const g = b.gal, q = r.gal;
     g.stock = q ? q.stock : 0; g.fab = q ? q.fab : 0; g.fabT = q ? q.fabT : 0;
     g.t0 = q ? q.t0 : null; g.n = q ? q.n : 0; g.tires = q ? q.tires : 0;
+    g.lourd = q ? q.lourd : 0; g.fabLourd = q ? q.fabLourd : 0; g.cycleLourd = q ? q.cycleLourd : false;   // lot B (22 novembre 2026)
   }
   // Batterie Parasol (défense en ligne) : de même ; b.intT retiré quand il n'est plus transmis (caisson au repos).
   if(b.para){
@@ -10282,8 +10671,10 @@ function majGaleriesInvite(){
   for(const b of ents){
     if(b.mort || !b.gal) continue;
     const g = b.gal;
-    if(g.t0 === null || b.enCours){ b.galT = null; b.galN = 0; continue; }
+    // (Lot B, 22 novembre 2026 : b.galLourd, lu par le rendu, vrai pendant un cycle lourd, comme chez l'hôte.)
+    if(g.t0 === null || b.enCours){ b.galT = null; b.galN = 0; if(b.galLourd) b.galLourd = false; continue; }
     b.galT = Math.max(0, Math.min(CYCLE_GALERIE.duree, temps - g.t0)); b.galN = g.n;
+    if(g.cycleLourd === true) b.galLourd = true; else if(b.galLourd) b.galLourd = false;
   }
 }
 // Mort vue par l'invité (entité absente de l'instantané) : marquée morte pour que le rendu joue l'épave ou les
@@ -10467,15 +10858,19 @@ function interceptionRecue(ev){
   for(const p of P){
     if(!p || typeof p.cle !== 'string' || !RE_CLE_INTERCEPTION.test(p.cle) || !entierEntre(p.galerie, 1, 65535) || !campOk(p.tireur)) return null;
     if(t(p.t0) === null || t(p.depart) === null || !e15(p.n) || !(p.reponse === null || p.reponse === true || p.reponse === false)) return null;
+    // (Lot B, 22 novembre 2026 : lourd, booléen strict ; la batterie concernée s'en déduit, comme chez l'hôte.)
+    if(typeof p.lourd !== 'boolean' || (p.lourd && p.n !== 1)) return null;
     propositions[p.cle] = {cle:p.cle, camp:ev.camp, galerie:p.galerie, tireur:p.tireur, gx:bornerNb(p.gx, 0, LARG, 0), gy:bornerNb(p.gy, 0, HAUT, 0),
-      t0:t(p.t0), depart:t(p.depart), n:p.n, reponse:p.reponse};
+      t0:t(p.t0), depart:t(p.depart), n:p.n, reponse:p.reponse, lourd:p.lourd, genre:p.lourd ? 'zenith' : 'parasol'};
   }
   const compteurs = ['n', 'missiles', 'horsZone', 'sansMunition', 'tires', 'rencontres', 'abattus', 'parAllie'];
   for(const r of R){
     if(!r || typeof r.cle !== 'string' || !RE_CLE_INTERCEPTION.test(r.cle) || !entierEntre(r.galerie, 1, 65535) || !campOk(r.tireur)) return null;
     if(!compteurs.every(k => e15(r[k]))) return null;
     if(!(r.impactT === null || estNombre(r.impactT)) || !(r.t === null || estNombre(r.t))) return null;
-    const x = {cle:r.cle, galerie:r.galerie, tireur:r.tireur, impactT:t(r.impactT), t:t(r.t)};
+    // (Lot B : genre dans la liste blanche des batteries, lourd booléen strict, et d'accord entre eux.)
+    if(!GENRES_BATTERIES.includes(r.genre) || typeof r.lourd !== 'boolean' || r.lourd !== (r.genre === 'zenith')) return null;
+    const x = {cle:r.cle, galerie:r.galerie, tireur:r.tireur, impactT:t(r.impactT), t:t(r.t), genre:r.genre, lourd:r.lourd};
     for(const k of compteurs) x[k] = r[k];
     resultats[r.cle] = x;
   }
@@ -10537,7 +10932,8 @@ function envoyerOrdreInvite(camp, ordre){
   // (20 novembre 2026, galeries en ligne : réglage coché, ces quatre ordres sont contrôlés sur l'état affiché par le
   // même validerOrdre que le solo, refus dit tout de suite, puis envoyés ; l'hôte les valide de nouveau.)
   let reponseLocale = null;
-  if(ordre.type === 'fabriquerMissile' || ordre.type === 'tirGalerie' || ordre.type === 'fabriquerMunition' || ordre.type === 'repondreInterception'){
+  // (22 novembre 2026, lot B en ligne : fabriquerMissileLourd de même, contrôlé par empechementFabricationLourd.)
+  if(ordre.type === 'fabriquerMissileLourd' || ordre.type === 'fabriquerMissile' || ordre.type === 'tirGalerie' || ordre.type === 'fabriquerMunition' || ordre.type === 'repondreInterception'){
     if(!galeriesActives()) return {ok:false, motif:MOTIF_SANS_GALERIES, code:'galerie', genre:'info'};
     let v;
     try { v = validerOrdre(camp, ordre); } catch(err){ v = {motif:'Ordre illisible.', code:'invalide'}; }
@@ -10956,7 +11352,8 @@ function rendreSalon(){
 }
 // Case « Galeries de tir » de l'hôte (20 novembre 2026, galeries en ligne, lot 1), sur les deux écrans de préparation
 // (avant et après l'ouverture du salon), modifiable jusqu'au lancement ; transmise aux invités par S.lancer.
-const PHRASE_GALERIES_SALON = 'galeries, Batterie Parasol et radars, pour tous les camps, ordinateurs compris';
+// (22 novembre 2026, lot B en ligne : missile lourd et Batterie Zénith compris.)
+const PHRASE_GALERIES_SALON = 'galeries et missile lourd, Batteries Parasol et Zénith, radars, pour tous les camps, ordinateurs compris';
 function caseGaleriesSalon(){
   return `<label class="champ" style="flex-direction:row;align-items:center;gap:.5em"><input type="checkbox" id="salonGaleries"${galeriesEnLigne ? ' checked' : ''}>
     <span><b>Galeries de tir</b> <span class="note">(${echapper(PHRASE_GALERIES_SALON)})</span></span></label>`;
@@ -11378,7 +11775,7 @@ function demarrerInvite(S, debut){
   message(CARTE.nom + ' : partie en ligne. Vous jouez le camp ' + nomCamp(S.camp).toLowerCase() + ' (' + FACTIONS[camps[S.camp].faction].nom + ').', 'succes');
   if(galeriesEnLigne) message(MESSAGE_GALERIES_EN_LIGNE, 'info');
 }
-const MESSAGE_GALERIES_EN_LIGNE = 'Galeries de tir activées par l’hôte : chaque camp peut bâtir sa galerie, sa Batterie Parasol et ses radars.';
+const MESSAGE_GALERIES_EN_LIGNE = 'Galeries de tir activées par l’hôte : chaque camp peut bâtir sa galerie (missiles légers ou lourd), ses Batteries Parasol et Zénith et ses radars.';
 function finInviteReseau(d){
   const motif = d && d.motif;
   // La partie est finie pour cet onglet : le verrou du siège est rendu (un autre onglet ne se croira pas doublon).

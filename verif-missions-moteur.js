@@ -1452,6 +1452,14 @@ function avecGraine(graine, fn){
   try { return fn(); } finally { Math.random = r0; }
 }
 window.avecGraine = avecGraine;
+// Pas de simulation irréguliers (21 novembre 2026, lot B, cahier § 12.9) : chaque appel rend un pas tiré entre 1/120 et
+// 1/12 s, avec son propre générateur à graine fixe (il ne consomme pas Math.random : les tirages du jeu restent ceux de
+// la partie). Pour les règles datées : une date qui ne tombe pas pile sur un pas doit être tenue au pas près.
+function pasIrreguliers(graine){
+  let s = (graine >>> 0) || 1;
+  return () => { s = (s*1103515245 + 12345) % 2147483648; return 1/120 + (1/12 - 1/120)*s/2147483648; };
+}
+const PAS_MAX_IRREGULIER = 1/12;
 
 function verifierMissionMoteur(){
   const M = MISSION, pb = [];
@@ -1809,7 +1817,9 @@ function testerGaleriesEnLigne(cle){
   echo.piloteExterne = true;
   window.enregistrerVictoire = () => {};
   const r2 = v => v == null ? v : Math.round(v*100)/100;
-  const etatGal = g => g ? {stock:g.stock, fab:g.fab, fabS:Math.ceil(g.fabT - 1e-6), t0:g.t0, n:g.n, tires:g.tires} : null;
+  // (22 novembre 2026, lot B en ligne : lourd, fabLourd, cycleLourd comparés aussi.)
+  const etatGal = g => g ? {stock:g.stock, fab:g.fab, fabS:Math.ceil(g.fabT - 1e-6), t0:g.t0, n:g.n, tires:g.tires,
+    lourd:g.lourd || 0, fabLourd:g.fabLourd || 0, cycleLourd:g.cycleLourd === true} : null;
   // Monde de l'hôte : préparation.
   const prep = dansMonde(H, () => {
     camps.I.reserves = 6000; camps.J.reserves = Math.max(camps.J.reserves, 3000);
@@ -1828,16 +1838,18 @@ function testerGaleriesEnLigne(cle){
     histo.push(h); if(histo.length > 120) histo.shift();
   };
   const M = {ecarts:0, comparaisons:0, ecartsEx:[], galT:[], missiles:new Set(), marqueurs:new Set(), missilesParCamp:{}, erreurs:[], lignes:{},
-    pvQGJ:[], pvEcart:0};
+    pvQGJ:[], pvEcart:0, lourds:new Set(), galLourdVu:false, lourdEx:null};
   echo.apresPasInvite = () => {
     // Effets recréés chez l'invité : chacun compté une fois (objets distincts).
     for(const f of effets){
-      if(f.type === 'missile' && f.galerie && !M.missiles.has(f)){ M.missiles.add(f); M.missilesParCamp[f.camp] = (M.missilesParCamp[f.camp] || 0) + 1;
+      if(f.type === 'missile' && f.galerie && f.lourd && !M.lourds.has(f)){ M.lourds.add(f); M.lourdEx = {camp:f.camp, galerie:f.galerie, duree:f.duree, lourd:f.lourd}; }
+      if(f.type === 'missile' && f.galerie && !f.lourd && !M.missiles.has(f)){ M.missiles.add(f); M.missilesParCamp[f.camp] = (M.missilesParCamp[f.camp] || 0) + 1;
         if(!M.premierMissile) M.premierMissile = {camp:f.camp, galerie:f.galerie, x0:r2(f.x0), y0:r2(f.y0), duree:f.duree}; }
-      if(f.type === 'marqueur' && f.pouvoir === 'galerie') M.marqueurs.add(f);
+      if(f.type === 'marqueur' && f.pouvoir === 'galerie' && phase < 6) M.marqueurs.add(f);   // (premiers tirs : le lourd a le sien)
     }
     const t = G.terrier && invite.index.get(G.terrier);
-    if(t && t.galT != null) M.galT.push(r2(t.galT));
+    if(t && t.galT != null && phase < 6) M.galT.push(r2(t.galT));   // (premier cycle seulement : le second est celui du lourd)
+    if(t && t.galLourd === true) M.galLourdVu = true;
     // Galeries de l'invité contre l'hôte au même instant (dernier instantané appliqué).
     const s0 = invite.courant; if(!s0) return;
     const h = histo.find(x => Math.abs(x.T - s0.T) < 0.0015); if(!h) return;
@@ -1845,6 +1857,7 @@ function testerGaleriesEnLigne(cle){
       const b = invite.index.get(+id); M.comparaisons++;
       const a = h.gal[id], g = b && etatGal(b.gal);
       const ok = g && a.stock === g.stock && a.fab === g.fab && a.fabS === g.fabS && a.n === g.n && a.tires === g.tires
+        && a.lourd === g.lourd && a.fabLourd === g.fabLourd && a.cycleLourd === g.cycleLourd
         // t0 : deux arrondis au 1/50 s (heure de l'instantané et heure de t0), d'où 0,02 s au plus (mesuré : 0,02).
         && (a.t0 === null ? g.t0 === null : g.t0 !== null && Math.abs(a.t0 - g.t0) <= 0.0201);
       if(!ok){ M.ecarts++; if(M.ecartsEx.length < 5) M.ecartsEx.push({id, T:r2(s0.T), hote:a, invite:g}); }
@@ -1951,8 +1964,48 @@ function testerGaleriesEnLigne(cle){
           M.pvQGJ.push({invite:invite.index.get(prep.qJ.id).pv, hote:dansMonde(H, () => entiteParId(prep.qJ.id).pv), pvMax:invite.index.get(prep.qJ.id).pvMax});
           verdict('invité : fiche du terrier pendant et après le cycle', /\(vulnérable\)$/.test(M.lignes.ouverture || '') && /^Impact dans \d+ s \(vulnérable\)$/.test(M.lignes.impact || '')
             && M.lignes.apres === 'Fermée — aucun missile (à fabriquer)', {ouverture:M.lignes.ouverture, impact:M.lignes.impact, apres:M.lignes.apres});
-          terminer();
+          suite();
         } else if(delaiDepasse(30)) terminer('cycle de tir jamais terminé chez l’invité');
+      } else if(phase === 6){
+        // Lot B en ligne (22 novembre 2026) : l'invité commande un missile lourd (galerie vide), le tire sur le QG de J.
+        const b = invite.index.get(G.terrier);
+        if(b && b.gal.t0 === null && b.gal.stock === 0 && b.gal.fab === 0){
+          resAvant = dansMonde(H, () => camps.I.reserves);
+          const r = executerOrdre('I', {type:'fabriquerMissileLourd', id:G.terrier});
+          verdict('lot B : invité, ordre « fabriquer un missile lourd » contrôlé sur place puis envoyé', r.ok && r.envoye && empechementFabricationLourd(b) === null, r);
+          suite();
+        } else if(delaiDepasse(5)) terminer('terrier jamais vide chez l’invité');
+      } else if(phase === 7){
+        const b = invite.index.get(G.terrier), gH = dansMonde(H, () => entiteParId(G.terrier).gal);
+        if(b && b.gal.fabLourd === 1 && gH.fabLourd === 1){
+          M.lignes.fabLourd = ligneEtatGalerie(b, true);
+          const paye = dansMonde(H, () => resAvant - camps.I.reserves), refusLeger = executerOrdre('I', {type:'fabriquerMissile', id:G.terrier});
+          verdict('lot B : hôte payé 800, invité « Fermée — missile lourd : fabrication 220 s » (ou 219 s), léger refusé sur place',
+            Math.abs(paye - 800) < 30 && /^Fermée — missile lourd : fabrication (220|219) s$/.test(M.lignes.fabLourd) && !refusLeger.ok && refusLeger.motif === MOTIF_GALERIE_LOURDE,
+            {paye:r2(paye), ligne:M.lignes.fabLourd, refusLeger});
+          dansMonde(H, () => { gH.fabT = Math.min(gH.fabT, 0.6); });   // fabrication raccourcie (essai)
+          suite();
+        } else if(delaiDepasse(5)) terminer('fabrication du lourd jamais vue');
+      } else if(phase === 8){
+        const b = invite.index.get(G.terrier);
+        if(b && b.gal.lourd === 1){
+          M.lignes.lourdPret = ligneEtatGalerie(b, true);
+          const t = executerOrdre('I', {type:'tirGalerie', id:G.terrier, x:prep.qJ.x, y:prep.qJ.y});
+          verdict('lot B : invité « Fermée — missile lourd prêt », étiquette « lourd, 1800 dégâts », tir envoyé', M.lignes.lourdPret === 'Fermée — missile lourd prêt'
+            && etiquetteTirGalerie(b) === 'lourd, 1800 dégâts' && t.ok && t.envoye, {ligne:M.lignes.lourdPret, tir:t});
+          tirT = performance.now();
+          suite();
+        } else if(delaiDepasse(5)) terminer('lourd jamais prêt chez l’invité');
+      } else if(phase === 9){
+        const b = invite.index.get(G.terrier);
+        if(b && b.galT != null && b.galT > 1 && !M.lignes.cycleLourd) M.lignes.cycleLourd = ligneEtatGalerie(b, true);
+        if(b && M.galLourdVu && b.galT === null && b.gal.t0 === null && performance.now() - tirT > 19000){
+          const lH = dansMonde(H, () => entiteParId(G.terrier).galLourd);
+          verdict('lot B : chez l’invité, galLourd vrai pendant le cycle puis faux, un missile lourd recréé une fois (lourd, durée 8), fiche « Lourd : … (vulnérable) »',
+            M.lourds.size === 1 && M.lourdEx && M.lourdEx.duree === 8 && M.lourdEx.galerie === 1 && M.lourdEx.camp === 'I' && b.galLourd === false && lH === false
+            && /^Lourd : .*\(vulnérable\)$/.test(M.lignes.cycleLourd || ''), {lourds:M.lourds.size, ex:M.lourdEx, galLourd:b.galLourd, ligne:M.lignes.cycleLourd});
+          terminer();
+        } else if(delaiDepasse(35)) terminer('cycle lourd jamais terminé chez l’invité');
       }
     };
     const tic = () => {
@@ -2019,7 +2072,7 @@ function testerDefenseEnLigne(cle){
   const vus = new Set();
   echo.salonInvite.on('evenement', ev => { if(ev && ev.t === 'message' && ev.camp === 'I') M.messages.push(ev.texte); });
   echo.apresPasInvite = () => {
-    for(const f of effets) if(f.type === 'intercepteur' && !vus.has(f)){ vus.add(f); M.intercepteurs.push({camp:f.camp, reussi:f.reussi, duree:r2(f.duree), h:r2(f.h)}); }
+    for(const f of effets) if(f.type === 'intercepteur' && !vus.has(f)){ vus.add(f); M.intercepteurs.push({camp:f.camp, reussi:f.reussi, duree:r2(f.duree), h:r2(f.h), lourd:f.lourd === true}); }
     const s0 = invite.courant; if(!s0) return;
     const h = histo.find(x => Math.abs(x.T - s0.T) < 0.0015); if(!h) return;
     for(const id in h.para){
@@ -2189,8 +2242,68 @@ function testerDefenseEnLigne(cle){
           const munH = dansMonde(H, () => entiteParId(ids.parasol).para.stock);
           verdict('réponse arrivée après le départ : refusée par l’hôte, « Réponse arrivée trop tard… » dit à l’invité ; « Laisser passer » : aucune munition dépensée',
             dit && munH === info.munAvant3 && hoteReseau.ordres.motifs.etat >= 1, {dit, munH, munAvant:info.munAvant3, motifs:hoteReseau.ordres.motifs});
-          terminer();
+          suite();
         }
+      } else if(phase === 14){
+        // 4. Lot B en ligne (22 novembre 2026) : l'invité bâtit sa Batterie Zénith, commande une munition, et intercepte
+        //    le missile lourd que J tire sur son QG.
+        const pz = dansMonde(H, () => trouverEmplacement('zenith', {x:prep.qI.x - 200, y:prep.qI.y + 380}));
+        const r = pz ? executerOrdre('I', {type:'construire', bat:'zenith', c:pz.c, r:pz.r, ouvrierIds:[sp[0]]}) : {ok:false};
+        verdict('lot B : invité, Zénith dans sa barre, ordre « construire zenith » envoyé', batimentsConstructibles(faction('I')).slice(-1)[0] === 'zenith' && r.ok && r.envoye, r);
+        suite();
+      } else if(phase === 15){
+        const z = dansMonde(H, () => ents.find(b => b.camp === 'I' && b.type === 'zenith' && !b.mort));
+        if(z){ dansMonde(H, () => { z.progres = 1; z.enCours = false; z.pv = z.pvMax; }); ids.zenith = z.id; suite(); }
+        else if(delaiDepasse(6)) terminer('chantier de la Zénith jamais ouvert');
+      } else if(phase === 16){
+        const z = invite.index.get(ids.zenith);
+        if(z && !z.enCours && z.para){
+          info.ficheZenith = ligneEtatDefense(z, true);
+          const r = executerOrdre('I', {type:'fabriquerMunition', id:ids.zenith});
+          verdict('lot B : invité, fiche de la Zénith « Munitions : 0 / 2 », « Chances : 75 % — 3 radars sur 3 » ; munition commandée',
+            info.ficheZenith.etat === 'Munitions : 0 / 2' && info.ficheZenith.chances === 'Chances : 75 % — 3 radars sur 3' && r.ok && r.envoye, {fiche:info.ficheZenith, r});
+          suite();
+        } else if(delaiDepasse(6)) terminer('Zénith jamais vue terminée chez l’invité');
+      } else if(phase === 17){
+        const zH = dansMonde(H, () => entiteParId(ids.zenith).para), z = invite.index.get(ids.zenith), a = dansMonde(H, () => entiteParId(prep.aiguille));
+        if(zH.fab > 0 && zH.fabT > 0.4) dansMonde(H, () => { zH.fabT = 0.4; });
+        if(z.para.stock === 1 && a.gal.t0 === null){
+          const r = dansMonde(H, () => { a.gal.stock = 0; a.gal.fab = 0; a.gal.lourd = 1; return executerOrdre('J', {type:'tirGalerie', id:a.id, x:prep.qI.x, y:prep.qI.y}); });
+          verdict('lot B : hôte, J tire un missile lourd sur le QG de I', r.ok, r);
+          suite();
+        } else if(delaiDepasse(25)) terminer('munition de Zénith jamais prête, ou galerie de J jamais refermée');
+      } else if(phase === 18){
+        const p = propositionEnCours('I', FENETRE_DEFENSE.fermees);
+        if(p && p.lourd){
+          majFenetreDefense();
+          const txt = (el('defense') || {}).textContent || '';
+          info.propositionLourde = {genre:p.genre, lourd:p.lourd, chances:Math.round(p.chances), munitions:p.munitions, departDans:r2(p.departDans), titre:txt.slice(0, 80)};
+          const pris = toucheDefense('i');
+          verdict('lot B : invité, proposition « missile lourd » pour sa Zénith (75 %, 1 munition), fenêtre « … — missile lourd », « Batterie Zénith », décompte raccourci ; « Intercepter » noté',
+            p.genre === 'zenith' && /missile lourd/.test(txt) && /Batterie Zénith/.test(txt) && Math.round(p.chances) === 75 && p.munitions === 1 && p.departDans <= 9.5 - 0.35 + 1e-6 && pris,
+            info.propositionLourde);
+          suite();
+        } else if(delaiDepasse(6)) terminer('proposition lourde jamais reçue par l’invité');
+      } else if(phase === 19){
+        const E = hoteE(), pz = E && Object.values(E.propositions).find(q => q.lourd && galerieDeProposition(q));
+        if(pz && pz.reponse === true){ info.lourdOui = dansMonde(H, () => temps); suite(); }
+        else if(delaiDepasse(4)) terminer('réponse à la proposition lourde jamais notée chez l’hôte');
+      } else if(phase === 20){
+        const E = hoteE(), R = E ? Object.values(E.resultats).filter(r => r.genre === 'zenith') : [];
+        const fini = R.length === 1 && R[0].tires === 1 && R[0].rencontres === 1 && dansMonde(H, () => temps) > info.lourdOui + 16;
+        if(fini && !info.finiZ) info.finiZ = performance.now();
+        const Ei = camps.I.interception, ri = Ei && R.length ? Ei.resultats[R[0].cle] : null;
+        if(fini && ((ri && compteurs(ri) === compteurs(R[0])) || performance.now() - info.finiZ > 3000)){
+          const interZ = M.intercepteurs.filter(x => x.camp === 'I' && x.lourd);
+          const vue = ri ? vueAltitude(Object.assign({}, ri, {issue:issueInterception(ri)}), temps) : null;
+          const html = ri ? htmlResultatDefense(Object.assign({}, ri, {issue:issueInterception(ri), impactDans:null}), 0, 2, temps).html : '';
+          const munI = invite.index.get(ids.zenith).para.stock, munH = dansMonde(H, () => entiteParId(ids.zenith).para.stock);
+          info.lourd = {hote:compteurs(R[0]), invite:compteurs(ri), genreInvite:ri && ri.genre, interZ, vueLourd:vue && vue.lourd, munI, munH};
+          verdict('lot B : résultat de la Zénith identique des deux côtés (compteurs, genre zenith, lourd), un intercepteur de Zénith recréé chez l’invité, munition consommée, écran d’altitude « lourd » et « Batterie Zénith » chez l’invité',
+            ri && compteurs(ri) === compteurs(R[0]) && ri.genre === 'zenith' && ri.lourd === true && interZ.length === 1 && munI === 0 && munH === 0 && vue && vue.lourd === true
+            && /Batterie Zénith/.test(html) && /missile lourd/.test(html), info.lourd);
+          terminer();
+        } else if(delaiDepasse(35)) terminer('interception lourde jamais terminée');
       }
     };
     const tic = () => {
@@ -2616,7 +2729,140 @@ function testerGaleries(quoi, numero){
         res.every(r => !r.actif && r.fab !== 'ACCEPTÉ' && r.tir !== 'ACCEPTÉ' && r.construire !== 'ACCEPTÉ' && !r.liste && r.fab === MOTIF_SANS_GALERIES)
         && sansCode && photoEtat() === photo0, {res, sansCode});
     }
+    essaisLourd();
     essaisRiposte();
+  }
+
+  // ----------------------------------------------------------------- missile lourd (lot B, 21 novembre 2026)
+  // Cahier § 12.1 et 12.9 : fabrication (prix, durée à pas irréguliers, galerie vide exigée, exclusion avec le léger
+  // dans les deux sens), tir (un seul lanceur même pour Karsk, vol de 8 s à pas irréguliers, dégâts et rayon mesurés,
+  // dispersion bornée), galerie détruite avant le départ, aucun point de commandement.
+  function essaisLourd(){
+    const PM = PAS_MAX_IRREGULIER + 0.01;
+    // (Au pas près, des deux côtés : un événement planifié au départ est décompté dès le pas du départ, il peut donc
+    // tomber jusqu'à un demi-pas avant la date exacte relevée depuis ce pas.)
+    const dansPas = (v, attendu) => v !== null && v !== undefined && v >= attendu - PM && v <= attendu + PM;
+    // 1. Fabrication et exclusion, J (Aiguille) et I (Terrier).
+    scene();
+    for(const id of ['J', 'I']){
+      const g = poserGalerie(id), L = g.def.galerie.lourd, cmd = t => executerOrdre(id, {type:t, id:g.id});
+      const r0 = camps[id].reserves, a = cmd('fabriquerMissileLourd'), paye = r0 - camps[id].reserves;
+      const fab0 = {fabLourd:g.gal.fabLourd, fabT:g.gal.fabT};
+      const deux = cmd('fabriquerMissileLourd'), leger = cmd('fabriquerMissile');
+      const prets = [], t0 = temps, pasI = pasIrreguliers(id === 'J' ? 41 : 42);
+      let pretA = null;
+      while(temps - t0 < L.temps + 2){ miseAJour(pasI()); if(pretA === null && g.gal.lourd === 1) pretA = r2(temps - t0); }
+      const legerApres = cmd('fabriquerMissile'), lourdApres = cmd('fabriquerMissileLourd');
+      V('missile lourd ' + id + ' : ' + L.cout + ' payés à l’ordre, fabrication ' + L.temps + ' s finie au pas près (pas irréguliers) ; second lourd et léger refusés pendant et après',
+        a.ok && paye === L.cout && fab0.fabLourd === 1 && fab0.fabT === L.temps && !deux.ok && deux.motif === MOTIF_GALERIE_LOURDE && !leger.ok && leger.motif === MOTIF_GALERIE_LOURDE
+        && dansPas(pretA, L.temps) && g.gal.lourd === 1 && g.gal.fabLourd === 0 && g.gal.stock === 0 && !legerApres.ok && legerApres.motif === MOTIF_GALERIE_LOURDE && !lourdApres.ok,
+        {paye, fab0, refus:[deux.motif, leger.motif], pretA, apres:[legerApres.motif, lourdApres.motif]});
+    }
+    // Galerie non vide : léger prêt, puis léger commandé → lourd refusé ; réserves insuffisantes ; chiffres de la table.
+    scene();
+    {
+      const gI = poserGalerie('I'), cmd = t => executerOrdre('I', {type:t, id:gI.id});
+      gI.gal.stock = 1;
+      const avecStock = cmd('fabriquerMissileLourd');
+      gI.gal.stock = 0; gI.gal.fab = 1; gI.gal.fabT = 30;
+      const avecCommande = cmd('fabriquerMissileLourd');
+      gI.gal.fab = 0; gI.gal.fabT = 0; camps.I.reserves = 700;
+      const pauvre = cmd('fabriquerMissileLourd');
+      V('missile lourd : refusé galerie non vide (léger prêt ou commandé), et sans réserves suffisantes (rien de prélevé)',
+        !avecStock.ok && avecStock.motif === MOTIF_LOURD_GALERIE_PLEINE && !avecCommande.ok && avecCommande.motif === MOTIF_LOURD_GALERIE_PLEINE
+        && !pauvre.ok && pauvre.code === 'reserves' && camps.I.reserves === 700 && gI.gal.fabLourd === 0, {motifs:[avecStock.motif, avecCommande.motif, pauvre.motif]});
+      const A = BATIMENTS.aiguille.galerie.lourd, T = BATIMENTS.terrier.galerie.lourd;
+      V('missile lourd : chiffres du cahier (Aiguille 900, 240 s, 2 000, rayon 130, sans dispersion ; Terrier 800, 220 s, 1 800, rayon 160, 30 px ; vol de 8 s)',
+        [A.cout, A.temps, A.degats, A.rayon, A.dispersion, A.vol].join() === '900,240,2000,130,0,8' && [T.cout, T.temps, T.degats, T.rayon, T.dispersion, T.vol].join() === '800,220,1800,160,30,8', {A, T});
+    }
+    // 2. Tir, deux camps en même temps, pas irréguliers : un seul lanceur, vol de 8 s, dégâts et rayon.
+    scene();
+    {
+      const gJ = poserGalerie('J'), gI = poserGalerie('I'), qJ = qg('J'), qI = qg('I');
+      gJ.gal.lourd = 1; gI.gal.lourd = 1;
+      const pvJ = qJ.pv, pvI = qI.pv;
+      // Témoins : une unité adverse à 120 px du point visé (dans les deux rayons du lourd, hors de ceux du léger).
+      const tJ = unite('ours', 'J', qJ.x + 120 + qJ.rayon*0, qJ.y), tI = unite('ours', 'I', qI.x + 120, qI.y);
+      tJ.recharge = 1e9; tI.recharge = 1e9;
+      ecouter();
+      const rJ = executerOrdre('J', {type:'tirGalerie', id:gJ.id, x:qI.x, y:qI.y}), rI = executerOrdre('I', {type:'tirGalerie', id:gI.id, x:qJ.x, y:qJ.y});
+      const t0 = temps, debut = [gJ.galN, gJ.galLourd, gJ.gal.lourd, gI.galN, gI.galLourd, gI.gal.lourd, gI.gal.n];
+      const pasI = pasIrreguliers(43), suivi = {J:true, I:true}, fermeture = {J:null, I:null};
+      while(temps - t0 < 19.5){
+        miseAJour(pasI());
+        for(const [id, g] of [['J', gJ], ['I', gI]]){
+          if(fermeture[id] !== null) continue;
+          if(g.gal.t0 === null){ fermeture[id] = r2(temps - t0); if(g.galLourd !== false || g.gal.cycleLourd !== false) suivi[id] = false; continue; }
+          if(g.galLourd !== true || g.galN !== 1 || g.gal.cycleLourd !== true) suivi[id] = false;
+        }
+      }
+      const missiles = id => journal.effets.filter(e => e.type === 'missile' && e.p.galerie && e.p.camp === id);
+      const marqueurs = id => journal.effets.filter(e => e.type === 'marqueur' && e.p.pouvoir === 'galerie' && e.p.camp === id);
+      const explosions = journal.effets.filter(e => e.type === 'explosion' && e.p.grande);
+      const impacts = id => journal.zones.filter(z => z.arme === 'missileGalerie' && z.auteur && z.auteur.camp === id);
+      const mJ = missiles('J'), mI = missiles('I'), iJ = impacts('J'), iI = impacts('I');
+      V('lourd : tir accepté, un seul lanceur même pour Karsk (galN 1, n 1), galLourd vrai tout le cycle puis faux à la fermeture (17,5 s)',
+        rJ.ok && rI.ok && debut.join() === '1,true,0,1,true,0,1' && suivi.J && suivi.I && dansPas(fermeture.J, 17.5) && dansPas(fermeture.I, 17.5) && !gJ.gal.cycleLourd && !gI.gal.cycleLourd,
+        {debut, suivi, fermeture});
+      V('lourd à pas irréguliers : un missile par galerie (lourd:true, galerie:1, durée 8, depuis la galerie), départ à 9,5 s, impact 8 s plus tard ; marqueur et explosion au rayon du lourd',
+        mJ.length === 1 && mI.length === 1 && [mJ[0], mI[0]].every(e => e.p.lourd === true && e.p.galerie === 1 && e.p.duree === 8 && dansPas(e.t - t0, 9.5))
+        && mJ[0].p.x0 === gJ.x && mI[0].p.y0 === gI.y && iJ.length === 1 && iI.length === 1 && dansPas(iJ[0].t - mJ[0].t, 8) && dansPas(iI[0].t - mI[0].t, 8)
+        && marqueurs('J').length === 1 && marqueurs('J')[0].p.r === 130 && marqueurs('J')[0].p.duree === 8 && marqueurs('I')[0].p.r === 160
+        && explosions.some(e => e.p.r === 130) && explosions.some(e => e.p.r === 160),
+        {departs:[mJ, mI].map(l => l.map(e => r2(e.t - t0))), vols:[r2(iJ[0] && iJ[0].t - mJ[0].t), r2(iI[0] && iI[0].t - mI[0].t)], marqueurs:[marqueurs('J').map(m => m.p.r), marqueurs('I').map(m => m.p.r)]});
+      const dI = pvI - qI.pv, dJ = pvJ - qJ.pv, dist = iI[0] ? Math.hypot(iI[0].x - qJ.x, iI[0].y - qJ.y) : null;
+      V('lourd : dégâts et rayon mesurés (QG adverse : 2 000 au centre pour l’Aiguille, 1 800 au plus pour le Terrier ; témoins à 120 px touchés) ; auteur galerie, arme missileGalerie',
+        iJ[0] && iJ[0].r === 130 && iJ[0].deg === 2000 && iI[0].r === 160 && iI[0].deg === 1800 && Math.abs(dI - 2000) < 0.01 && dJ > 1800*0.85 && dJ <= 1800 + 0.01
+        && subi(tI, parGalerie) > 0 && subi(tJ, parGalerie) > 0 && iJ.concat(iI).every(z => z.auteur.galerie === true && z.auteur.est === 'galerie'),
+        {qgI:r1(dI), qgJ:r1(dJ), temoins:[r1(subi(tI, parGalerie)), r1(subi(tJ, parGalerie))]});
+      V('lourd : Aiguille au point visé, Terrier dans les 30 px', iJ[0].x === qI.x && iJ[0].y === qI.y && dist !== null && dist <= 30.001, {dispersionTerrier:dist === null ? null : r1(dist)});
+    }
+    // Dispersion du Terrier sur 40 tirs à graine fixe : jamais au-delà de 30 px, et pas toujours au centre.
+    {
+      scene();
+      const gI = poserGalerie('I'), d = [];
+      for(let k = 0; k < 40; k++){
+        gI.gal.lourd = 0; gI.gal.cycleLourd = true; gI.gal.cx = 1600; gI.gal.cy = 1100; gI.gal.n = 1; gI.gal.tires = 0; gI.gal.t0 = temps;
+        ecouter(); departMissileGalerie(gI, 0, DT);
+        const m = journal.effets.find(e => e.type === 'missile'); d.push(Math.hypot(m.p.x - 1600, m.p.y - 1100));
+      }
+      gI.gal.t0 = null; gI.gal.cycleLourd = false;
+      V('lourd : dispersion du Terrier bornée à 30 px (40 départs), et réelle', Math.max(...d) <= 30.001 && Math.max(...d) > 5, {max:r1(Math.max(...d)), min:r1(Math.min(...d))});
+    }
+    // 3. Galerie détruite avant le départ : lourd perdu, sans remboursement ; galerie vide ensuite.
+    for(const id of ['J', 'I']){
+      scene();
+      const adv = id === 'J' ? 'I' : 'J', g = poserGalerie(id), q = qg(adv), tueur = unite(faction(adv).ouvrier, adv, q.x, q.y + 120);
+      g.gal.lourd = 1;
+      ecouter();
+      executerOrdre(id, {type:'tirGalerie', id:g.id, x:q.x, y:q.y});
+      const t0 = temps, res0 = camps[id].reserves, pvQ = q.pv;
+      while(temps - t0 < 5 - 1e-6) miseAJour(DT);
+      infliger(g, 1e6, tueur);
+      pas(15);
+      const missiles = journal.effets.filter(e => e.type === 'missile' && e.p.galerie).length, impacts = journal.zones.filter(z => z.arme === 'missileGalerie').length;
+      V('lourd, galerie ' + id + ' détruite avant le départ : aucun missile, aucun impact, aucun remboursement', g.mort && missiles === 0 && impacts === 0 && q.pv === pvQ && camps[id].reserves === res0,
+        {missiles, impacts, remboursement:camps[id].reserves - res0});
+    }
+    // 4. Aucun point de commandement pour une destruction par le lourd (une usine de 1 600 PV rasée d'un coup).
+    scene();
+    {
+      const gJ = poserGalerie('J'); gJ.gal.lourd = 1;
+      const p = trouverEmplacement('usine', qg('I')), us = creerBatiment('usine', 'I', p.c, p.r, true);
+      executerOrdre('J', {type:'tirGalerie', id:gJ.id, x:us.x, y:us.y});
+      let saut = 0, prec = camps.J.points;
+      for(let k = 0; k < Math.round((CYCLE_GALERIE.departs[0] + 8 + 2.5)/DT); k++){ const mortAvant = us.mort; miseAJour(DT); if(us.mort && !mortAvant) saut = camps.J.points - prec; prec = camps.J.points; }
+      V('lourd : rase une usine (1 600 PV) d’un coup, sans point de commandement', us.mort && Math.abs(saut) < 0.01, {usineDetruite:us.mort, points:r2(saut)});
+    }
+    // 5. Case décochée : ordre refusé, rien de prélevé.
+    scene();
+    {
+      const g = poserGalerie('J'), r0 = camps.J.reserves;
+      optionGaleries = false;
+      const r = executerOrdre('J', {type:'fabriquerMissileLourd', id:g.id});
+      optionGaleries = true;
+      V('lourd, case décochée : ordre refusé, rien de prélevé', !r.ok && r.motif === MOTIF_SANS_GALERIES && camps.J.reserves === r0 && g.gal.fabLourd === 0, {motif:r.motif});
+    }
   }
 
   // ----------------------------------------------------------------- riposte et esquive (lot 2, 19 novembre 2026)
@@ -2971,12 +3217,14 @@ function partieDefense(nom, graine, duree, opts){
   opts = opts || {};
   const liste = typeof nom === 'string' ? AFFRONTEMENTS_GALERIES[nom] : nom;
   const eff = window.effet, cb = window.construireBatiment, mj = window.miseAJour, cm = window.commanderMunition;
-  const S = {inter:{}, missiles:{}, defense:{}, munitions:{}, vu:{}, resMin:{}, fautes:[]};
+  // (22 novembre 2026, lot B : Zénith, missiles lourds tirés et intercepteurs de la Zénith comptés à part.)
+  const S = {inter:{}, missiles:{}, lourds:{}, defense:{}, munitions:{}, vu:{}, resMin:{}, fautes:[]};
   const faute = t => { if(S.fautes.length < 10) S.fautes.push('t=' + Math.round(temps) + ' ' + t); };
-  const camp = id => S.defense[id] || (S.defense[id] = {parasol:[], radar:[]});
+  const camp = id => S.defense[id] || (S.defense[id] = {parasol:[], radar:[], zenith:[]});
   window.effet = function(type, p){
-    if(type === 'intercepteur'){ const k = S.inter[p.camp] || (S.inter[p.camp] = {tires:0, reussis:0}); k.tires++; if(p.reussi) k.reussis++; }
+    if(type === 'intercepteur'){ const k = S.inter[p.camp] || (S.inter[p.camp] = {tires:0, reussis:0, zenith:0}); k.tires++; if(p.reussi) k.reussis++; if(p.lourd) k.zenith++; }
     if(type === 'missile' && p.galerie) S.missiles[p.camp] = (S.missiles[p.camp] || 0) + 1;
+    if(type === 'missile' && p.galerie && p.lourd) S.lourds[p.camp] = (S.lourds[p.camp] || 0) + 1;
     return eff.apply(this, arguments);
   };
   window.construireBatiment = function(id, type){
@@ -2986,13 +3234,15 @@ function partieDefense(nom, graine, duree, opts){
       camp(id)[type].push(Math.round(temps));
       if(type === 'parasol' && !S.vu[id]) faute(id + ' bâtit une batterie sans avoir vu de galerie hostile');
       if(niveauIA(id) === 'facile') faute(id + ' (Facile) bâtit ' + type);
+      if(type === 'zenith' && niveauIA(id) === 'normal') faute(id + ' (Normale) bâtit une Zénith');
     }
     return b;
   };
   window.commanderMunition = function(b){
     const avant = b && b.para ? b.para.stock + b.para.fab : 0, R = b && reglagesDefenseIA(b.camp);
     const ok = cm.apply(this, arguments);
-    if(ok){ S.munitions[b.camp] = (S.munitions[b.camp] || 0) + 1; if(R && avant >= R.stockVise) faute(b.camp + ' commande une munition au-delà du stock visé'); }
+    const vise = R && (estZenith(b) ? R.stockViseZenith : R.stockVise);
+    if(ok){ S.munitions[b.camp] = (S.munitions[b.camp] || 0) + 1; if(R && avant >= vise) faute(b.camp + ' commande une munition au-delà du stock visé'); }
     return ok;
   };
   window.miseAJour = function(){
@@ -3008,10 +3258,12 @@ function partieDefense(nom, graine, duree, opts){
   } finally { window.effet = eff; window.construireBatiment = cb; window.miseAJour = mj; window.commanderMunition = cm; }
   const campsR = {};
   for(const id of Object.keys(r.galeries)){
-    const g = r.galeries[id], d = S.defense[id] || {parasol:[], radar:[]};
+    const g = r.galeries[id], d = S.defense[id] || {parasol:[], radar:[], zenith:[]};
+    const J = (etatsIA[id] && etatsIA[id].galerie) ? etatsIA[id].galerie.journal : [];
     campsR[id] = {niveau:g.niveau, faction:g.faction, galerie:g.chantier == null ? null : g.chantier, tirs:g.tirs.length,
-      parasol:d.parasol, radars:d.radar, munitions:S.munitions[id] || 0, intercepteurs:S.inter[id] || {tires:0, reussis:0},
-      missilesTires:S.missiles[id] || 0, triche:r.triche[id], resMin:Math.round(S.resMin[id])};
+      parasol:d.parasol, radars:d.radar, zenith:d.zenith, munitions:S.munitions[id] || 0, intercepteurs:S.inter[id] || {tires:0, reussis:0, zenith:0},
+      missilesTires:S.missiles[id] || 0, lourdsTires:S.lourds[id] || 0, lourdsCommandes:J.filter(l => l.quoi === 'commandeLourd').length,
+      triche:r.triche[id], resMin:Math.round(S.resMin[id])};
   }
   return {nom:typeof nom === 'string' ? nom : 'liste', graine, duree:duree || 900, sansDefense:!!opts.sansDefense, fin:r.temps, vainqueur,
     erreur:r.erreur, camps:campsR, fautes:S.fautes};
@@ -3021,7 +3273,8 @@ window.partieDefense = partieDefense;
 function ligneDefense(p){
   return p.nom + ' g' + p.graine + (p.sansDefense ? ' (sans défense)' : '') + ' | ' + p.fin + ' s ' + (p.vainqueur || '—') + (p.erreur ? ' ERREUR ' + p.erreur : '') + ' | ' +
     Object.entries(p.camps).map(([id, c]) => id + ' ' + c.niveau.slice(0, 4) + ' ' + c.faction.slice(0, 1).toUpperCase() + ' gal ' + (c.galerie == null ? '—' : c.galerie) +
-      ' tirs ' + c.tirs + ' para ' + (c.parasol.join('/') || '—') + ' rad ' + c.radars.length + ' mun ' + c.munitions + ' int ' + c.intercepteurs.reussis + '/' + c.intercepteurs.tires).join(' ; ') +
+      ' tirs ' + c.tirs + ' para ' + (c.parasol.join('/') || '—') + ' rad ' + c.radars.length + ' mun ' + c.munitions + ' int ' + c.intercepteurs.reussis + '/' + c.intercepteurs.tires +
+      ' lourds ' + (c.lourdsCommandes || 0) + 'c/' + (c.lourdsTires || 0) + 't zen ' + ((c.zenith || []).join('/') || '—') + ' intZ ' + ((c.intercepteurs || {}).zenith || 0)).join(' ; ') +
     (p.fautes.length ? ' | FAUTES ' + p.fautes.join(' ; ') : '');
 }
 window.ligneDefense = ligneDefense;
@@ -3125,16 +3378,22 @@ function testerDefense(quoi, numero){
   const orig = {effet:window.effet, explosionZone:window.explosionZone, chancesInterception:window.chancesInterception};
   const ecouteurAvant = ecouteurNotifications;
   let journal = null, forcees = {};
-  const ecouter = () => { journal = {effets:[], zones:[], messages:[]}; };
+  const ecouter = () => { journal = {effets:[], zones:[], messages:[], chances:[]}; };
   window.effet = function(type, p){ const f = orig.effet.apply(this, arguments); if(journal) journal.effets.push({type, t:temps, p, f}); return f; };
   window.explosionZone = function(x, y, r, deg, arme){ if(journal) journal.zones.push({t:temps, x, y, arme}); return orig.explosionZone.apply(this, arguments); };
-  window.chancesInterception = function(camp){ return camp in forcees ? forcees[camp] : orig.chancesInterception.apply(this, arguments); };
+  // (21 novembre 2026, lot B : chaque appel est noté dans journal.chances, avec le genre de batterie et la valeur vraie.)
+  window.chancesInterception = function(camp, genre){
+    const vrai = orig.chancesInterception.apply(this, arguments);
+    if(journal && journal.chances) journal.chances.push({t:temps, camp, genre:genre || 'parasol', vrai});
+    return camp in forcees ? forcees[camp] : vrai;
+  };
   const optAvant = optionGaleries, reseauAvant = modeReseau, roleAvant = roleMonde;
   try {
     optionGaleries = true;
     ecouteurNotifications = (camp, texte) => { if(journal) journal.messages.push({camp, texte}); };
     if(quoi === 'parties') essaisParties();
-    else { essaisRegles(); essaisCycles(); essaisOrdinateur(); essaisOption(); }
+    else if(quoi === 'lotB') essaisPartiesLotB();
+    else { essaisRegles(); essaisCycles(); essaisOrdinateur(); essaisOption(); essaisLotB(); essaisOrdinateurLotB(); }
   } catch(err){
     V('exécution de l’essai', false, 'ERREUR t=' + (typeof temps === 'number' ? temps.toFixed(2) : '?') + ' ' + err.message + ' | ' + String(err.stack || '').split('\n').slice(1, 3).join(' | '));
   } finally {
@@ -3523,6 +3782,402 @@ function testerDefense(quoi, numero){
     V('ordinateur, option décochée : aucune défense ni mémoire de défense', !ents.some(e => e.camp === 'I' && e.def.defense) && !(etatsIA.I && etatsIA.I.defense), {defense:!!(etatsIA.I && etatsIA.I.defense)});
   }
 
+  // ----------------------------------------------------------------- lot B : Batterie Zénith et missile lourd (21 novembre 2026)
+  // Cahier § 12.2, 12.3 et 12.9 (parties « moteur »). Même scène : J (Halden) et K (Halden, ordinateur arrêté qui répond
+  // seul aux propositions) alliés, I (Karsk) tire. Les cycles se jouent à PAS IRRÉGULIERS (pasIrreguliers) : chaque date
+  // est vérifiée à un pas près (PAS_MAX_IRREGULIER).
+  function essaisLotB(){
+    const PM = PAS_MAX_IRREGULIER + 0.01;
+    // (Au pas près, des deux côtés : un événement planifié au départ est décompté dès le pas du départ, il peut donc
+    // tomber jusqu'à un demi-pas avant la date exacte relevée depuis ce pas.)
+    const dansPas = (v, attendu) => v !== null && v !== undefined && v >= attendu - PM && v <= attendu + PM;
+    // 1. Construction et limite, pour les deux factions.
+    scene();
+    for(const id of ['J', 'I']){
+      const q = qg(id);
+      const ordre = (pres) => { const p = trouverEmplacement('zenith', pres || q), o = unite(faction(id).ouvrier, id, q.x, q.y + 110);
+        return {type:'construire', bat:'zenith', c:p.c, r:p.r, ouvrierIds:[o.id]}; };
+      const liste = batimentsConstructibles(faction(id));
+      const rSans = executerOrdre(id, ordre());
+      poser('usine', id, {x:q.x, y:q.y - 220});
+      const r0 = camps[id].reserves, rOk = executerOrdre(id, ordre()), b = rOk.ok ? entiteParId(rOk.id) : null, paye = r0 - camps[id].reserves;
+      const rDeux = executerOrdre(id, ordre({x:q.x + 300, y:q.y + 250}));
+      const fini = b ? jusqua(() => !b.enCours, 200) : null;   // (l'ouvrier doit d'abord marcher jusqu'au chantier)
+      const rTrois = executerOrdre(id, ordre({x:q.x - 300, y:q.y + 250}));
+      V('lot B, construction ' + id + ' : Zénith en fin de liste ; sans usine → refus ; avec usine 900 payés ; une seule par camp (chantier compris, puis finie) ; chantier 35 s, 1 100 PV',
+        liste[liste.length - 1] === 'zenith' && !rSans.ok && /Nécessite/.test(rSans.motif || '') && rOk.ok && b && paye === 900 && b.para && b.para.stock === 0
+        && !rDeux.ok && rDeux.motif === MOTIFS_LIMITE_DEFENSE.zenith && fini !== null && fini >= 35 - 0.1 && Math.abs(b.pv - 1100) < 0.5 && !rTrois.ok && rTrois.motif === MOTIFS_LIMITE_DEFENSE.zenith
+        && estZenith(b) && estBatterie(b) && !estParasol(b),
+        {liste:liste.slice(-4), sans:rSans.motif, paye, deux:rDeux.motif, chantier:fini === null ? 'non' : r1(fini), pv:b && b.pv, trois:rTrois.motif});
+    }
+    // 2. Munitions : 300 à l'ordre, 60 s, deux au plus ; fin de fabrication à pas irréguliers.
+    scene();
+    {
+      const b = poser('zenith', 'J'), ordre = () => executerOrdre('J', {type:'fabriquerMunition', id:b.id});
+      const r0 = camps.J.reserves, a = ordre(), c = ordre(), d = ordre();
+      V('lot B, munitions Zénith : 300 payés à l’ordre, 60 s, deux au plus (prêtes ou en fabrication)', a.ok && c.ok && !d.ok && d.motif === MOTIF_MUNITIONS_PLEINES_ZENITH
+        && r0 - camps.J.reserves === 600 && b.para.fab === 2 && b.para.fabT === 60, {paye:r0 - camps.J.reserves, fab:b.para.fab, fabT:b.para.fabT, refus:d.motif});
+      const prets = [], t0 = temps, pasI = pasIrreguliers(11);
+      while(temps - t0 < 125){ miseAJour(pasI()); while(prets.length < b.para.stock) prets.push(r2(temps - t0)); }
+      V('lot B, munitions Zénith à pas irréguliers : prêtes à 60 et 120 s (au pas près)', prets.length === 2 && dansPas(prets[0], 60) && dansPas(prets[1], 120), {prets});
+    }
+    // 3. Chances : 15 % sans radar, puis 42, 58 et 75 % (table), et 2 000 tirages à graine fixe par palier.
+    {
+      V('lot B, chances Zénith : 15, 42, 58, 75 % selon 0 à 3 radars (table), 75 au-delà ; Parasol inchangée',
+        [0, 1, 2, 3, 5].map(n => chancesDepuisRadars(n, 'zenith')).join() === '15,42,58,75,75' && Math.abs(chancesDepuisRadars(1) - (25 + 50/3)) < 1e-9 && chancesDepuisRadars(0) === 25,
+        [0, 1, 2, 3, 5].map(n => chancesDepuisRadars(n, 'zenith')));
+      const attendu = [15, 42, 58, 75], mesures = [];
+      for(let n = 0; n <= 3; n++){
+        scene();
+        const b = poser('zenith', 'J'), gI = poser('terrier', 'I');
+        for(let k = 0; k < n; k++) poser('radar', 'J', {x:qg('J').x + (k - 1)*240, y:qg('J').y + 260});
+        gI.gal.t0 = temps; gI.gal.n = 1; gI.gal.tires = 0; gI.gal.cycleLourd = true;
+        proposerInterceptions(gI);
+        const rep = repondreInterception('J', true), p = propositionEnCours('J');
+        let abattus = 0;
+        avecGraine(2000 + n, () => { for(let k = 0; k < 2000; k++){ b.para.stock = 1; if(tenterInterceptions(gI, b.x, b.y, {}, {}, DT, true)) abattus++; } });
+        mesures.push({radars:n, attendu:attendu[n], proposition:p && p.chances, genre:p && p.genre, lourd:p && p.lourd, mesure:r1(abattus/20), rep});
+      }
+      V('lot B, chances Zénith : 2 000 tirages par palier (0 à 3 radars) à ±3 points ; la proposition porte genre zenith, lourd vrai et les chances du palier',
+        mesures.every(m => Math.abs(m.mesure - m.attendu) <= 3 && m.proposition === m.attendu && m.genre === 'zenith' && m.lourd === true && m.rep), mesures);
+    }
+    // Cycles du lot B. prepa : J a ce qu'on lui donne (zenith, parasol : munitions), I tire de son Terrier.
+    const prepa = (o) => {
+      scene();
+      const r = {cible:qg('J')};
+      if(o.zenith !== undefined){ r.bZ = poser('zenith', 'J'); r.bZ.para.stock = o.zenith; }
+      if(o.parasol !== undefined){ r.bP = poser('parasol', 'J', {x:r.cible.x, y:r.cible.y - 240}); r.bP.para.stock = o.parasol; }
+      for(let k = 0; k < (o.radars || 0); k++) r['radar' + k] = poser('radar', 'J', {x:r.cible.x + (k - 1)*240, y:r.cible.y + 260});
+      r.gI = poser('terrier', 'I');
+      if(o.lourd) r.gI.gal.lourd = 1; else r.gI.gal.stock = o.legers || 1;
+      return r;
+    };
+    const cycleB = (gI, x, y, reponse, graine, pendant) => {
+      ecouter();
+      const ordre = executerOrdre('I', {type:'tirGalerie', id:gI.id, x, y}), t0 = temps;
+      const f0 = forcees; forcees = {};   // (la proposition lue avec les vraies chances du camp)
+      const p0 = propositionEnCours('J'); forcees = f0;
+      const debut = {galN:gI.galN, galLourd:gI.galLourd === true, n:gI.gal.n, lourd:gI.gal.lourd};
+      const rep = reponse === undefined ? null : executerOrdre('J', {type:'repondreInterception', oui:reponse});
+      const issues = [], A = {}, pasI = pasIrreguliers(graine);
+      while(temps - t0 < 19.5){
+        miseAJour(pasI());
+        const t = temps - t0;
+        if(pendant) pendant(t, A);
+        if(A.galLourdPendant === undefined && t > 1 && t < 17) A.galLourdPendant = gI.galLourd === true;
+        const r = resultatInterception('J'), is = r ? r.issue : null;
+        if(!issues.length || issues[issues.length - 1][1] !== is) issues.push([r2(t), is]);
+      }
+      const rel = l => l.map(e => r2(e.t - t0));
+      return {ordre, p0, debut, rep, A, issues, t0,
+        impacts:journal.zones.filter(z => z.arme === 'missileGalerie').map(z => r2(z.t - t0)),
+        inter:journal.effets.filter(e => e.type === 'intercepteur').map(e => ({t:r2(e.t - t0), camp:e.p.camp, duree:r2(e.p.duree), reussi:e.p.reussi, x0:e.p.x0, lourd:e.p.lourd === true, h:Math.round(e.p.h)})),
+        missiles:journal.effets.filter(e => e.type === 'missile' && e.p.galerie).map(e => ({t:r2(e.t - t0), duree:e.p.duree, lourd:e.p.lourd === true, abattuA:e.f.abattuA})),
+        chances:journal.chances.filter(c => c.t >= t0 + 9.5 - 1e-6).map(c => ({t:r2(c.t - t0), camp:c.camp, genre:c.genre, vrai:r1(c.vrai)})),
+        msg:(camp, re) => journal.messages.filter(m => m.camp === camp && re.test(m.texte)).length, rel};
+    };
+    const premiere = (c, issue) => { const x = c.issues.find(([, is]) => is === issue); return x ? x[0] : null; };
+    // 4. Réussite à 100 % : rencontre à la 5e seconde du vol, pas irréguliers.
+    {
+      const P = prepa({zenith:2, lourd:true}), pv = P.cible.pv;
+      forcees = {J:100};
+      const c = cycleB(P.gI, P.cible.x, P.cible.y, true, 21);
+      forcees = {};
+      const m = c.missiles[0] || {}, i0 = c.inter[0] || {}, reussie = premiere(c, 'reussie');
+      V('lot B, Zénith : proposition « zenith, lourd » à l’ouverture (15 %, 0 radar), un seul lanceur (galN 1, galLourd), alerte « missile lourd » à l’adversaire',
+        c.ordre.ok && c.p0 && c.p0.genre === 'zenith' && c.p0.lourd === true && c.p0.chances === 15 && c.p0.radars === 0 && c.p0.n === 1 && c.debut.galN === 1 && c.debut.galLourd && c.debut.lourd === 0
+        && c.A.galLourdPendant === true && P.gI.galLourd === false && c.msg('J', /ouverture : missile lourd/) === 1,
+        {p0:c.p0 && {genre:c.p0.genre, lourd:c.p0.lourd, chances:c.p0.chances, n:c.p0.n}, debut:c.debut, galLourdPendant:c.A.galLourdPendant, apres:P.gI.galLourd});
+      V('lot B, Zénith à pas irréguliers : tir au départ (9,5 s), une munition, rencontre à 5 s de vol (abattuA 5), « réussie » 5 s après le tir ; aucun impact',
+        c.missiles.length === 1 && m.lourd && m.duree === 8 && dansPas(m.t, 9.5) && c.inter.length === 1 && dansPas(i0.t, 9.5) && i0.duree === 5 && i0.reussi && i0.lourd && i0.x0 === P.bZ.x
+        && m.abattuA === 5 && P.bZ.para.stock === 1 && reussie !== null && dansPas(reussie - i0.t, 5) && premiere(c, 'enVol') !== null && c.impacts.length === 0 && P.cible.pv === pv
+        && c.msg('J', /Interception réussie/) === 1 && c.msg('I', /intercepté/) === 1,
+        {missiles:c.missiles, inter:c.inter, issues:c.issues, impacts:c.impacts, stock:P.bZ.para.stock});
+      const r = resultatInterception('J');
+      V('lot B : le résultat porte la batterie (genre zenith) et le missile (lourd)', r && r.genre === 'zenith' && r.lourd === true, r && {genre:r.genre, lourd:r.lourd, issue:r.issue});
+      // Interface (22 novembre 2026, étape 2) : écran d'altitude tiré des vraies dates (trajet vu par J).
+      const vu = r && vueAltitude(r, temps), m0 = vu && vu.missiles[0], svg = vu ? ecranAltitudeSvg(vu) : '';
+      V('lot B, écran d’altitude : un missile lourd, tir au départ, rencontre 5 s après, abattu à 5 s de vol ; SVG 276 × 160, étage haut éclairé',
+        vu && vu.lourd && vu.missiles.length === 1 && Math.abs(m0.tir - m0.d) < 1e-6 && Math.abs(m0.renc - 5) < 1e-6 && m0.issue === 'abattu' && dansPas(m0.fin, 5) && m0.vol === 8
+        && /viewBox="0 0 276 160"/.test(svg) && /missile lourd/.test(svg) && svg.indexOf('fill="#0d2417"') < svg.indexOf('fill="#08130d"'), vu);
+    }
+    // 5. Échec à 0 % : impact 8 s après le départ, à pas irréguliers ; « manquée » à la rencontre.
+    {
+      const P = prepa({zenith:1, lourd:true}), pv = P.cible.pv;
+      forcees = {J:0};
+      const c = cycleB(P.gI, P.cible.x, P.cible.y, true, 22);
+      forcees = {};
+      const m = c.missiles[0] || {}, manquee = premiere(c, 'manquee');
+      V('lot B, Zénith manquée à pas irréguliers : munition dépensée, « manquée » 5 s après le tir, impact 8 s après le départ, QG touché',
+        c.inter.length === 1 && !c.inter[0].reussi && P.bZ.para.stock === 0 && manquee !== null && dansPas(manquee - c.inter[0].t, 5) && c.impacts.length === 1
+        && dansPas(c.impacts[0] - m.t, 8) && P.cible.pv < pv && c.msg('J', /Interception manquée/) === 1,
+        {inter:c.inter, missiles:c.missiles, impacts:c.impacts, issues:c.issues, degats:r1(pv - P.cible.pv)});
+    }
+    // 6. Zénith sans radar, tirage vrai (15 %) ; radar détruit entre l'ordre et le départ : compte fait au départ.
+    {
+      const P = prepa({zenith:1, lourd:true, radars:1});
+      const c = cycleB(P.gI, P.cible.x, P.cible.y, true, 23, (t, A) => { if(t >= 5 && !A.fait){ A.fait = true; P.radar0.mort = true; } });
+      const tir = c.chances.find(x => x.camp === 'J');
+      V('lot B, radar détruit entre l’ordre et le départ : proposition à 42 %, tir à 15 % (compte fait au départ), munition consommée',
+        c.p0 && c.p0.chances === 42 && c.p0.radars === 1 && c.inter.length === 1 && tir && tir.genre === 'zenith' && tir.vrai === 15 && P.bZ.para.stock === 0,
+        {p0:c.p0 && c.p0.chances, chances:c.chances, inter:c.inter});
+    }
+    // 7. Partage des rôles : Parasol seule face à un lourd, Zénith seule face à un léger, les deux batteries.
+    {
+      const P = prepa({parasol:2, lourd:true});
+      forcees = {J:100};
+      const c = cycleB(P.gI, P.cible.x, P.cible.y, true, 24);
+      forcees = {};
+      V('lot B, Parasol seule face à un lourd : aucune proposition, message court (une fois), munitions gardées, impact 8 s après le départ',
+        c.p0 === null && (!c.rep || !c.rep.ok) && c.inter.length === 0 && P.bP.para.stock === 2 && c.impacts.length === 1 && dansPas(c.impacts[0] - c.missiles[0].t, 8)
+        && c.msg('J', /Missile lourd : la Batterie Parasol ne peut rien/) === 1,
+        {p0:c.p0, rep:c.rep, inter:c.inter, impacts:c.impacts, missiles:c.missiles, stock:P.bP.para.stock, messages:c.msg('J', /Parasol ne peut rien/)});
+      const Q = prepa({zenith:2, legers:2});
+      forcees = {J:100};
+      const d = cycleB(Q.gI, Q.cible.x, Q.cible.y, true, 25);
+      forcees = {};
+      V('lot B, Zénith seule face à un léger : aucune proposition ni tir, message court (une fois), deux impacts 5 s après les départs',
+        d.p0 === null && d.inter.length === 0 && Q.bZ.para.stock === 2 && d.impacts.length === 2 && d.missiles.every(m => !m.lourd && m.duree === 5)
+        && dansPas(d.impacts[0] - d.missiles[0].t, 5) && d.msg('J', /Missile léger : la Batterie Zénith ne peut rien/) === 1, {inter:d.inter, impacts:d.impacts, missiles:d.missiles});
+      const R = prepa({zenith:2, parasol:2, lourd:true});
+      forcees = {J:100};
+      const e = cycleB(R.gI, R.cible.x, R.cible.y, true, 26);
+      forcees = {};
+      const S = prepa({zenith:2, parasol:2, legers:1});
+      forcees = {J:100};
+      const f = cycleB(S.gI, S.cible.x, S.cible.y, true, 27);
+      forcees = {};
+      V('lot B, les deux batteries : contre le lourd seule la Zénith tire, contre le léger seule la Parasol (rencontre à 3 s, comme avant)',
+        e.p0 && e.p0.genre === 'zenith' && e.inter.length === 1 && e.inter[0].x0 === R.bZ.x && R.bZ.para.stock === 1 && R.bP.para.stock === 2 && e.impacts.length === 0
+        && f.p0 && f.p0.genre === 'parasol' && f.p0.lourd === false && f.inter.length === 1 && f.inter[0].x0 === S.bP.x && f.inter[0].duree === 3 && !f.inter[0].lourd && S.bP.para.stock === 1 && S.bZ.para.stock === 2,
+        {lourd:{p0:e.p0 && e.p0.genre, inter:e.inter, stocks:[R.bZ.para.stock, R.bP.para.stock]}, leger:{p0:f.p0 && f.p0.genre, inter:f.inter, stocks:[S.bZ.para.stock, S.bP.para.stock]}});
+    }
+    // 7 bis. Interface (22 novembre 2026, étape 2) : fenêtre de proposition. Lourd (titre, Zénith, 15 %, conseil sans
+    //        radar) ; léger seul (ni Zénith, ni lourd, ni ligne de batterie) ; deux galeries, l'une en léger l'autre en
+    //        lourd : deux lignes, une réponse pour toutes.
+    {
+      const P = prepa({zenith:1, parasol:2, lourd:true}), g2 = poser('terrier', 'I', {x:P.gI.x, y:P.gI.y + 240});
+      g2.gal.stock = 1;
+      executerOrdre('I', {type:'tirGalerie', id:P.gI.id, x:P.cible.x, y:P.cible.y});
+      const pL = propositionEnCours('J', {}), hL = pL ? htmlPropositionDefense(donneesProposition(pL, batterieDe('J', pL.genre))) : '';
+      for(let k = 0; k < Math.round(1/DT); k++) miseAJour(DT);
+      executerOrdre('I', {type:'tirGalerie', id:g2.id, x:P.cible.x, y:P.cible.y});
+      const pD = propositionEnCours('J', {}), dD = pD && donneesProposition(pD, batterieDe('J', pD.genre)), hD = dD ? htmlPropositionDefense(dD) : '';
+      const repI = executerOrdre('J', {type:'repondreInterception', oui:true, cle:pD.cles[0]}).ok && executerOrdre('J', {type:'repondreInterception', oui:true, cle:pD.cles[1]}).ok;
+      const armees = Object.values(camps.J.interception.propositions).map(q => q.genre + ':' + q.reponse).sort();
+      const Q = prepa({parasol:2, legers:1});
+      executerOrdre('I', {type:'tirGalerie', id:Q.gI.id, x:Q.cible.x, y:Q.cible.y});
+      const pS = propositionEnCours('J', {}), hS = pS ? htmlPropositionDefense(donneesProposition(pS, batterieDe('J', pS.genre))) : '';
+      V('lot B, fenêtre : lourd (titre « missile lourd », Batterie Zénith, 15 %, conseil sans radar) ; léger seul sans rien du lot B ; léger et lourd ensemble : deux lignes, une réponse vaut pour les deux',
+        /Galerie ennemie en ouverture — missile lourd/.test(hL) && /Batterie Zénith/.test(hL) && /15 %/.test(hL) && /presque à l’aveugle/.test(hL)
+        && /^<div class="tete"><span class="titre">Galerie ennemie en ouverture<\/span>/.test(hS) && !/Zénith|lourd|·/.test(hS) && pS.lignes.length === 1
+        && dD && dD.lignes && dD.lignes.length === 2 && /Batterie Parasol · missile léger/.test(hD) && /Batterie Zénith · missile lourd/.test(hD) && /2 galeries/.test(hD)
+        && repI && armees.join() === 'parasol:true,zenith:true',
+        {lourd:hL.replace(/<[^>]+>/g, ' ').slice(0, 160), deux:hD.replace(/<[^>]+>/g, ' ').slice(0, 220), leger:hS.replace(/<[^>]+>/g, ' ').slice(0, 120), armees});
+    }
+    // 7 ter. Relecture du 22 novembre 2026 : deux galeries ouvertes (un léger, puis un lourd 0,5 s après) et l'une des deux
+    //        batteries de J détruite. La fenêtre doit rester proposée pour la batterie vivante (bon genre, une seule
+    //        ligne, ouvertes = 1), et une réponse doit l'armer (armees >= ouvertes, fenêtre « interception ordonnée »).
+    //        Avant la correction de propositionEnCours : null (Parasol détruite), ou jamais armée (Zénith détruite).
+    for(const morte of ['parasol', 'zenith']){
+      const P = prepa({zenith:1, parasol:2, legers:1}), g2 = poser('terrier', 'I', {x:P.gI.x, y:P.gI.y + 240});
+      g2.gal.lourd = 1;
+      const o1 = executerOrdre('I', {type:'tirGalerie', id:P.gI.id, x:P.cible.x, y:P.cible.y});
+      for(let k = 0; k < Math.round(0.5/DT); k++) miseAJour(DT);
+      const o2 = executerOrdre('I', {type:'tirGalerie', id:g2.id, x:P.cible.x, y:P.cible.y});
+      const tueur = unite('lynx', 'I', P.cible.x + 150, P.cible.y);
+      infliger(morte === 'parasol' ? P.bP : P.bZ, 1e6, tueur); tueur.mort = true;
+      const vivante = morte === 'parasol' ? 'zenith' : 'parasol';
+      const p = propositionEnCours('J', {}), d = p && donneesProposition(p, batterieDe('J', p.genre));
+      const lignes = p ? lignesProposition('J', propositionsOuvertes('J').filter(q => batterieDe('J', q.genre))) : [];
+      const reps = p ? p.cles.map(cle => executerOrdre('J', {type:'repondreInterception', oui:true, cle})) : [];
+      const p2 = propositionEnCours('J', {}), d2 = p2 && donneesProposition(p2, batterieDe('J', p2.genre));
+      const html = d2 ? htmlPropositionDefense(d2) : '';
+      V('lot B, relecture : ' + morte + ' de J détruite, deux galeries ouvertes (léger puis lourd) : fenêtre gardée pour la ' + vivante + ' (genre, une ligne, ouvertes 1), réponse acceptée, puis armee (« Interception ordonnée »)',
+        o1.ok && o2.ok && (morte === 'parasol' ? P.bP.mort : P.bZ.mort) && p && p.genre === vivante && p.ouvertes === 1 && p.cles.length === 1 && p.lignes.length === 1 && p.lignes[0].genre === vivante
+        && lignes.length === 1 && d && !d.lignes && reps.length === 1 && reps.every(r => r.ok) && p2 && p2.armees >= p2.ouvertes && d2.armee === true && /Interception ordonnée/.test(html),
+        {o:[o1.ok, o2.ok], p:p && {genre:p.genre, ouvertes:p.ouvertes, cles:p.cles.length, lignes:p.lignes.map(l => l.genre)}, reps:reps.map(r => r.ok || r.motif),
+          p2:p2 && {ouvertes:p2.ouvertes, armees:p2.armees}, armee:d2 && d2.armee});
+    }
+    // 8. Hors zone, sans autorisation, batterie détruite avant le départ.
+    {
+      const P = prepa({zenith:2, lourd:true}), p = versCentre('J', 1500), loin = Math.hypot(p.x - P.bZ.x, p.y - P.bZ.y);
+      const c = cycleB(P.gI, p.x, p.y, true, 28);
+      V('lot B, hors zone (au-delà de 900 px, dispersion comprise) : rien de tiré ni dépensé, l’impact a lieu, « horsZone »', loin > 900 + 30 && c.inter.length === 0
+        && P.bZ.para.stock === 2 && c.impacts.length === 1 && premiere(c, 'horsZone') !== null && c.msg('J', /hors de la zone/) === 1, {distance:Math.round(loin), impacts:c.impacts, issues:c.issues});
+      const Q = prepa({zenith:2, lourd:true}), d = cycleB(Q.gI, Q.cible.x, Q.cible.y, undefined, 29);
+      V('lot B, sans autorisation : rien de tiré ni dépensé, l’impact a lieu', d.p0 && d.p0.reponse === null && d.inter.length === 0 && Q.bZ.para.stock === 2 && d.impacts.length === 1,
+        {inter:d.inter, impacts:d.impacts});
+      const R = prepa({zenith:2, lourd:true}), tueur = unite('lynx', 'I', R.bZ.x + 150, R.bZ.y);
+      const e = cycleB(R.gI, R.cible.x, R.cible.y, true, 30, (t, A) => { if(t >= 5 && !A.fait){ A.fait = true; infliger(R.bZ, 1e6, tueur); } if(A.fait && A.prop === undefined && t > 5.3) A.prop = propositionEnCours('J'); });
+      V('lot B, Zénith détruite avant le départ : aucun tir, l’impact a lieu, plus de proposition', R.bZ.mort && e.inter.length === 0 && e.impacts.length === 1 && e.A.prop === null,
+        {mort:R.bZ.mort, inter:e.inter, impacts:e.impacts});
+    }
+    // 9. Alliés à pas irréguliers : J (Zénith) manque, K (Zénith, ordinateur) ne tire qu'à la rencontre manquée de J,
+    //    son intercepteur vole 2 s (rencontre vers 7 s de vol) et abat ; J abat : K garde sa munition.
+    for(const [cJ, cK, graine] of [[0, 100, 31], [0, 100, 32], [100, 0, 33]]){
+      const P = prepa({zenith:2, lourd:true}), bK = poser('zenith', 'K', {x:P.cible.x, y:P.cible.y + 200});
+      bK.para.stock = 2;
+      forcees = {J:cJ, K:cK};
+      const c = cycleB(P.gI, P.cible.x, P.cible.y, true, graine);
+      forcees = {};
+      const m = c.missiles[0] || {}, pK = camps.K.interception && Object.values(camps.K.interception.propositions)[0];
+      if(cJ === 0) V('lot B, alliés à pas irréguliers (graine ' + graine + ') : J manque ; K tire à la rencontre manquée de J (5 s de vol), intercepteur de 2 s, abat vers 7 s de vol ; aucun impact ; J lit « réussie »',
+        pK && pK.genre === 'zenith' && c.inter.length === 2 && c.inter[0].camp === 'J' && !c.inter[0].reussi && c.inter[1].camp === 'K' && c.inter[1].reussi && c.inter[1].lourd
+        && dansPas(c.inter[1].t - m.t, 5) && Math.abs(c.inter[1].duree - 2) < 0.011 && dansPas(m.abattuA, 7) && c.impacts.length === 0
+        && P.bZ.para.stock === 1 && bK.para.stock === 1 && c.issues[c.issues.length - 1][1] === 'reussie' && c.msg('J', /Notre allié a abattu/) === 1,
+        {inter:c.inter, missile:m, impacts:c.impacts, issues:c.issues, stocks:[P.bZ.para.stock, bK.para.stock]});
+      else V('lot B, alliés : J abat à 5 s, K n’a pas à tirer (munition gardée) et compte le missile abattu par son allié',
+        c.inter.length === 1 && c.inter[0].camp === 'J' && c.impacts.length === 0 && bK.para.stock === 2 && camps.K.interception && Object.values(camps.K.interception.resultats)[0].parAllie === 1,
+        {inter:c.inter, stockK:bK.para.stock});
+    }
+    // 10. Ordinateur face au lot B (sans en jouer lui-même, étape 1) : il autorise s'il a une munition de Zénith, refuse
+    //     sinon ; une partie courte où il subit un tir lourd se déroule sans erreur, réserves jamais négatives.
+    {
+      const P = prepa({lourd:true}), bK = poser('zenith', 'K', {x:P.cible.x, y:P.cible.y + 200});
+      bK.para.stock = 0;
+      executerOrdre('I', {type:'tirGalerie', id:P.gI.id, x:P.cible.x, y:P.cible.y});
+      const pK0 = Object.values(camps.K.interception.propositions)[0];
+      scene();
+      const qK = qg('K'), gI = poser('terrier', 'I'), zK = poser('zenith', 'K'); zK.para.stock = 1; gI.gal.lourd = 1;
+      executerOrdre('I', {type:'tirGalerie', id:gI.id, x:qK.x, y:qK.y});
+      const pK1 = Object.values(camps.K.interception.propositions)[0];
+      poser('usine', 'K', {x:qK.x, y:qK.y - 220}); poser('parasol', 'K', {x:qK.x + 200, y:qK.y});
+      confierAOrdinateur('K', 'difficile'); confierAOrdinateur('I', 'ultra');
+      etatIA('K').premiereVague = Infinity; etatIA('I').premiereVague = Infinity;
+      let resMin = Infinity, erreur = null;
+      try { for(let k = 0; k < Math.round(60/DT); k++){ miseAJour(DT); for(const id of ['I', 'K']) resMin = Math.min(resMin, camps[id].reserves); } }
+      catch(err){ erreur = err.message; }
+      V('lot B, ordinateur : autorise la Zénith s’il a une munition, refuse sinon ; 60 s de jeu après un tir lourd (Difficile et Ultra) sans erreur, réserves ≥ 0',
+        pK0 && pK0.reponse === false && pK0.genre === 'zenith' && pK1 && pK1.reponse === true && erreur === null && resMin >= 0, {sansMunition:pK0 && pK0.reponse, avecMunition:pK1 && pK1.reponse, erreur, resMin:Math.round(resMin)});
+    }
+    // 11. Case décochée, en ligne réglage décoché (refus), en ligne réglage coché (listes, code réseau, table), mission.
+    //     (22 novembre 2026, étape « jeu en ligne » : le lot B passe en ligne au choix de l'hôte.)
+    scene();
+    {
+      const q = qg('J'), o = unite('technicien', 'J', q.x, q.y + 110);
+      poser('usine', 'J', {x:q.x, y:q.y - 220});
+      const z = poser('zenith', 'J'), gJ = poser('aiguille', 'J');
+      const pc = trouverEmplacement('zenith', {x:q.x + 300, y:q.y + 250});
+      z.mort = true;   // (pour que la limite d'une par camp ne masque pas le refus de construction)
+      const photo0 = photoEtat(), res = [], galEnLigneAvant = galeriesEnLigne;
+      for(const [opt, mr, rm] of [[false, null, null], [true, 'hote', 'hote'], [true, 'invite', 'invite'], [true, 'echo', null]]){
+        optionGaleries = opt; modeReseau = mr; roleMonde = rm; galeriesEnLigne = false;
+        const a = executerOrdre('J', {type:'fabriquerMissileLourd', id:gJ.id});
+        z.mort = false; const m = executerOrdre('J', {type:'fabriquerMunition', id:z.id}); z.mort = true;
+        const c = mr === 'invite' ? null : executerOrdre('J', {type:'construire', bat:'zenith', c:pc.c, r:pc.r, ouvrierIds:[o.id]});
+        const listes = ['halden', 'karsk'].map(f => batimentsConstructibles(FACTIONS[f]));
+        res.push({mode:mr, actif:galeriesActives(), lourd:a.ok ? 'ACCEPTÉ' : a.motif, munition:m.ok ? 'ACCEPTÉ' : m.motif,
+          construire:c ? (c.ok ? 'ACCEPTÉ' : c.motif) : '-', zenithAbsente:listes.every(l => !l.includes('zenith'))});
+        optionGaleries = true; modeReseau = reseauAvant; roleMonde = roleAvant; galeriesEnLigne = galEnLigneAvant;
+      }
+      const inchange = photoEtat() === photo0;
+      const coche = [];
+      for(const [mr, rm] of [['hote', 'hote'], ['invite', 'invite'], ['echo', null]]){
+        modeReseau = mr; roleMonde = rm; galeriesEnLigne = true;
+        coche.push({mode:mr, actif:galeriesActives(), listes:['halden', 'karsk'].every(f => batimentsConstructibles(FACTIONS[f]).slice(-1)[0] === 'zenith')});
+        modeReseau = reseauAvant; roleMonde = roleAvant; galeriesEnLigne = galEnLigneAvant;
+      }
+      z.mort = false;
+      const table = tablesReseau().batiments, om = ordreVersReseau({type:'fabriquerMissileLourd', id:gJ.id});
+      V('lot B, case décochée et en ligne réglage décoché (hôte, invité, écho) : missile lourd, munition de Zénith et Zénith refusés, Zénith absente des listes ; état inchangé',
+        res.every(r => !r.actif && r.lourd === MOTIF_SANS_GALERIES && r.munition === MOTIF_SANS_GALERIES && r.construire !== 'ACCEPTÉ' && r.zenithAbsente) && inchange, {res});
+      V('lot B, en ligne réglage coché : Zénith dans les listes ; code réseau fabLourd dans les deux sens ; Zénith en dernier dans la table des bâtiments (indices d’avant inchangés)',
+        coche.every(c => c.actif && c.listes) && om && om.o === 'fabLourd' && om.id === gJ.id && ordreDepuisReseau(om).type === 'fabriquerMissileLourd'
+        && table[table.length - 1] === 'zenith' && table.join() === Object.keys(BATIMENTS).join(), {coche, om, table:table.slice(-4)});      V('lot B, mission : Zénith réservée à l’escarmouche', RESERVES_ESCARMOUCHE.batiments.has('zenith') && /!MISSION/.test(String(galeriesActives)), String(galeriesActives));
+    }
+  }
+
+  // ----------------------------------------------------------------- ordinateur, lot B (22 novembre 2026, cahier § 12.6)
+  // Situations posées à la main, appels directs des fonctions de l'ordinateur (déterministe, court).
+  function essaisOrdinateurLotB(){
+    const batsDe = id => ents.filter(e => e.camp === id && e.est === 'batiment' && !e.mort);
+    // 1. Commande du lourd (fabriquerMissileIA) : I (Karsk) face à J, qui a une Parasol terminée et pas de Zénith.
+    const essaiCommande = (niveau, reserves, avecParasol) => {
+      scene();
+      confierAOrdinateur('I', niveau); etatIA('I').active = false;
+      const gI = poser('terrier', 'I');
+      if(avecParasol) poser('parasol', 'J');
+      camps.I.reserves = reserves;
+      const r0 = camps.I.reserves;
+      fabriquerMissileIA(camps.I, batsDe('I'), 0);
+      return {niveau, reserves, avecParasol, fabLourd:gI.gal.fabLourd, fabLeger:gI.gal.fab, paye:r0 - camps.I.reserves};
+    };
+    const cas = [essaiCommande('difficile', 5000, true), essaiCommande('ultra', 5000, true), essaiCommande('difficile', 1000, true), essaiCommande('normal', 5000, true), essaiCommande('facile', 5000, true)];
+    V('ordinateur lot B : Difficile et Ultra commandent un lourd (800) galerie vide, réserves suffisantes, Parasol adverse sans Zénith ; pas sous 800 + 300 (léger à la place) ; Normale : léger ; Facile : rien',
+      cas[0].fabLourd === 1 && cas[0].paye === 800 && cas[1].fabLourd === 1 && cas[2].fabLourd === 0 && cas[2].fabLeger === 1 && cas[3].fabLourd === 0 && cas[3].fabLeger === 1
+      && cas[4].fabLourd === 0 && cas[4].fabLeger === 0, cas);
+    // 2. Justification par la cible, sans Parasol adverse : un groupe de bâtiments serrés (le rayon du lourd en prend
+    //    davantage) le justifie ; une Zénith adverse ne retire pas la justification par la valeur.
+    scene();
+    {
+      confierAOrdinateur('I', 'difficile'); etatIA('I').active = false;
+      const gI = poser('terrier', 'I'), q = qg('J');
+      for(const [dx, dy] of [[-150, 0], [150, 0], [0, 150], [0, -150]]) poser('caserne', 'J', {x:q.x + dx, y:q.y + dy});
+      const G = gI.def.galerie, L = reglagesGalerieIA('I').lourd;
+      const leger = meilleureZoneGalerie('I', G, 2, 0), lourd = meilleureZoneGalerie('I', G.lourd, 1, 0, CYCLE_GALERIE.departs[0] + G.lourd.vol);
+      const ok = lourdJustifieIA('I', G, L);
+      V('ordinateur lot B : justification par la valeur (rayon du lourd contre rayon du léger, facteur 1,5)', ok === (lourd.valeur >= 1.5*leger.valeur) && lourd.valeur > 0,
+        {leger:Math.round(leger.valeur), lourd:Math.round(lourd.valeur), justifie:ok});
+      // 3. Tir du lourd (tirGalerieIA) : un lourd prêt part au rayon du lourd (journal « tirLourd »), cycle lourd.
+      gI.gal.lourd = 1;
+      tirGalerieIA('I', batsDe('I'));
+      const J = memoireGalerieIA('I').journal, t = J.filter(l => l.quoi === 'tirLourd');
+      V('ordinateur lot B : un lourd prêt part (tirGalerieIA), cycle lourd ouvert, cible au rayon du lourd', t.length === 1 && gI.gal.cycleLourd === true && gI.gal.n === 1 && gI.galLourd === true,
+        {journal:J.slice(-2), cycleLourd:gI.gal.cycleLourd});
+    }
+    // 4. Zénith : I a sa galerie, sa Parasol, un radar ; rien avant une ouverture lourde adverse, puis la Zénith et une
+    //    munition (Difficile) ; Normale : jamais. J ouvre sa galerie pour un tir lourd hors de la base de I.
+    const essaiZenith = niveau => {
+      scene();
+      const qI = qg('I');
+      poser('usine', 'I', {x:qI.x, y:qI.y - 220}); poser('terrier', 'I'); const par = poser('parasol', 'I', {x:qI.x + 200, y:qI.y});
+      par.para.stock = 2; poser('radar', 'I', {x:qI.x - 240, y:qI.y + 200});
+      const gJ = poser('aiguille', 'J');
+      confierAOrdinateur('I', niveau); etatIA('I').premiereVague = Infinity;
+      const zen = () => ents.filter(e => e.camp === 'I' && estZenith(e) && !e.mort);
+      pas(60);
+      const avant = zen().length;
+      gJ.gal.lourd = 1;
+      const tir = executerOrdre('J', {type:'tirGalerie', id:gJ.id, x:LARG/2, y:HAUT/2});
+      const vu = !!(etatsIA.I.defense && etatsIA.I.defense.lourdVu);
+      const t = jusqua(() => zen().some(z => !z.enCours) && zen()[0].para.stock + zen()[0].para.fab >= 1, 240);
+      const z = zen()[0];
+      return {niveau, avant, tir:tir.ok, vu, delai:t === null ? null : r1(t), zenith:zen().length, munitions:z ? z.para.stock + z.para.fab : 0,
+        journal:(etatsIA.I.defense || {journal:[]}).journal.map(l => l.t + ' ' + l.quoi + ' ' + (l.type || ''))};
+    };
+    const zD = essaiZenith('difficile'), zN = essaiZenith('normal');
+    V('ordinateur lot B : Difficile bâtit sa Zénith seulement après une ouverture lourde adverse (alerte publique), puis une munition ; Normale jamais',
+      zD.avant === 0 && zD.tir && zD.vu && zD.delai !== null && zD.zenith === 1 && zD.munitions === 1 && zN.avant === 0 && zN.vu && zN.zenith === 0, {difficile:zD, normale:zN});
+    // 5. Ultra : défense légère complète (Parasol, 3 radars, 2 munitions), armée pas en retard → Zénith sans tir lourd vu.
+    scene();
+    {
+      const qI = qg('I');
+      poser('usine', 'I', {x:qI.x, y:qI.y - 220}); poser('terrier', 'I'); const par = poser('parasol', 'I', {x:qI.x + 200, y:qI.y}); par.para.stock = 2;
+      for(const [dx, dy] of [[-240, 200], [240, 200], [0, 300]]) poser('radar', 'I', {x:qI.x + dx, y:qI.y + dy});
+      poser('aiguille', 'J');
+      confierAOrdinateur('I', 'ultra'); etatIA('I').premiereVague = Infinity;
+      // (Ultra, riche, enchaîne les chantiers de son plan ; la défense attend qu'aucun chantier ne soit en cours.)
+      const t = jusqua(() => ents.some(e => e.camp === 'I' && estZenith(e) && !e.mort), 600);
+      V('ordinateur lot B : Ultra bâtit sa Zénith dès sa défense légère complète, sans tir lourd vu', t !== null && !(etatsIA.I.defense && etatsIA.I.defense.lourdVu),
+        {delai:t === null ? null : r1(t), journal:(etatsIA.I.defense || {journal:[]}).journal.map(l => l.t + ' ' + l.quoi + ' ' + (l.type || ''))});
+    }
+  }
+
+  // Parties d'ordinateurs du lot B (testerDefense('lotB'), 22 novembre 2026) : 900 s à graine fixe, case cochée, aucune
+  // erreur, réserves jamais négatives, contrôle anti-triche à 0 ; les comptes (lourds, Zénith) sont rendus dans le
+  // détail, mesurés sans rien forcer.
+  function essaisPartiesLotB(){
+    for(const [nom, graine] of PARTIES_LOT_B){
+      if(typeof numero === 'number' && PARTIES_LOT_B.findIndex(x => x[0] === nom && x[1] === graine) !== numero) continue;
+      const r = partieDefense(nom, graine, 900);
+      const comptes = Object.fromEntries(Object.entries(r.camps).map(([id, c]) => [id, c.niveau + ' ' + c.faction + ' : lourds ' + c.lourdsCommandes + ' commandés, ' + c.lourdsTires + ' tirés ; Zénith ' + (c.zenith.join('/') || '—') +
+        ' ; intercepteurs Zénith ' + c.intercepteurs.zenith]));
+      V('parties lot B ' + nom + ' (graine ' + graine + ', 900 s) : aucune erreur, sans triche (0 / 0), réserves ≥ 0, aucune faute',
+        !r.erreur && r.fautes.length === 0 && Object.values(r.camps).every(c => /^0 \/ 0 \//.test(c.triche) && c.resMin >= 0), {comptes, ligne:ligneDefense(r), fautes:r.fautes});
+    }
+  }
+
   // ----------------------------------------------------------------- parties d'ordinateurs
   // Parties de 900 s à graine fixe, option cochée, où l'ordinateur gère seul galeries et défenses. Graines choisies
   // le 19 novembre 2026 pour que chaque partie montre ce qu'elle doit montrer (sujets : camps qui doivent bâtir leur
@@ -3558,6 +4213,8 @@ window.testerDefense = testerDefense;
 // bâtit batterie et deux radars : la défense déclenchée par un tir subi ; aucun tir après, donc pas d'intercepteur).
 // Vu dans ce relevé et pas corrigé : NH-NK 7 et 8, DH-DK 22, un ordinateur sans galerie subit un ou deux tirs en fin
 // de partie et ne bâtit pas de batterie avant 900 s.
+// Parties du lot B (testerDefense('lotB')) : Difficile contre Difficile, Ultra contre Difficile, quatre camps.
+const PARTIES_LOT_B = [['DH-DK', 1], ['DH-DK', 2], ['UH-DK', 1], ['UK-DH', 1], ['quatre', 1]];
 const PARTIES_DEFENSE = [
   {nom:'DH-DK', graine:24, sujets:['J', 'I'], tir:true},
   {nom:'NH-NK', graine:6, sujets:['J', 'I'], tir:true},

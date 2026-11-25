@@ -24,7 +24,10 @@ la bibliothèque 3D three.js est chargée au démarrage.
   dans le salon) : un abri enterré d'où sortent des lanceurs de
   missiles. Fermé, il est intouchable ; on ne peut le détruire que pendant les
   17,5 secondes où il tire. Pour s'en défendre : la Batterie Parasol et ses
-  radars de veille, qui tentent d'abattre les missiles en vol.
+  radars de veille, qui tentent d'abattre les missiles en vol. La galerie peut
+  aussi fabriquer un missile lourd, plus cher et plus lent, qui vole en haute
+  altitude : seule la Batterie Zénith peut l'arrêter (15 % de chances sans
+  radar, jusqu'à 75 % avec trois).
 - Escarmouche en ligne, de 2 à 4 joueurs (voir plus bas).
 
 Le bouton « Commandes », en jeu, donne la liste des touches. La touche F11 du

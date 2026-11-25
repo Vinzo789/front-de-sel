@@ -162,7 +162,9 @@
       galT:D.galerie ? 7.9 : null,
       // Batterie Parasol (novembre 2026) : photographiée au tir, caisson levé, intercepteur sortant de son
       // alvéole dans sa flamme (b.intT = heure du tir ; les vignettes sont rendues à l'heure 0).
-      intT:type === 'parasol' ? -1.0 : null,
+      // Batterie Zénith (lot B, 22 novembre 2026) : de même, l'intercepteur à peine sorti de son tube, flamme
+      // à la bouche (-0,95 : 0,15 s après le départ du tube ; plus tard, il monterait hors du cadre).
+      intT:type === 'parasol' ? -1.0 : type === 'zenith' ? -0.95 : null,
       dansAura:false, auraT:0, toucheT:-99, nom:null, selectionne:false};
   }
 

@@ -6,7 +6,9 @@
    (Halden), bunker (Karsk) et batterie sol-air (les deux) ; les défenses fixes portent une arme
    animée (anim « arme » : suit b.angleT, recul et lueur de départ via b.tirT). Escarmouche, option
    « Galeries de tir » (novembre 2026) : galeries aiguille (Halden) et terrier (Karsk), Batterie
-   Parasol (parasol) et Radar de veille (radar) pour les deux camps (bloc « DÉFENSE ANTIMISSILE »).
+   Parasol (parasol) et Radar de veille (radar) pour les deux camps (bloc « DÉFENSE ANTIMISSILE ») ;
+   lot B (22 novembre 2026) : Batterie Zénith (zenith) pour les deux camps et missile lourd des
+   galeries (b.galLourd).
 
    Principe : chaque modèle (type × camp) est construit UNE fois par un
    « bâtisseur » qui fusionne des primitives en quelques géométries à couleurs
@@ -2409,8 +2411,41 @@
       M.cylH('opaque', '#18191a', 0, 0, 1.1, rM*0.72, 1.8, 'z', 10);
       const e = rM + 1.1;
       for(const [x, y, sx, sy] of [[e, 0, 3.4, 0.35], [-e, 0, 3.4, 0.35], [0, e, 0.35, 3.4], [0, -e, 0.35, 3.4]]) M.piece('opaque', gBoite(), pointe, x, y, 4.8, sx, sy, 5.4, 0, 0, 0, {ao:0});
+      // Missile LOURD (22 novembre 2026, lot B, cahier § 12.1 ; modèle validé par le propriétaire sur la maquette
+      // travaux/galerie/r3d-batiments-d.js, repris tel quel) : même chariot, même berceau, choisi par b.galLourd.
+      // Nettement plus gros, il se dresse à la VERTICALE (voir majBatiment) : l'adversaire doit le reconnaître dès
+      // la sortie du lanceur (l'alerte d'ouverture le nomme). Halden : deux étages blancs, coiffe graphite, bandes
+      // de camp ; Karsk : court et ventru, olive, coiffe rouge. Empennage en croix de Saint-André : couché, il
+      // passe sous le linteau du portail (15 de haut).
+      const G = new Bati(0, 'opaque');
+      const rG = K ? 4.6 : 4.1, yG = 3.6;
+      const cyG = (coul, za, zb, r, k) => G.piece('opaque', gCyl(16, k || 1), coul, 0, 0, (za + zb)/2, 2*r, zb - za, 2*r, Math.PI/2, 0, 0, {ao:0});
+      cyG('#18191a', -1, 0.6, rG*0.7);                                                   // tuyère
+      let lG;
+      if(K){
+        cyG(corpsM, 0.5, 26, rG); cyG('#2a2d30', 6.5, 8, rG + 0.12);
+        cyG(P.ligne, 19.4, 20.6, rG + 0.12); cyG(P.accent, 21.2, 25.2, rG + 0.14);
+        cyG(P.accentF, 26, 27.2, rG + 0.1);
+        G.piece('opaque', gCone(16), P.accent, 0, 0, 27.2 + 4.6, 2*rG, 9.2, 2*rG, Math.PI/2, 0, 0, {ao:0});
+        lG = 36.4;
+      } else {
+        cyG(corpsM, 0.5, 20, rG); cyG('#2a2d30', 5.6, 7, rG + 0.12);
+        cyG(P.accent, 13, 16.2, rG + 0.12); cyG(P.accent, 17.4, 18.4, rG + 0.12);
+        cyG('#2a2d30', 20, 21.4, rG + 0.15);                                             // jupe entre les deux étages
+        cyG(corpsM, 21.4, 33, rG, 0.82); cyG(P.accent, 28.6, 30.4, rG*0.88 + 0.1, 0.97);
+        G.piece('opaque', gCone(16), pointe, 0, 0, 33 + 6, 2*rG*0.82, 12, 2*rG*0.82, Math.PI/2, 0, 0, {ao:0});
+        lG = 45;
+      }
+      const eG = rG + (K ? 1.15 : 1.3), lA = K ? 2.3 : 2.6;
+      for(let k = 0; k < 4; k++){
+        const a = Math.PI/4 + k*Math.PI/2;
+        G.piece('opaque', gBoite(), K ? P.accentF : pointe, Math.cos(a)*eG, Math.sin(a)*eG, 4.4, lA, 0.5, 7.2, 0, 0, a, {ao:0});
+      }
+      // retraitLourd : le missile lourd, plus long, part de plus loin dans la butte (fermée, sa pointe reste
+      // derrière le rideau) ; sorti, le chariot s'arrête au même endroit que pour le léger.
       m.anims.push({type:'galerie', role:'chariot', rang, x:xc, y:1.5, z:z0, course:42 - z0, levee:1.36, bati:C,
-        enfant:{x:0, y:4.9, z:-4, bati:R, eclair:{x:0, y:3.9, z:0, bati:M}}});
+        retraitLourd:Math.max(0, lG - (2 + lM + lP)) + 1,
+        enfant:{x:0, y:4.9, z:-4, bati:R, eclair:{x:0, y:3.9, z:0, bati:M}, lourd:{x:0, y:yG, z:0, bati:G}}});
     });
     reduireModele(m, 0.9);
   }
@@ -2422,11 +2457,12 @@
     reduireBati(m.statique, k);
     m.corps = m.corps.map(v => v*k); m.points = m.points.map(p => p.map(v => v*k)); m.cheminees = m.cheminees.map(p => p.map(v => v*k));
     for(const a of m.anims){
-      a.x *= k; a.y *= k; a.z *= k; if(a.course) a.course *= k; if(a.bati) reduireBati(a.bati, k);
+      a.x *= k; a.y *= k; a.z *= k; if(a.course) a.course *= k; if(a.retraitLourd) a.retraitLourd *= k; if(a.bati) reduireBati(a.bati, k);
       const e = a.enfant;
       if(!e) continue;
       e.x *= k; e.y *= k; e.z *= k; if(e.bati) reduireBati(e.bati, k);
       if(e.eclair){ e.eclair.x *= k; e.eclair.y *= k; e.eclair.z *= k; if(e.eclair.bati) reduireBati(e.eclair.bati, k); }
+      if(e.lourd){ e.lourd.x *= k; e.lourd.y *= k; e.lourd.z *= k; if(e.lourd.bati) reduireBati(e.lourd.bati, k); }   // missile lourd (lot B)
     }
   }
   // Pose de la galerie à l'instant b.galT de son cycle (hors cycle : fermée).
@@ -2450,8 +2486,9 @@
   // Modèles validés par le propriétaire le 19 novembre 2026 (maquette travaux/galerie/r3d-batiments-d.js),
   // un par camp :
   //   « Batterie Parasol » (type parasol, 2 × 2 cases = 80 × 80) : antimissile de courte portée ;
-  //   « Radar de veille »  (type radar, 1 × 1 case = 40 × 40) : jusqu'à trois par camp.
-  // (La « Batterie Zénith » et le missile lourd de la maquette appartiennent au lot B : non repris ici.)
+  //   « Radar de veille »  (type radar, 1 × 1 case = 40 × 40) : jusqu'à trois par camp ;
+  //   « Batterie Zénith »  (type zenith, 2 × 2 cases) : haute altitude, contre le missile lourd (lot B,
+  //                        portée le 22 novembre 2026 depuis la même maquette).
   // Air de famille voulu : chaque intercepteur dépasse de son alvéole par une coiffe conique à la
   // couleur du camp (bleu Halden, rouge Karsk). C'est ce qui les sépare de la batterie mixte (canon,
   // quatre ogives orange, 1 × 1 case) et des galeries (un engin long couché sur rails, butte de terre).
@@ -2742,9 +2779,137 @@
   function radarHalden(m, P){ radarVeille(m, P, false); }
   function radarKarsk(m, P){ radarVeille(m, P, true); }
 
+  // --------------------------------------------------- BATTERIE ZÉNITH (lot B, les deux camps)
+  // Antimissile de haute altitude, contre le missile lourd (cahier des charges § 12.2). Modèle validé par le
+  // propriétaire (maquette travaux/galerie/r3d-batiments-d.js), porté tel quel le 22 novembre 2026 : plus haute
+  // et plus imposante que la Parasol, pour qu'on ne confonde pas les deux batteries (elles ne tirent pas sur le
+  // même missile). Socle élevé (carré pour Halden, hexagonal pour Karsk), gros intercepteurs en tubes : quatre
+  // tubes verticaux serrés en faisceau pour Halden, trois tubes de front, penchés et étayés, pour Karsk ; mât de
+  // service en treillis. Même animation « lanceur » que la Parasol (b.intT, b.angleT), sans mouvement de levée
+  // (elevRepos = elevTir) : les tubes sont déjà pointés vers le ciel. L'intercepteur file sur DEPART_ZENITH (course)
+  // puis r3d-effets.js prend le relais au bout de cette course : les deux fichiers doivent rester d'accord
+  // (ZENITH_BOUCHE de r3d-effets.js).
+  function zenith(m, P, K){
+    const B = m.statique, h0 = 1.5;
+    const beton = K ? P.beton : '#b4b0a4', beton2 = K ? P.beton2 : '#98958a';
+    const coque = K ? P.olive : P.panneau, coque2 = K ? P.oliveF : P.panneau2, sombre = K ? '#3a3a30' : P.acierF;
+    const acier = K ? '#4a4a3a' : P.acier, noir = K ? '#15150f' : '#1b2024';
+    dalle(B, P, 37, h0);
+    const hs = K ? 6.5 : 8;
+    const T = new Bati(0), C = new Bati(0);
+    let M, el, ex, ey, ez, ox;
+    T.cyl('metal', sombre, 0, 0, 0, 13, 1.4, 20, {ao:0});
+    T.cyl('metal', acier, 0, 1.4, 0, 11, 0.8, 20, {ao:0});
+    if(!K){
+      // Socle carré à pans coupés, liseré lumineux, emmarchement au sud
+      B.piece('opaque', gPyr(0.9), beton, 0, (h0 + hs - 1)/2, 0, 50, hs - 1 - h0, 50, 0, 0, 0, {ao:0.35});
+      B.boite('emis', P.accent, -22.7, hs - 1, -22.7, 22.7, hs - 0.55, 22.7, {ao:0});
+      B.boite('opaque', beton2, -22.2, hs - 0.55, -22.2, 22.2, hs, 22.2, {ao:0});
+      for(let i = 0; i < 4; i++) B.boite('opaque', beton2, -5, h0, 22 + i*2.2, 5, hs - (i + 1)*(hs - h0)/5, 24.2 + i*2.2, {ao:0.2});
+      for(const [x, z] of [[-17, 0], [17, 0], [0, -17], [0, 17]]) B.boiteC('opaque', '#e8c23a', x, hs + 0.05, z, Math.abs(x) ? 1 : 9, 0.1, Math.abs(z) ? 1 : 9, 0, {ao:0});
+      B.decal(15.5, hs + 0.06, 15.5, 8, 8, R_EMBLEME);
+      // Mât de service en treillis (angle nord-ouest du socle), passerelle, feu d'obstacle
+      treillis(B, 'metal', [P.acierC, P.acierC, P.acierC, P.acierC, P.acierC, P.accent], -16.5, -16.5, hs, 42, 5.2, 3.6, 6, 0.45);
+      B.boiteC('metal', P.acierF, -16.5, 42.3, -16.5, 5.4, 0.6, 5.4, 0, {ao:0});
+      B.boiteC('feux', '#ff3626', -16.5, 43.4, -16.5, 1.4, 1.4, 1.4);
+      B.poutre('metal', P.acierF, -15, 30, -15, -8.5, 30, -8.5, 1.4);
+      // Réservoirs et groupe froid (bande est), cabine de contrôle (bande ouest)
+      for(const z of [-22, -8]){
+        B.cylH('opaque', P.panneau, 31.5, h0 + 4.2, z, 3.6, 12, 'z', 14);
+        B.cylH('opaque', P.accent, 31.5, h0 + 4.2, z - 3, 3.72, 1.4, 'z', 14);
+        for(const dz of [-4, 4]) B.boite('metal', P.acierF, 28.8, h0, z + dz - 0.5, 34.2, h0 + 2, z + dz + 0.5, {ao:0});
+      }
+      B.boite('opaque', P.panneau2, 27.5, h0, 6, 35.5, 7, 20, {ao:0.25});
+      for(let z = 7.5; z < 19; z += 2.4) B.boite('metal', P.acierC, 27.2, 3, z, 27.5, 6, z + 1.4, {ao:0});
+      B.boite('opaque', P.toit, 27.2, 7, 5.7, 35.8, 7.5, 20.3, {ao:0});
+      B.boite('opaque', P.panneau, -35.5, h0, -10, -27.5, 8.6, 8, {ao:0.25});
+      B.boite('vitre', P.vitre, -27.5, 5.2, -8, -27.2, 7.6, 6);
+      B.boite('opaque', P.toit, -35.9, 8.6, -10.4, -27.1, 9.2, 8.4, {ao:0});
+      B.boite('opaque', P.accent, -28.6, 9.2, -10.4, -27.1, 9.45, 8.4, {ao:0});
+      lampadaire(B, -31, 26, 13, P.lumiere, P.acierC, h0);
+      // Table de lancement (sur la couronne)
+      T.boite('metal', coque2, -9.6, 2.2, -9.6, 9.6, 3.6, 9.6, {ao:0.15});
+      T.boite('opaque', P.accent, -9.7, 2.7, -9.7, 9.7, 3.2, 9.7, {ao:0});
+      // Faisceau de quatre tubes verticaux (axe +X du caisson, dressé à la verticale)
+      const rt = 3.7, d = 4.3, L = 30.5;
+      for(const y of [-d, d]) for(const z of [-d, d]){
+        C.cylH('opaque', coque, 0.5 + L/2, y, z, rt, L, 'x', 16);
+        C.cylH('opaque', P.accent, 25.6, y, z, rt + 0.12, 2.6, 'x', 16);
+        C.cylH('metal', noir, 9.4, y, z, rt + 0.1, 0.9, 'x', 16);
+        C.cylH('metal', noir, 31.05, y, z, rt - 0.4, 0.25, 'x', 16);
+        if(!(y < 0 && z > 0)) C.piece('opaque', gCone(14), P.accent, 32.2, y, z, 6.4, 4.6, 6.4, 0, 0, -Math.PI/2, {ao:0});
+      }
+      for(const x of [4, 18.5]) C.boite('metal', sombre, x, -8.4, -8.4, x + 1.1, 8.4, 8.4, {ao:0});      // colliers
+      C.boite('metal', coque2, 0, -1.2, -1.2, 30, 1.2, 1.2, {ao:0});
+      C.boite('metal', sombre, 0, -8.8, -8.8, 0.7, 8.8, 8.8, {ao:0});
+      el = Math.PI/2; ox = 0; ex = 31.2; ey = -d; ez = d;
+      M = intercepteur(2.6, 17, 1, 6.4, 4.6, 11, '#eef0f1', P.accent, '#2f353b', 0.9);
+      m.corps = [-22, -22, 22, 22, 30];
+      m.points = [[0, 30, 0], [-16.5, 30, -16.5], [31, 8, 12]];
+    } else {
+      // Socle hexagonal de béton, bandeau rouge, sacs de sable sur le pourtour (ouvert au sud)
+      B.cyl('opaque', beton, 0, h0, 0, 27, hs - 1 - h0, 6, {plat:true, effile:0.85, ao:0.35});
+      B.cyl('opaque', P.accent, 0, hs - 1, 0, 23.1, 0.6, 6, {plat:true, ao:0});
+      B.cyl('opaque', beton2, 0, hs - 0.4, 0, 22.8, 0.4, 6, {plat:true, ao:0});
+      for(let k = 0; k < 6; k++){
+        const a0 = k*Math.PI/3 + Math.PI/6 + 0.1, a1 = (k + 1)*Math.PI/3 + Math.PI/6 - 0.1, r = 20;
+        if(k === 0 || k === 1) continue;      // côtés sud-est et sud-ouest dégagés
+        sacs(B, Math.cos(a0)*r, Math.sin(a0)*r, Math.cos(a1)*r, Math.sin(a1)*r, 2, hs - 0.1);
+      }
+      B.decal(0, hs + 0.06, 15.5, 7, 7, R_EMBLEME);
+      // Mât de service en treillis (nord-est du socle), plateforme, projecteur
+      treillis(B, 'metal', [P.olive, P.oliveF, P.olive, P.oliveF, P.olive, P.accent], 12, -13, hs, 41, 5.6, 4, 6, 0.5);
+      B.boiteC('metal', sombre, 12, 41.3, -13, 6, 0.6, 6, 0, {ao:0});
+      B.boiteC('feux', '#ff3626', 12, 42.3, -13, 1.4, 1.4, 1.4);
+      B.poutre('metal', sombre, 10.5, 29, -11.5, 4, 29, -5, 1.3);
+      // Baraque de tôle (bande ouest), intercepteur de rechange sur remorque et fûts (bande est)
+      B.boite('opaque', P.tole, -36, h0, -14, -27, 6.8, 2, {ao:0.3});
+      B.boite('opaque', P.accent, -27.1, 5.6, -14.1, -26.9, 6.4, 2.1, {ao:0});
+      B.boite('opaque', noir, -27, h0, -8, -26.92, 5.2, -5, {ao:0});
+      toleOndulee(B, 'metal', P.tole, P.tole2, -36.6, -14.6, -26.4, 2.6, 6.8);
+      sacs(B, -36, 4, -27, 4, 2, h0);
+      B.boite('metal', sombre, 28, h0 + 1.2, -16, 35, h0 + 2, 6, {ao:0});
+      for(const z of [-12, 2]) for(const x of [28.6, 34.4]) B.piece('opaque', gCyl(10, 1), '#1e1f20', x, h0 + 1.3, z, 2.6, 1, 2.6, 0, 0, Math.PI/2, {ao:0});
+      B.cylH('opaque', '#7a7852', 31.5, h0 + 4.9, -6, 2.9, 17, 'z', 14);
+      B.piece('opaque', gCone(14), P.accent, 31.5, h0 + 4.9, 5, 6, 5, 6, Math.PI/2, 0, 0, {ao:0});
+      fut(B, 30, h0, 14, P.olive); fut(B, 33, h0, 16.4, P.rouille); caisse(B, 30.5, h0, 21, 3, P.olive, 0.2);
+      // Table de lancement et étais du berceau (sur la couronne)
+      T.boite('metal', coque2, -10, 2.2, -11.5, 6, 3.4, 11.5, {ao:0.15});
+      T.boite('opaque', P.accent, -10.1, 2.6, -11.6, 6.1, 3, 11.6, {ao:0});
+      el = 1.45; ox = -2;
+      const ce = Math.cos(el), se = Math.sin(el), ax = ox + 22*ce - 4.6*se, ay = 3.4 + 22*se + 4.6*ce;
+      for(const s of [-1, 1]){ T.poutre('metal', sombre, -10.5, 2, s*9, ax, ay, s*9, 1); T.poutre('metal', sombre, -10.5, 2, s*9, ox + 10.5*ce - 4.6*se, 3.4 + 10.5*se + 4.6*ce, s*9, 0.7); }
+      // Trois gros tubes de front sur un berceau à longerons (axe +X du caisson, penché de 83°)
+      const rt = 3.9, tz = [-8.3, 0, 8.3], L = 32;
+      for(const z of tz){
+        C.cylH('opaque', coque, 0.5 + L/2, 0, z, rt, L, 'x', 16);
+        C.cylH('opaque', P.accent, L - 4.7, 0, z, rt + 0.12, 2.6, 'x', 16);
+        C.cylH('metal', noir, 8.6, 0, z, rt + 0.1, 0.9, 'x', 16);
+        C.cylH('metal', noir, L + 0.55, 0, z, rt - 0.4, 0.25, 'x', 16);
+        if(z !== tz[2]) C.piece('opaque', gCone(14), P.accent, L + 1.8, 0, z, 6.8, 4.8, 6.8, 0, 0, -Math.PI/2, {ao:0});
+      }
+      for(const s of [-1, 1]) C.boite('metal', coque2, 0, 3.6, s*10.4 - 0.6, L - 1.5, 4.9, s*10.4 + 0.6, {ao:0});     // longerons (au dos)
+      for(const x of [3, 10.5, 22]) C.boite('metal', coque2, x, 3.2, -12.4, x + 1.1, 5.2, 12.4, {ao:0});      // traverses
+      for(const x of [10.5, 22]) for(const s of [-1, 1]) C.boite('metal', coque2, x, -4.2, s*12.3 - 0.35, x + 1.1, 4, s*12.3 + 0.35, {ao:0});
+      C.boite('metal', sombre, -0.3, -4.4, -12.6, 0.7, 5.2, 12.6, {ao:0});
+      ex = L + 0.7; ey = 0; ez = tz[2];
+      M = intercepteur(2.8, 17, 1.1, 6.8, 4.8, 10, '#7a7852', P.accent, P.accentF, 0.8);
+      m.corps = [-22, -22, 22, 22, 30];
+      m.points = [[0, 30, 0], [12, 30, -13], [-31, 7, -6]];
+    }
+    m.anims.push({type:'lanceur', x:0, y:hs, z:0, bati:T, elevRepos:el, elevTir:el, course:DEPART_ZENITH.course, hMax:hs + 3.4 + 38,
+      enfant:{x:ox, y:3.4, z:0, bati:C, eclair:{x:ex, y:ey, z:ez, bati:M}}});
+  }
+  // Course de l'intercepteur de la Zénith le long de son tube, avant que r3d-effets.js ne le prenne en charge
+  // (22 novembre 2026). La maquette disait 130 ; gardé : il sort franchement du faisceau, droit vers le ciel.
+  const DEPART_ZENITH = {course:130};
+  function zenithHalden(m, P){ zenith(m, P, false); }
+  function zenithKarsk(m, P){ zenith(m, P, true); }
+
   const FABRIQUES = {
     aiguille:{halden:galerieHalden}, terrier:{karsk:galerieKarsk},
     parasol:{halden:parasolHalden, karsk:parasolKarsk}, radar:{halden:radarHalden, karsk:radarKarsk},
+    zenith:{halden:zenithHalden, karsk:zenithKarsk},
     qg:{halden:qgHalden, karsk:qgKarsk}, caserne:{halden:caserneHalden, karsk:caserneKarsk},
     usine:{halden:usineHalden, karsk:usineKarsk}, relais:{halden:relaisHalden, karsk:relaisHalden},
     depot:{halden:depotKarsk, karsk:depotKarsk},
@@ -2792,6 +2957,7 @@
       if(a.enfant && a.enfant.bati) a.enfant.geos = a.enfant.bati.construire();
       // Lueur de départ (hors hauteur du chantier) : n'existe qu'au tir
       if(a.enfant && a.enfant.eclair) a.enfant.eclair.geos = a.enfant.eclair.bati.construire();
+      if(a.enfant && a.enfant.lourd) a.enfant.lourd.geos = a.enfant.lourd.bati.construire();   // missile lourd des galeries (lot B)
     }
     // Hauteur totale (fin du chantier) : les marquages et les lumières de nuit (halos, faisceaux) ne comptent pas.
     m.hMax = 0;
@@ -2925,10 +3091,18 @@
         eclair = new THREE.Group(); eclair.position.set(E.x, E.y, E.z); eclair.scale.setScalar(0.001);
         enfant.add(eclair); ajouter(eclair, E.geos);
       }
-      // Batterie Parasol : pose de repos dès l'instanciation (le fantôme de placement n'est pas animé par
+      // Missile lourd de la galerie (lot B, 22 novembre 2026) : groupe masqué tant que b.galLourd ne le choisit
+      // pas (un groupe masqué ne coûte aucun appel de dessin : la galerie sans lourd coûte ce qu'elle coûtait).
+      let lourd = null;
+      if(enfant && a.enfant.lourd && a.enfant.lourd.geos){
+        const G = a.enfant.lourd;
+        lourd = new THREE.Group(); lourd.position.set(G.x, G.y, G.z); lourd.visible = false;
+        enfant.add(lourd); ajouter(lourd, G.geos);
+      }
+      // Batteries Parasol et Zénith : pose de repos dès l'instanciation (le fantôme de placement n'est pas animé par
       // majBatiment : sans cela, son caisson resterait couché et son intercepteur invisible).
       if(a.type === 'lanceur'){ p.rotation.y = -Math.PI/2; if(enfant) enfant.rotation.z = a.elevRepos; if(eclair) eclair.scale.setScalar(1); }
-      return {def:a, pivot:p, enfant, eclair};
+      return {def:a, pivot:p, enfant, eclair, lourd};
     });
     return {groupe:g, meshes, anims};
   }
@@ -3108,14 +3282,21 @@
           // Lanceur dessiné seulement quand il sort : fermé, il est enfoui dans la butte (12 appels de dessin
           // gagnés par Terrier fermé) ; en chantier, la coupe le laisserait voir.
           a.pivot.visible = actif && g.t >= 0 && !s.chantier;
-          a.pivot.position.z = d.z + d.course*(actif ? g.sortie : 0);
-          if(a.enfant) a.enfant.rotation.x = -d.levee*(actif ? g.levee : 0);
-          if(a.eclair) a.eclair.scale.setScalar(actif && g.t >= CYCLE_GALERIE.depart + CYCLE_GALERIE.ecart*d.rang ? 0.001 : 1);
+          // Lot B (22 novembre 2026) : b.galLourd (vrai pendant tout un cycle de tir lourd) choisit le missile lourd.
+          // Plus long, il part de plus loin dans la butte (retraitLourd) et se dresse à la VERTICALE ; sorti, le
+          // chariot s'arrête au même endroit. Sans ce champ : exactement la pose d'avant.
+          const lourd = b.galLourd === true && !!a.lourd, zr = d.z - (lourd ? d.retraitLourd || 0 : 0);
+          a.pivot.position.z = zr + (d.z + d.course - zr)*(actif ? g.sortie : 0);
+          if(a.enfant) a.enfant.rotation.x = -(lourd ? Math.PI/2 : d.levee)*(actif ? g.levee : 0);
+          const parti = actif && g.t >= CYCLE_GALERIE.depart + CYCLE_GALERIE.ecart*d.rang;
+          if(a.eclair){ a.eclair.visible = !lourd; a.eclair.scale.setScalar(parti ? 0.001 : 1); }
+          if(a.lourd){ a.lourd.visible = lourd; a.lourd.scale.setScalar(parti ? 0.001 : 1); }
         }
       }
       else if(d.type === 'lanceur'){
-        // Batterie Parasol : le pivot suit b.angleT, le caisson se lève pour tirer (b.intT = heure du
-        // tir), l'intercepteur file le long de son axe puis disparaît jusqu'à la fin du cycle.
+        // Batteries Parasol et Zénith : le pivot suit b.angleT, le caisson se lève pour tirer (b.intT = heure du
+        // tir ; la Zénith ne se lève pas, elevRepos = elevTir), l'intercepteur file le long de son axe puis
+        // disparaît jusqu'à la fin du cycle.
         const p = poseLanceur(temps - b.intT), ang = Number.isFinite(b.angleT) ? b.angleT : Math.PI/2;
         const elev = d.elevRepos + (d.elevTir - d.elevRepos)*p.levee;
         a.pivot.rotation.y = -ang;
@@ -3483,7 +3664,7 @@
         for(const a of m.anims){
           if(a.type === 'drapeau') poser(geoDrapeau(m.base).g, materiau('drapeau', fac, 'normal'), true);
           if(!(AF && AF.anims.has(a))) poserGeos(a.geos, fac);
-          if(a.enfant){ poserGeos(a.enfant.geos, fac); if(a.enfant.eclair) poserGeos(a.enfant.eclair.geos, fac); }
+          if(a.enfant){ poserGeos(a.enfant.geos, fac); if(a.enfant.eclair) poserGeos(a.enfant.eclair.geos, fac); if(a.enfant.lourd) poserGeos(a.enfant.lourd.geos, fac); }
         }
         const E = m.echafaudage;
         if(E){ poserGeos(E.echaf, fac); poserGeos(E.niveau, fac); poserGeos(E.mat, fac); poserGeos(E.fleche, fac); }

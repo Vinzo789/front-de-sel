@@ -76,7 +76,8 @@ const REGLAGES = {
   pseudoMax:16,
   equipesMax:4,
   // (20 novembre 2026, galeries de tir et défense antimissile en ligne : fabMissile, tirGalerie, fabMunition, repInter.)
-  typesOrdres:['aller', 'droit', 'attaqueDep', 'arreter', 'rally', 'batir', 'produire', 'retirer', 'pouvoir', 'fabMissile', 'tirGalerie', 'fabMunition', 'repInter'],
+  // (22 novembre 2026, lot B de la défense antimissile : fabLourd, commande d'un missile lourd.)
+  typesOrdres:['aller', 'droit', 'attaqueDep', 'arreter', 'rally', 'batir', 'produire', 'retirer', 'pouvoir', 'fabMissile', 'tirGalerie', 'fabMunition', 'repInter', 'fabLourd'],
   // --- Défense contre les messages forgés (serveur public : n'importe qui peut publier) ---
   tailleRattrapageMax:262144,  // réponse de rattrapage (jusqu'à 200 événements)
   confirmationWillMs:2500,     // « parti » sans preuve (dernière volonté) : confirmé si aucun battement valable pendant ce délai
@@ -1003,6 +1004,11 @@ function qUnite(u){
 // stock/fab, u8 fabT ; si intT, u8 âge en 1/50 s (la pose du caisson dure 4,5 s : r3d-batiments.js,
 // CYCLE_INTERCEPTION.repos). Les heures quantifiées gardées pour la comparaison (memeBat) sont absolues, comme tirT :
 // le bâtiment n'est pas renvoyé à chaque instantané. Sans gal ni para : x = 0, rien d'écrit, octets d'avant.
+// Lot B (22 novembre 2026, cahier galerie § 12.7) : bits 4, 5, 6 de x (libres jusque-là) = missile lourd prêt
+// (gal.lourd), lourd commandé (gal.fabLourd), cycle de tir lourd (gal.cycleLourd) ; aucun octet de plus (fabT, partagé,
+// tient sur l'u8 : 240 s au plus). Une galerie sans lourd s'encode exactement comme en version 45. La Batterie Zénith
+// est une batterie comme la Parasol (bit 1, mêmes champs) ; sa pose de tir dure aussi 4,5 s (même
+// CYCLE_INTERCEPTION dans r3d-batiments.js), l'âge de intT tient donc sur un u8.
 const nib = v => borne(Math.round(+v || 0), 0, 15);
 const secHaut = t => borne(Math.ceil((+t || 0) - 1e-6), 0, 255);   // (1e-6 : comme l'affichage de la fiche, ligneEtatGalerie)
 function qBatiment(b){
@@ -1014,7 +1020,7 @@ function qBatiment(b){
     file:(b.file || []).slice(0, 255).map(t => indexDe('unites', t)), av:qFrac01(b.avancement),
     rally:b.rally ? [qPos(b.rally.x), qPos(b.rally.y)] : null, tir:horloge(b.tirT),
     type:indexDe('batiments', b.type), camp:indexDe('camps', b.camp), c:u8r(b.c), r:u8r(b.r),
-    x:(g ? 1 : 0) | (p ? 2 : 0),
+    x:(g ? 1 : 0) | (p ? 2 : 0) | (g && g.lourd > 0 ? 16 : 0) | (g && g.fabLourd > 0 ? 32 : 0) | (g && g.cycleLourd === true ? 64 : 0),
     gs:g ? nib(g.stock) | (nib(g.fab) << 4) : 0, gf:g ? secHaut(g.fabT) : 0, g0,
     gn:g && g0 >= 0 ? nib(g.n) | (nib(g.tires) << 4) : 0,
     ps:p ? nib(p.stock) | (nib(p.fab) << 4) : 0, pf:p ? secHaut(p.fabT) : 0, it,
@@ -1223,6 +1229,8 @@ function decoder(octets, base){
           const s = L.u8(), f = L.u8();
           b.gal = {stock:s & 15, fab:s >> 4, fabT:f, t0:null, n:0, tires:0};
           if(x & 4){ b.gal.t0 = ageVers(L.u16()); const n = L.u8(); b.gal.n = n & 15; b.gal.tires = n >> 4; }
+          // Lot B (22 novembre 2026) : posés seulement quand l'un d'eux est vrai (galerie sans lourd : enregistrement d'avant).
+          if(x & (16 | 32 | 64)){ b.gal.lourd = x & 16 ? 1 : 0; b.gal.fabLourd = x & 32 ? 1 : 0; b.gal.cycleLourd = (x & 64) !== 0; }
         }
         if(x & 2){
           const s = L.u8(), f = L.u8();

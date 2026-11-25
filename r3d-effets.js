@@ -1180,6 +1180,7 @@
   const DEPART_SOL = [0, 9, 9, 13];           // hauteur de départ par défaut d'un tireur terrestre, par genre
   let meshRoquettes = null, meshMissilesAir = null, meshBombes = null, meshMissiles = null, meshAiguilles = null, meshBrisants = null;
   let meshIntH = null, meshIntK = null;   // intercepteurs de la Batterie Parasol, Halden et Karsk (novembre 2026)
+  let meshLourdsH = null, meshLourdsK = null, meshZenH = null, meshZenK = null;   // missiles lourds, intercepteurs de la Zénith (lot B)
   const etats = new Map();            // objet projectile du moteur -> état visuel
   const libres = [];                  // états recyclés (pas d'objet créé par tir une fois la réserve constituée)
   const missiles = new Map();         // objet effet 'missile' -> état visuel
@@ -1249,6 +1250,41 @@
     // dans le caisson (r3d-batiments.js, parasol) : clair à coiffe bleue (Halden), olive à coiffe rouge (Karsk).
     meshIntH = instances(geoProjectile(14, 1.5, {corps:'#eef0f1', nez:'#3fa7ff', bande:'#3fa7ff', ailettes:'#2f353b'}), mat, MAX_INTERCEPTEURS, false);
     meshIntK = instances(geoProjectile(13, 1.9, {corps:'#7a7852', nez:'#e2533f', bande:'#e2533f', ailettes:'#4a4930'}), mat, MAX_INTERCEPTEURS, false);
+    // Lot B (22 novembre 2026) : missiles lourds en vol, mêmes silhouettes que ceux dressés sur le lanceur
+    // (r3d-batiments.js, galerie : Halden à deux étages, Karsk court et ventru) ; nettement plus gros que les
+    // légers, pour que l'on sache d'un coup d'œil lequel arrive. Et intercepteurs de la Batterie Zénith, plus gros
+    // que ceux de la Parasol (ceux du faisceau de tubes de la Zénith).
+    meshLourdsH = instances(geoMissileLourd(false), mat, MAX_MISSILES_GAL, true);
+    meshLourdsK = instances(geoMissileLourd(true), mat, MAX_MISSILES_GAL, true);
+    meshZenH = instances(geoProjectile(18, 2.6, {corps:'#eef0f1', nez:'#3fa7ff', bande:'#3fa7ff', ailettes:'#2f353b'}), mat, MAX_INTERCEPTEURS, false);
+    meshZenK = instances(geoProjectile(18, 2.8, {corps:'#7a7852', nez:'#e2533f', bande:'#e2533f', ailettes:'#4a4930'}), mat, MAX_INTERCEPTEURS, false);
+  }
+  // Missile lourd des galeries (lot B, 22 novembre 2026), d'axe +X, centré : reprend le modèle dressé sur le
+  // lanceur (r3d-batiments.js, réduit de 10 % comme la galerie). Halden : deux étages blancs à bandes bleues, jupe
+  // sombre, coiffe graphite ; Karsk : un seul corps olive, ventru, bandes rouges, coiffe rouge. Empennage en X.
+  function geoMissileLourd(K){
+    const rotZ = M4().makeRotationZ(-Math.PI/2), rotX = M4().makeRotationX(Math.PI/4), k = 0.9;
+    const cyl = (x0, x1, r0, r1, c) => ({geo:new THREE.CylinderGeometry(r1*k, r0*k, (x1 - x0)*k, 12), c, m:M4().makeTranslation(((x0 + x1)/2 - (K ? 18 : 22.5))*k, 0, 0).multiply(rotZ)});
+    const parties = [];
+    let xA, lA = K ? 2.3 : 2.6;
+    if(K){
+      const r = 4.6;
+      parties.push(cyl(-1, 0.6, r*0.7, r*0.7, '#18191a'), cyl(0.5, 26, r, r, '#6f6d49'), cyl(6.5, 8, r + 0.12, r + 0.12, '#2a2d30'),
+        cyl(19.4, 20.6, r + 0.12, r + 0.12, '#f2eee4'), cyl(21.2, 25.2, r + 0.14, r + 0.14, '#e2533f'), cyl(26, 27.2, r + 0.1, r + 0.1, '#9c2f24'),
+        cyl(27.2, 36.4, r, 0.01, '#e2533f'));
+      xA = 4.4;
+    } else {
+      const r = 4.1, r2 = r*0.82;
+      parties.push(cyl(-1, 0.6, r*0.7, r*0.7, '#18191a'), cyl(0.5, 20, r, r, '#dfe2e4'), cyl(5.6, 7, r + 0.12, r + 0.12, '#2a2d30'),
+        cyl(13, 16.2, r + 0.12, r + 0.12, '#3fa7ff'), cyl(17.4, 18.4, r + 0.12, r + 0.12, '#3fa7ff'), cyl(20, 21.4, r + 0.15, r + 0.15, '#2a2d30'),
+        cyl(21.4, 33, r, r2, '#dfe2e4'), cyl(28.6, 30.4, r*0.88 + 0.1, r*0.88 + 0.1, '#3fa7ff'), cyl(33, 45, r2, 0.01, '#2f353b'));
+      xA = 4.4;
+    }
+    // Empennage en croix de Saint-André (comme sur le lanceur)
+    const env = (K ? 4.6 + 1.15 : 4.1 + 1.3)*2 + lA, ail = K ? '#9c2f24' : '#2f353b', xm = (xA - (K ? 18 : 22.5))*k;
+    parties.push({geo:new THREE.BoxGeometry(7.2*k, env*k, 0.5*k), c:ail, m:M4().makeTranslation(xm, 0, 0).multiply(rotX)});
+    parties.push({geo:new THREE.BoxGeometry(7.2*k, 0.5*k, env*k), c:ail, m:M4().makeTranslation(xm, 0, 0).multiply(rotX)});
+    return fusionner(parties);
   }
   function finInstances(m, n){ m.count = n; m.visible = n > 0; if(n > 0) m.instanceMatrix.needsUpdate = true; }
 
@@ -1551,16 +1587,20 @@
   // touche à la fin. Missile de galerie de tir (champ galerie de l'effet, novembre 2026) : il part du lanceur
   // dressé devant la galerie de son camp et retombe en cloche sur le point visé.
   // Parcours par forEach + rappel fixe (état de l'image dans nMis… / dtMis) : aucune allocation par image.
-  let nMis = 0, nAig = 0, nBri = 0, dtMis = 0;
+  // (st.modele : 0 frappe, 1 Aiguille, 2 Brisant, 3 lourd de Halden, 4 lourd de Karsk ; lot B, 22 novembre 2026)
+  let nMis = 0, nAig = 0, nBri = 0, nLH = 0, nLK = 0, dtMis = 0;
   function majMissiles(dt){
-    nMis = nAig = nBri = 0; dtMis = dt;
+    nMis = nAig = nBri = nLH = nLK = 0; dtMis = dt;
     if(missiles.size) missiles.forEach(majUnMissile);
     finInstances(meshMissiles, nMis); finInstances(meshAiguilles, nAig); finInstances(meshBrisants, nBri);
+    finInstances(meshLourdsH, nLH); finInstances(meshLourdsK, nLK);
   }
   // Position à la fraction k du vol. Galerie (st.modele) : il quitte le lanceur lentement puis file, sur une longue cloche.
+  // Missile lourd (st.lourd, lot B) : il quitte le lanceur à la verticale (il y est dressé) et n'avance qu'ensuite ;
+  // sa cloche (st.apex) est bien plus haute. Le léger garde exactement sa course d'avant.
   function posMissile(st, k, out){
     if(st.modele){
-      const kh = 0.65*k + 0.35*k*k*(3 - 2*k);
+      const kh = st.lourd ? 0.15*k + 0.85*k*k*(3 - 2*k) : 0.65*k + 0.35*k*k*(3 - 2*k);
       return out.set(st.sx + (st.ex - st.sx)*kh, st.sy + (st.ey - st.sy)*k + st.apex*4*k*(1 - k), st.sz + (st.ez - st.sz)*kh);
     }
     const ke = Math.pow(k, 1.7);       // accélération en piqué
@@ -1574,10 +1614,11 @@
     // secondes de vol (champ posé par le moteur), ou quand l'intercepteur qui le visait éclate (st.abattu).
     // L'éclat est celui de l'intercepteur ; s'il n'y en a pas (st.vise faux), on le fait ici.
     if(st.abattu || (nombre(e.abattuA) && st.t >= e.abattuA)){
-      if(!st.vise && st.modele && k < 1){ posMissile(st, k, vTmp); eclatEnLAir(vTmp.x, vTmp.y, vTmp.z); }
+      if(!st.vise && st.modele && k < 1){ posMissile(st, k, vTmp); eclatEnLAir(vTmp.x, vTmp.y, vTmp.z, st.lourd); }
       missiles.delete(e); return;
     }
-    const plein = st.modele === 1 ? nAig >= MAX_MISSILES_GAL : st.modele === 2 ? nBri >= MAX_MISSILES_GAL : nMis >= MAX_MISSILES;
+    const plein = st.modele === 1 ? nAig >= MAX_MISSILES_GAL : st.modele === 2 ? nBri >= MAX_MISSILES_GAL
+      : st.modele === 3 ? nLH >= MAX_MISSILES_GAL : st.modele === 4 ? nLK >= MAX_MISSILES_GAL : nMis >= MAX_MISSILES;
     if(k >= 1 || plein){ if(k >= 1) missiles.delete(e); return; }
     if(st.modele){
       // Direction : celle du déplacement (la cloche tourne le nez vers le haut, puis vers le sol)
@@ -1592,7 +1633,10 @@
     mTmp.compose(vTmp, qTmp, unite);
     if(st.modele === 1) meshAiguilles.setMatrixAt(nAig++, mTmp);
     else if(st.modele === 2) meshBrisants.setMatrixAt(nBri++, mTmp);
+    else if(st.modele === 3) meshLourdsH.setMatrixAt(nLH++, mTmp);
+    else if(st.modele === 4) meshLourdsK.setMatrixAt(nLK++, mTmp);
     else meshMissiles.setMatrixAt(nMis++, mTmp);
+    if(st.lourd){ majTraineeLourd(st, dt); return; }   // lot B : flamme, traînée et départ à sa taille
     if(dt > 0){
       const rec = st.modele ? 17 : 14;
       const qx = vTmp.x - vDir.x*rec, qy = vTmp.y - vDir.y*rec, qz = vTmp.z - vDir.z*rec;
@@ -1623,6 +1667,38 @@
       st.px = vTmp.x; st.py = vTmp.y; st.pz = vTmp.z;
     }
   }
+  // Missile lourd (lot B, 22 novembre 2026) : même principe que le léger (majUnMissile), à l'échelle d'un engin
+  // deux fois plus gros. Fonction à part pour que le rendu du léger reste exactement celui d'avant. vTmp et vDir
+  // (position et direction de l'image) sont posés par majUnMissile.
+  function majTraineeLourd(st, dt){
+    if(!(dt > 0)) return;
+    const rec = 22;
+    const qx = vTmp.x - vDir.x*rec, qy = vTmp.y - vDir.y*rec, qz = vTmp.z - vDir.z*rec;
+    solCourant = st.ey;
+    if(!st.parti){
+      // Départ : grand éclair, souffle de poussière plus large, panache épais qui monte le long du missile dressé
+      st.parti = true;
+      const S = st.sy - st.hLanceur;
+      solCourant = S;
+      emettre(G.flash, st.sx, S + 6, st.sz, 0, 0, 0, 40);
+      flashLumiere(st.sx, S + 10, st.sz, COUL_TIR, 3.2, 360, 0.7, 3);   // (une couleur THREE.Color, jamais un texte)
+      for(let j=nb(14);j>0;j--) emettre(G.poussiere, st.sx + alea(-20, 20), S + 4, st.sz + alea(-20, 20), alea(-70, 70), alea(6, 26), alea(-70, 70), alea(20, 32));
+      for(let j=nb(10);j>0;j--) emettre(G.fumeeGrise, st.sx + alea(-8, 8), S + 8 + alea(0, 30), st.sz + alea(-8, 8), alea(-20, 20), alea(10, 28), alea(-20, 20), alea(22, 34));
+      solCourant = st.ey;
+    }
+    emettre(G.propulseur, qx, qy, qz, -vDir.x*40, -vDir.y*40, -vDir.z*40, alea(24, 32));
+    emettre(G.halo, qx, qy, qz, 0, 0, 0, 34, 0.45);
+    const pas = 4*Q.pas;
+    st.acc += Math.hypot(vTmp.x - st.px, vTmp.y - st.py, vTmp.z - st.pz) / pas;
+    let j = 0;
+    while(st.acc >= 1 && j < 30){
+      st.acc -= 1; j++;
+      const recul = st.acc * pas;
+      emettre(G.traineeMissile, qx - vDir.x*recul, qy - vDir.y*recul, qz - vDir.z*recul, alea(-5, 5), alea(-2, 5), alea(-5, 5), alea(19, 25));
+    }
+    if(st.acc > 1) st.acc = 1;
+    st.px = vTmp.x; st.py = vTmp.y; st.pz = vTmp.z;
+  }
   // Galerie de tir du camp (une seule par camp) : pour retrouver le lanceur sans dépendre de ce que
   // le moteur transmet (chez un invité, l'effet peut arriver sans point de départ).
   function galerieDuCamp(camp){
@@ -1646,7 +1722,17 @@
         }
       } catch(err){ /* tables absentes : un lanceur */ }
       let x0 = b ? b.x : e.x0, y0 = b ? b.y : e.y0;
-      if(nombre(x0) && nombre(y0)){
+      if(e.lourd === true && nombre(x0) && nombre(y0)){
+        // Missile lourd (lot B, 22 novembre 2026) : un seul lanceur sort, sur la première voie (rang 0), même chez
+        // Karsk. Il est dressé à la verticale un peu plus au nord que le léger (31 au lieu de 34 : son axe est
+        // décalé par le berceau) ; hauteur : le milieu du missile dressé (r3d-batiments.js, galerie, réduite de
+        // 10 %). Cloche : celle du moteur (hauteurRencontre de jeu.js, lourd), plafonnée à 760.
+        const K = n > 1, hL = K ? 22 : 26;
+        y0 += 31; if(K) x0 -= 10.8;
+        const d = Math.hypot(e.x - x0, e.y - y0);
+        st = {t:0, duree, modele:K ? 4 : 3, lourd:true, hLanceur:hL, sx:x0, sy:sol(x0, y0) + hL, sz:y0, ex:e.x, ey:H, ez:e.y,
+          apex:Math.max(420, Math.min(760, d*0.45)), acc:0, parti:false};
+      } else if(nombre(x0) && nombre(y0)){
         // Lanceur dressé sur le tablier, au sud de la galerie (voir le modèle : r3d-batiments.js, galerie) ;
         // deux voies chez Karsk. Hauteur : le milieu du missile dressé (modèle réduit de 10 %).
         const rang = e.galerie > 1 ? 1 : 0, hL = n > 1 ? 21 : 25;
@@ -1675,6 +1761,16 @@
   const DEPART_INTERCEPTEUR = 1.25;    // = depart + vol de CYCLE_INTERCEPTION, dans r3d-batiments.js
   const ELEV_INTERCEPTEUR = 1.08;      // élévation du caisson levé (elevTir de la Batterie Parasol)
   const BOUCHE_INTERCEPTEUR = 33, AVANCE_BOUCHE = 5, COURSE_INTERCEPTEUR = 82;   // bouche de l'alvéole, course hors du caisson
+  // Batterie Zénith (lot B, 22 novembre 2026) : où l'intercepteur se trouve au bout de sa course dans le modèle
+  // (r3d-batiments.js, zenith : socle hs, enfant à 3,4, alvéole de tir eclair, course DEPART_ZENITH de 130),
+  // dans le repère de l'affût tourné vers b.angleT : px le long de la visée, pz en travers, h au-dessus du sol,
+  // el = élévation des tubes. Calculé à la main depuis le modèle : à refaire si le modèle change.
+  //   Halden : tubes verticaux ; alvéole (31,2 ; -4,3 ; 4,3) → px 4,3, pz 4,3, h 8 + 3,4 + 31,2 + 130.
+  //   Karsk  : tubes penchés à 1,45 rad, enfant décalé de -2 ; alvéole (32,7 ; 0 ; 8,3).
+  const ZENITH_BOUCHE = {
+    halden:{el:Math.PI/2, px:4.3, pz:4.3, h:8 + 3.4 + 31.2 + 130},
+    karsk:{el:1.45, px:-2 + (32.7 + 130)*Math.cos(1.45), pz:8.3, h:6.5 + 3.4 + (32.7 + 130)*Math.sin(1.45)},
+  };
   const intercepteurs = new Map();     // objet effet 'intercepteur' -> état visuel
   const vI = new THREE.Vector3(), vJ = new THREE.Vector3();
   function nouvelIntercepteur(e){
@@ -1683,12 +1779,23 @@
     let karsk = false;
     try { karsk = typeof camps !== 'undefined' && !!camps[e.camp] && camps[e.camp].faction === 'karsk'; } catch(err){ karsk = false; }
     // Sortie du caisson : vers le point annoncé (b.angleT du moteur), à l'élévation du caisson levé
-    const az = Math.atan2(e.y - e.y0, e.x - e.x0), ce = Math.cos(ELEV_INTERCEPTEUR), se = Math.sin(ELEV_INTERCEPTEUR);
-    const ux = Math.cos(az)*ce, uy = se, uz = Math.sin(az)*ce;
-    const bx = e.x0 + Math.cos(az)*AVANCE_BOUCHE, bz = e.y0 + Math.sin(az)*AVANCE_BOUCHE, by = sol(e.x0, e.y0) + BOUCHE_INTERCEPTEUR;
-    const sx = bx + ux*COURSE_INTERCEPTEUR, sy = by + uy*COURSE_INTERCEPTEUR, sz = bz + uz*COURSE_INTERCEPTEUR;
+    const az = Math.atan2(e.y - e.y0, e.x - e.x0);
+    let ux, uy, uz, sx, sy, sz;
+    if(e.lourd === true){
+      // Batterie Zénith (lot B, 22 novembre 2026) : l'intercepteur sort de son tube à la verticale (Halden) ou
+      // presque (Karsk, tubes penchés), au bout de la course dessinée par r3d-batiments.js (ZENITH_BOUCHE), puis
+      // la courbe le mène au point de rencontre, en haute altitude.
+      const Z = karsk ? ZENITH_BOUCHE.karsk : ZENITH_BOUCHE.halden, ce = Math.cos(Z.el), ca = Math.cos(az), sa = Math.sin(az);
+      ux = ca*ce; uy = Math.sin(Z.el); uz = sa*ce;
+      sx = e.x0 + Z.px*ca - Z.pz*sa; sz = e.y0 + Z.px*sa + Z.pz*ca; sy = sol(e.x0, e.y0) + Z.h;
+    } else {
+      const ce = Math.cos(ELEV_INTERCEPTEUR), se = Math.sin(ELEV_INTERCEPTEUR);
+      ux = Math.cos(az)*ce; uy = se; uz = Math.sin(az)*ce;
+      const bx = e.x0 + Math.cos(az)*AVANCE_BOUCHE, bz = e.y0 + Math.sin(az)*AVANCE_BOUCHE, by = sol(e.x0, e.y0) + BOUCHE_INTERCEPTEUR;
+      sx = bx + ux*COURSE_INTERCEPTEUR; sy = by + uy*COURSE_INTERCEPTEUR; sz = bz + uz*COURSE_INTERCEPTEUR;
+    }
     const h = nombre(e.h) && e.h > 0 ? +e.h : 300;
-    intercepteurs.set(e, {t:0, duree, t0:Math.min(DEPART_INTERCEPTEUR, duree*0.5), karsk, reussi:e.reussi === true,
+    intercepteurs.set(e, {t:0, duree, t0:Math.min(DEPART_INTERCEPTEUR, duree*0.5), karsk, reussi:e.reussi === true, lourd:e.lourd === true,
       pret:false, arrive:false, cible:null, ux, uy, uz, sx, sy, sz, cx:sx, cy:sy, cz:sz,
       ex:e.x, ey:sol(e.x, e.y) + h, ez:e.y, ox:0, oy:0, oz:0, vx:0, vy:0, vz:0, acc:0, px:sx, py:sy, pz:sz});
   }
@@ -1730,8 +1837,11 @@
     return out;
   }
   // Éclat en l'air (missile détruit) : explosion à hauteur, sans poussière au sol, gerbe d'étincelles.
-  function eclatEnLAir(x, y, z){
+  // grand (lot B, 22 novembre 2026) : missile lourd abattu en haute altitude ; boule plus large, gerbe plus
+  // fournie, lueur qui porte loin (vue de la base, l'éclat a lieu très haut). Sans grand : exactement l'éclat d'avant.
+  function eclatEnLAir(x, y, z, grand){
     if(!(nombre(x) && nombre(y) && nombre(z))) return;
+    if(grand === true){ eclatHaut(x, y, z); return; }
     const H = sol(x, z);
     EX.x = x; EX.y = z; EX.h = Math.max(31, y - H); EX.r = 24; EX.grande = false; EX.batiment = false;
     explosion(EX);
@@ -1739,11 +1849,23 @@
     for(let j=nb(10);j>0;j--){ dirAlea(); emettre(G.etincelle, x, y, z, DX*140, DY*140 + 30, DZ*140, 3); }
     for(let j=nb(4);j>0;j--) emettre(G.fumeeGrise, x + alea(-8, 8), y + alea(-4, 4), z + alea(-8, 8), alea(-10, 10), alea(-4, 6), alea(-10, 10), alea(16, 24));
   }
-  let nIH = 0, nIK = 0, dtInt = 0;
+  // Éclat en haute altitude (lot B) : boule de feu de rayon 40 (24 pour le léger), longue gerbe d'étincelles qui
+  // retombe, débris fumants, lueur qui porte jusqu'au sol (portée 900 : à 500 de haut, l'éclat éclaire la base).
+  function eclatHaut(x, y, z){
+    const H = sol(x, z);
+    EX.x = x; EX.y = z; EX.h = Math.max(31, y - H); EX.r = 40; EX.grande = false; EX.batiment = false;
+    explosion(EX);
+    flashLumiere(x, y, z, COUL_FEU, 4, 900, 0.5, 40);   // (une couleur THREE.Color, jamais un texte)
+    solCourant = H;
+    for(let j=nb(20);j>0;j--){ dirAlea(); emettre(G.etincelle, x, y, z, DX*200, DY*200 + 40, DZ*200, 3.6); }
+    for(let j=nb(7);j>0;j--) emettre(G.fumeeGrise, x + alea(-14, 14), y + alea(-6, 6), z + alea(-14, 14), alea(-14, 14), alea(-6, 8), alea(-14, 14), alea(24, 36));
+  }
+  let nIH = 0, nIK = 0, nZH = 0, nZK = 0, dtInt = 0;
   function majIntercepteurs(dt){
-    nIH = nIK = 0; dtInt = dt;
+    nIH = nIK = nZH = nZK = 0; dtInt = dt;
     if(intercepteurs.size) intercepteurs.forEach(majUnIntercepteur);
     finInstances(meshIntH, nIH); finInstances(meshIntK, nIK);
+    finInstances(meshZenH, nZH); finInstances(meshZenK, nZK);   // Zénith (lot B)
   }
   function majUnIntercepteur(st, e){
     const dt = dtInt;
@@ -1757,7 +1879,7 @@
       vI.x += st.ox; vI.y += st.oy; vI.z += st.oz;
       if(st.reussi){
         if(st.cible) st.cible.abattu = true;
-        eclatEnLAir(vI.x, vI.y, vI.z);
+        eclatEnLAir(vI.x, vI.y, vI.z, st.lourd);
         intercepteurs.delete(e); return;
       }
       // Échec : il garde sa vitesse d'arrivée (dérivée de la courbe rapportée au temps de vol)
@@ -1781,6 +1903,12 @@
     }
     if(vDir.lengthSq() < 1e-8) vDir.set(st.ux, st.uy, st.uz);
     vDir.normalize();
+    if(st.lourd){
+      // Intercepteur de la Zénith (lot B) : plus gros, flamme et traînée à sa taille (fonction à part : le rendu de
+      // celui de la Parasol reste exactement celui d'avant).
+      majIntercepteurZenith(st, dt);
+      return;
+    }
     const plein = st.karsk ? nIK >= MAX_INTERCEPTEURS : nIH >= MAX_INTERCEPTEURS;
     if(!plein){
       qTmp.setFromUnitVectors(axeX, vDir);
@@ -1800,6 +1928,32 @@
         st.acc -= 1; j++;
         const recul = st.acc * pas;
         emettre(G.traineeMissile, qx - vDir.x*recul, qy - vDir.y*recul, qz - vDir.z*recul, alea(-3, 3), alea(-2, 3), alea(-3, 3), alea(8, 11));
+      }
+      if(st.acc > 1) st.acc = 1;
+    }
+    st.px = vI.x; st.py = vI.y; st.pz = vI.z;
+  }
+  // Intercepteur de la Batterie Zénith en vol (lot B, 22 novembre 2026) : vI et vDir (normalisée) posés par
+  // majUnIntercepteur.
+  function majIntercepteurZenith(st, dt){
+    const plein = st.karsk ? nZK >= MAX_INTERCEPTEURS : nZH >= MAX_INTERCEPTEURS;
+    if(!plein){
+      qTmp.setFromUnitVectors(axeX, vDir);
+      mTmp.compose(vI, qTmp, unite);
+      if(st.karsk) meshZenK.setMatrixAt(nZK++, mTmp); else meshZenH.setMatrixAt(nZH++, mTmp);
+    }
+    if(dt > 0){
+      const qx = vI.x - vDir.x*11, qy = vI.y - vDir.y*11, qz = vI.z - vDir.z*11;
+      solCourant = sol(vI.x, vI.z);
+      emettre(G.propulseur, qx, qy, qz, -vDir.x*30, -vDir.y*30, -vDir.z*30, alea(13, 18));
+      emettre(G.halo, qx, qy, qz, 0, 0, 0, 19, 0.35);
+      const pas = 3*Q.pas;
+      st.acc += Math.hypot(vI.x - st.px, vI.y - st.py, vI.z - st.pz) / pas;
+      let j = 0;
+      while(st.acc >= 1 && j < 30){
+        st.acc -= 1; j++;
+        const recul = st.acc * pas;
+        emettre(G.traineeMissile, qx - vDir.x*recul, qy - vDir.y*recul, qz - vDir.z*recul, alea(-3, 3), alea(-2, 3), alea(-3, 3), alea(11, 15));
       }
       if(st.acc > 1) st.acc = 1;
     }

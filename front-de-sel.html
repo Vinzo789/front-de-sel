@@ -105,6 +105,9 @@ input[type=range]{width:80px;accent-color:var(--accent);vertical-align:middle}
 #boutonsFab.cinq{grid-template-columns:repeat(5,minmax(0,1fr));gap:4px}
 #boutonsFab.cinq button.fab .nom{font-size:10.5px;padding:8px 3px 5px;letter-spacing:-.15px;hyphens:auto}
 #boutonsFab.cinq button.fab .c{font-size:10.5px;padding:1px 4px}
+/* Plus de 10 boutons (22 novembre 2026, lot B : Batterie Zénith, Halden 11 en solo) : 6 colonnes, toujours deux rangées. */
+#boutonsFab.cinq.six{grid-template-columns:repeat(6,minmax(0,1fr))}
+#boutonsFab.cinq.six button.fab .nom{font-size:10px;padding:7px 2px 4px}
 /* Infobulle de la barre de construction (au survol d'un bouton) */
 #infobulle{position:fixed;z-index:30;width:300px;pointer-events:none;background:rgba(12,15,18,.97);border:1px solid #4a5763;border-radius:8px;
   box-shadow:0 8px 24px rgba(0,0,0,.55);font-size:12.5px;line-height:1.4;overflow:hidden}
@@ -419,7 +422,7 @@ select{font:inherit;background:var(--bouton);color:var(--texte);border:1px solid
    <label class="surprises"><input type="checkbox" id="modeSurprises">
     <span><b>Mode Surprises</b><span class="expl" id="explSurprises">Un événement imprévu peut bouleverser la partie.</span></span></label>
    <label class="surprises"><input type="checkbox" id="modeGaleries">
-    <span><b>Galeries de tir</b><span class="expl" id="explGaleries">Vous pouvez bâtir une galerie enterrée qui tire des missiles n’importe où sur la carte. Une fois finie, elle est intouchable, sauf pendant ses 17,5 secondes de tir. Contre elle : la Batterie Parasol et ses radars, qui tentent d’abattre les missiles. Parties en ligne : au choix de l’hôte, dans le salon.</span></span></label>
+    <span><b>Galeries de tir</b><span class="expl" id="explGaleries">Vous pouvez bâtir une galerie enterrée qui tire des missiles n’importe où sur la carte. Une fois finie, elle est intouchable, sauf pendant ses 17,5 secondes de tir. Contre elle : la Batterie Parasol (missile léger), la Batterie Zénith (missile lourd) et leurs radars, qui tentent d’abattre les missiles. Parties en ligne : au choix de l’hôte, dans le salon.</span></span></label>
    <label class="surprises reserves"><span><b>Réserves de départ</b><span class="expl">Ce que chaque camp possède en début de partie, ordinateurs compris. De 0 à 2 500.</span></span>
     <select id="reservesDepart" aria-label="Réserves de départ"></select></label>
    <label class="surprises reserves"><span><b>Charge des collecteurs</b><span class="expl">Ce qu’un collecteur rapporte par voyage. À 100, le revenu de tous les camps double : parties plus courtes. Parties en ligne : toujours 50.</span></span>
@@ -525,33 +528,33 @@ if(/[?&]mission=/.test(location.search)){
      L'ORDRE COMPTE : chaque fichier s'appuie sur ceux qui le précèdent (jeu.js en dernier).
      onerror : un fichier absent est ignoré sans bruit ; le jeu démarre sans lui quand il est facultatif
      (musique, post-traitement, envahisseurs, vignettes), sinon jeu.js affiche le message « Rendu 3D indisponible ». -->
-<script src="musique.js?v=45" onerror="void 0"></script>
-<script src="cartes.js?v=45" onerror="void 0"></script>
-<script src="campagnes/campagnes.js?v=45" onerror="void 0"></script>
-<script src="campagnes/halden-1.js?v=45" onerror="void 0"></script>
-<script src="campagnes/halden-2.js?v=45" onerror="void 0"></script>
-<script src="campagnes/halden-3.js?v=45" onerror="void 0"></script>
-<script src="campagnes/halden-4.js?v=45" onerror="void 0"></script>
-<script src="campagnes/karsk-1.js?v=45" onerror="void 0"></script>
-<script src="campagnes/karsk-2.js?v=45" onerror="void 0"></script>
-<script src="campagnes/karsk-3.js?v=45" onerror="void 0"></script>
-<script src="campagnes/karsk-4.js?v=45" onerror="void 0"></script>
-<script src="r3d-scene.js?v=45" onerror="void 0"></script>
-<script src="r3d-post.js?v=45" onerror="void 0"></script>
-<script src="r3d-unites.js?v=45" onerror="void 0"></script>
-<script src="r3d-batiments.js?v=45" onerror="void 0"></script>
-<script src="r3d-effets.js?v=45" onerror="void 0"></script>
-<script src="r3d-aliens.js?v=45" onerror="void 0"></script>
+<script src="musique.js?v=46" onerror="void 0"></script>
+<script src="cartes.js?v=46" onerror="void 0"></script>
+<script src="campagnes/campagnes.js?v=46" onerror="void 0"></script>
+<script src="campagnes/halden-1.js?v=46" onerror="void 0"></script>
+<script src="campagnes/halden-2.js?v=46" onerror="void 0"></script>
+<script src="campagnes/halden-3.js?v=46" onerror="void 0"></script>
+<script src="campagnes/halden-4.js?v=46" onerror="void 0"></script>
+<script src="campagnes/karsk-1.js?v=46" onerror="void 0"></script>
+<script src="campagnes/karsk-2.js?v=46" onerror="void 0"></script>
+<script src="campagnes/karsk-3.js?v=46" onerror="void 0"></script>
+<script src="campagnes/karsk-4.js?v=46" onerror="void 0"></script>
+<script src="r3d-scene.js?v=46" onerror="void 0"></script>
+<script src="r3d-post.js?v=46" onerror="void 0"></script>
+<script src="r3d-unites.js?v=46" onerror="void 0"></script>
+<script src="r3d-batiments.js?v=46" onerror="void 0"></script>
+<script src="r3d-effets.js?v=46" onerror="void 0"></script>
+<script src="r3d-aliens.js?v=46" onerror="void 0"></script>
 <!-- Vignettes des boutons (images des modèles 3D) : facultatif, des pictogrammes neutres le remplacent. -->
-<script src="r3d-vignettes.js?v=45" onerror="void 0"></script>
+<script src="r3d-vignettes.js?v=46" onerror="void 0"></script>
 <!-- Multijoueur (reseau.js) : aucun effet au chargement (ni connexion, ni minuteur) ; la bibliothèque MQTT
      n'est téléchargée qu'au moment d'héberger ou de rejoindre une partie. -->
-<script src="reseau.js?v=45" onerror="void 0"></script>
-<script src="jeu.js?v=45" onerror="void 0"></script>
+<script src="reseau.js?v=46" onerror="void 0"></script>
+<script src="jeu.js?v=46" onerror="void 0"></script>
 <!-- Outils de test (verif-missions-moteur.js) : chargés seulement avec ?verif ou &verif dans l'adresse. -->
 <script>
 if(/[?&]verif(=|&|$)/.test(location.search)){
-  const s = document.createElement('script'); s.src = 'verif-missions-moteur.js?v=45'; document.body.appendChild(s);
+  const s = document.createElement('script'); s.src = 'verif-missions-moteur.js?v=46'; document.body.appendChild(s);
 }
 </script>
 </body>
