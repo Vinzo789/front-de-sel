@@ -786,6 +786,9 @@ function partieOrdinateurs(liste, duree, opts){
   opts = opts || {};
   window.enregistrerVictoire = () => {};
   reinitialiserPartie();
+  // Numéros d'entités repartis de 1, comme dans une page neuve (25 novembre 2026) : sans cela, une partie rejouée
+  // après une autre dans la même page donnait une autre empreinte (quatre camps : 69b4664e puis c71ba66).
+  prochainId = 1;
   SIMLOG = [];
   const niveaux = {}; for(const k of liste) niveaux[k.id] = k.niveau;
   demarrer(liste[0].faction, liste.map(k => ({id:k.id, faction:k.faction, equipe:k.equipe, ia:k.id !== 'J', niveau:k.id !== 'J' ? k.niveau : undefined})));
@@ -4493,7 +4496,7 @@ function mesureUltra(liste, duree, opts){
     }
   };
   const poursuiteInutile = {};
-  orig.majCollecteur = window.majCollecteur; orig.tuer = window.tuer; orig.infliger = window.infliger; orig.creerUnite = window.creerUnite; orig.activerPouvoir = window.activerPouvoir;
+  orig.majCollecteur = window.majCollecteur; orig.tuer = window.tuer; orig.infliger = window.infliger; orig.creerUnite = window.creerUnite; orig.activerPouvoir = window.activerPouvoir; orig.commanderMissileLourd = window.commanderMissileLourd; orig.construireBatiment = window.construireBatiment;
   // Analyse stratégique (lot « stratégie », 21 novembre 2026) : par camp, collecteurs perdus, dégâts infligés (aux
   // unités et bâtiments ennemis) et coût des unités produites, pouvoirs lancés et valeur qu'ils détruisent.
   const strat = Object.fromEntries(campsListe.map(id => [id, {collecteursPerdus:0, degats:0, degatsBat:0, produit:0, pouvoirs:0, valeurPouvoirs:0}]));
@@ -4512,6 +4515,9 @@ function mesureUltra(liste, duree, opts){
       };
       window.creerUnite = function(type, camp){ const u = orig.creerUnite.apply(this, arguments); if(temps > 0 && strat[camp] && UNITES[type] && UNITES[type].arme && !UNITES[type].collecteur) strat[camp].produit += UNITES[type].cout || 0; return u; };
       window.activerPouvoir = function(camp){ const ok = orig.activerPouvoir.apply(this, arguments); if(ok && strat[camp]) strat[camp].pouvoirs++; return ok; };
+      // Défense antimissile, lot B (version 46) : missiles lourds commandés et Batteries Zénith mises en chantier.
+      if(typeof orig.commanderMissileLourd === 'function') window.commanderMissileLourd = function(b){ const ok = orig.commanderMissileLourd.apply(this, arguments); if(ok && b && strat[b.camp]) strat[b.camp].lourds = (strat[b.camp].lourds || 0) + 1; return ok; };
+      window.construireBatiment = function(camp, type){ const r = orig.construireBatiment.apply(this, arguments); if(r && type === 'zenith' && strat[camp]) strat[camp].zenith = (strat[camp].zenith || 0) + 1; return r; };
     }
     if(!opts.coutSeul) window.majIA = function(){
       rattraper('moteur');
@@ -4560,6 +4566,8 @@ function mesureUltra(liste, duree, opts){
     // graine donnait une autre partie selon ce qui avait tourné avant dans la page (relevé du 21 novembre 2026).
     verifT = 0;
     // (Options ancien, cles et retraits de la phase 3 retirées avec l'interrupteur ultraV44 de jeu.js.)
+    // (Options v45 et retraitsV45 du lot « stratégie » retirées avec l'interrupteur ultraV45 : aucun levier n'a été
+    // gardé ; la version de jeu.js qui les accepte est dans travaux/ia-ultra/jeu-strategie-avec-interrupteur.js.)
     const jouer = () => partieRejouable(() => partieOrdinateurs(liste, duree, {pas}));
     r = opts.graine != null ? avecGraine(opts.graine, jouer) : jouer();
   } finally { Object.assign(window, orig); optionGaleries = avant; }
@@ -4679,6 +4687,8 @@ function planRobotUltra(graines){
   return plan;
 }
 window.planRobotUltra = planRobotUltra;
+// (planNouveauContreV45 et indicateurV45, outils du lot « stratégie » pour jouer contre l'Ultra de départ, retirés avec
+// l'interrupteur ultraV45 de jeu.js ; voir travaux/ia-ultra/MESURES-STRATEGIE.md et jeu-strategie-avec-interrupteur.js.)
 // Analyse stratégique d'une série (lot « stratégie ») : pour chaque camp Ultra, moyennes selon l'issue (gagné / perdu /
 // nul) : collecte à 3, 6 et 9 min, armée, collecteurs perdus, dégâts infligés par crédit d'unités produites, pouvoirs et
 // valeur détruite par eux, assauts (nombre, retraites, valeur engagée, pertes contre pertes infligées pendant l'assaut),

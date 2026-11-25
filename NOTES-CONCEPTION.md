@@ -1143,8 +1143,25 @@ Documents de travail (non publiés) : `travaux/ia-ultra/` (`CAHIER.md`, `DIAGNOS
   champs (`champPour`). Après ces trois corrections, rejoué : les deux empreintes, `testerUltra()` sur les deux
   cartes (mêmes empreintes de parties qu'avant elles) et 20 parties de la série à Port-Calmes (13 sur 16 contre
   Difficile, 6 va-et-vient) ; les séries complètes ci-dessus datent d'avant ces trois corrections.
-- **Limite des outils** : les empreintes de référence ne valent qu'en premier appel d'une page neuve ; rejouée
-  après une autre partie dans la même page, une partie donne une autre empreinte (cause non cherchée).
+- **Outils** (25 novembre 2026) : une partie rejouée après une autre dans la même page donnait une autre
+  empreinte, parce que les numéros d'entités ne repartaient pas de 1 ; `partieOrdinateurs` les remet à 1. Vu
+  passer : duel `7d442efb` et quatre camps `69b4664e`, deux fois chacun dans la même page.
+- **Lot « stratégie » : essayé, rien retenu (25 novembre 2026, sur la version 46).** Demande du propriétaire :
+  « essaye encore d'augmenter la difficulté de l'IA ultra (intelligence, stratégie etc) ». Quatre idées ont été
+  programmées et mesurées une à une contre l'Ultra actuel (graines 1 à 6, Port-Calmes et Gorges, parties en
+  miroir, et 48 parties contre Difficile ; référence : 42 sur 48) : attendre puis contre-attaquer après une vague
+  repoussée (44 sur 48 contre Difficile, mais perd en miroir à Gorges) ; contre-attaque seule (aucune issue
+  changée) ; retraite jugée sur les pertes échangées (ne se déclenche presque jamais) ; nouvelle ouverture de
+  Halden contre Karsk (36 sur 48 : nettement pire) ; viser l'économie adverse (40 sur 48, rien de mesurable).
+  **Aucune ne gagne nettement : `jeu.js` n'a pas été modifié**, et aucun objectif du cahier
+  (`travaux/ia-ultra/CAHIER-STRATEGIE.md`) n'est atteint, sauf « toutes les parties gagnées contre le robot
+  joueur » (16 sur 16). Ce que les mesures montrent : entre deux Ultra, le camp et le côté décident presque tout
+  (à Port-Calmes le camp de gauche gagne 10 fois sur 12, à Gorges Karsk 11 fois sur 12), si bien que « plus fort
+  que lui-même » ne se mesure pas tant que l'écart Halden / Karsk et l'asymétrie de Port-Calmes ne sont pas
+  tranchés. Les six défaites contre Difficile sont toutes Halden Ultra contre Karsk. Détail :
+  `travaux/ia-ultra/ANALYSE-STRATEGIE.md` et `MESURES-STRATEGIE.md` ; le code des idées essayées est gardé dans
+  `travaux/ia-ultra/jeu-strategie-avec-interrupteur.js`. Les duels d'ordinateurs ne disent pas comment un humain
+  bat Ultra : c'est l'information qui manque.
 - **Pas vérifié** : le jeu à l'écran et à la souris ; les trois autres cartes ; trois ou quatre camps (hors
   l'empreinte) ; le mode Surprises ; les missions (elles n'utilisent pas ce code).
 - **Faiblesses relevées, non traitées** : Halden Ultra reste le plus fragile (toutes les défaites contre
