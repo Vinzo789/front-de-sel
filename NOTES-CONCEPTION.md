@@ -1253,7 +1253,7 @@ Demande du propriétaire : « À partir du mode difficile, si la partie dure suf
 Demande du propriétaire : une carte bien plus grande, pour 8 camps, avec les 8 bases autour, une ville au milieu
 et des champs de ressources en ville. Il a décidé : escarmouche hors ligne seulement dans un premier temps ;
 30 unités au plus par camp à 8. Ce lot est le premier de quatre ; les suivants ne sont **pas faits** : champs au
-contenu doublé (lot 2), extracteurs à capturer par un technicien (lot 3), bâtiments de la ville à occuper par
+contenu doublé (lot 2, fait depuis : voir plus bas), extracteurs à capturer par un technicien (lot 3), bâtiments de la ville à occuper par
 l'infanterie (lot 4).
 
 - **Taille de carte variable.** Elle était fixée à 80 × 56 cases. Une carte peut porter un champ `taille` ; la
@@ -1311,6 +1311,23 @@ l'infanterie (lot 4).
   faubourgs ; les quatre couleurs ; la disposition (crêtes, routes, quantités des champs) ; les raccourcis
   « Chacun pour soi à 8 » et « 4 contre 4 » ; chacun pour soi par défaut ; « Rejoindre une partie » reste
   visible sur cette carte.
+
+#### Lot 2 (25 novembre 2026, `?v=49`) : champs au contenu doublé sur cette carte
+
+Demande du propriétaire : « les points de ressources actuels sont trop vite épuisés », contenu doublé. Convenu
+avec lui : sur cette carte seulement ; les autres cartes et les campagnes ne changent pas.
+
+- **Changement** : données de la carte seulement (`cartes.js`, `CONTENU = 2` dans le fabricant) : 6 000 et 5 000
+  par base, 12 000 sur la place, 10 000 aux portes de la ville. Aucune ligne du moteur n'a changé ; le revenu par
+  voyage reste le même, les champs durent plus longtemps.
+- **Mesure** (huit ordinateurs chacun pour soi, graines fixes, mêmes parties avant et après) : premier champ vide
+  vers 6 min avant (369 s, 375 s, 370 s), vers 12 min après (aucun en 710 s, puis 734 s et 732 s) ; champs vides
+  à 10 min : 5, 5 et 6 avant, 0, 0 et 0 après. Partie à niveaux mélangés avec Ultra, après : premier champ vide à
+  723 s. Aucune erreur, écart de réserves nul. Ces parties s'arrêtent quand le camp J est éliminé : elles ne
+  disent rien de la durée d'une vraie partie.
+- **Vu passer** : duel `7d442efb` et quatre camps `69b4664e`, inchangés.
+- **Non vérifié** : l'effet sur une partie jouée à la souris ; la fin de partie (au-delà de 20 min) ; pas de
+  relecture indépendante (changement de données seulement).
 
 ### Commandes
 

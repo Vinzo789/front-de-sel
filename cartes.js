@@ -371,36 +371,38 @@ CARTES.couronneVarenne = {
     [[2180, 1960], [3420, 1960]],
     [[2800, 1560], [2800, 2360]],
   ],
+  // Contenu doublé par rapport aux autres cartes (lot 2, 25 novembre 2026) : 6 000 et 5 000 par base,
+  // 12 000 sur la place, 10 000 aux portes de la ville.
   noeuds: [
-    [657, 1632, 3000],   // base ouest
-    [663, 2325, 3000],   // base ouest
-    [1192, 2183, 2500],   // avance ouest
-    [4937, 2325, 3000],   // base est
-    [4943, 1632, 3000],   // base est
-    [4411, 1764, 2500],   // avance est
-    [3129, 655, 3000],   // base nord
-    [2436, 665, 3000],   // base nord
-    [2580, 1193, 2500],   // avance nord
-    [2436, 3255, 3000],   // base sud
-    [3129, 3265, 3000],   // base sud
-    [2999, 2732, 2500],   // avance sud
-    [1495, 716, 3000],   // base nord-ouest
-    [1122, 1300, 3000],   // base nord-ouest
-    [1643, 1470, 2500],   // avance nord-ouest
-    [4105, 3204, 3000],   // base sud-est
-    [4478, 2620, 3000],   // base sud-est
-    [3957, 2450, 2500],   // avance sud-est
-    [4478, 1300, 3000],   // base nord-est
-    [4105, 716, 3000],   // base nord-est
-    [3732, 1117, 2500],   // avance nord-est
-    [1122, 2620, 3000],   // base sud-ouest
-    [1495, 3204, 3000],   // base sud-ouest
-    [1868, 2803, 2500],   // avance sud-ouest
-    [2800, 1960, 6000],   // place de la ville
-    [2040, 1530, 5000],   // porte de la ville
-    [3560, 1530, 5000],   // porte de la ville
-    [2040, 2390, 5000],   // porte de la ville
-    [3560, 2390, 5000],   // porte de la ville
+    [657, 1632, 6000],   // base ouest
+    [663, 2325, 6000],   // base ouest
+    [1192, 2183, 5000],   // avance ouest
+    [4937, 2325, 6000],   // base est
+    [4943, 1632, 6000],   // base est
+    [4411, 1764, 5000],   // avance est
+    [3129, 655, 6000],   // base nord
+    [2436, 665, 6000],   // base nord
+    [2580, 1193, 5000],   // avance nord
+    [2436, 3255, 6000],   // base sud
+    [3129, 3265, 6000],   // base sud
+    [2999, 2732, 5000],   // avance sud
+    [1495, 716, 6000],   // base nord-ouest
+    [1122, 1300, 6000],   // base nord-ouest
+    [1643, 1470, 5000],   // avance nord-ouest
+    [4105, 3204, 6000],   // base sud-est
+    [4478, 2620, 6000],   // base sud-est
+    [3957, 2450, 5000],   // avance sud-est
+    [4478, 1300, 6000],   // base nord-est
+    [4105, 716, 6000],   // base nord-est
+    [3732, 1117, 5000],   // avance nord-est
+    [1122, 2620, 6000],   // base sud-ouest
+    [1495, 3204, 6000],   // base sud-ouest
+    [1868, 2803, 5000],   // avance sud-ouest
+    [2800, 1960, 12000],   // place de la ville
+    [2040, 1530, 10000],   // porte de la ville
+    [3560, 1530, 10000],   // porte de la ville
+    [2040, 2390, 10000],   // porte de la ville
+    [3560, 2390, 10000],   // porte de la ville
   ],
   structures: [
     { type: 'ferme', x: 1744, y: 2088, l: 150, h: 100, nom: 'Mas de la Croix' },
