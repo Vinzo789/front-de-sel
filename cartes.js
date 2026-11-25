@@ -426,5 +426,8 @@ CARTES.couronneVarenne = {
   ],
   // 0 ouest contre 1 est, 2 nord contre 3 sud, 4 nord-ouest contre 5 sud-est, 6 nord-est contre 7 sud-ouest
   bases: [ { c: 10, r: 48 }, { c: 127, r: 48 }, { c: 68, r: 10 }, { c: 68, r: 85 }, { c: 27, r: 21 }, { c: 110, r: 74 }, { c: 110, r: 21 }, { c: 27, r: 74 } ],
+  // Lot 3 (25 novembre 2026) : extracteurs neutres à capturer (escarmouche hors ligne seulement), coin haut-gauche
+  // en cases ; un près de chaque base (dans l'ordre des bases), puis deux près de la ville.
+  extracteurs: [ { c: 23, r: 40 }, { c: 115, r: 57 }, { c: 78, r: 23 }, { c: 60, r: 73 }, { c: 43, r: 21 }, { c: 95, r: 75 }, { c: 105, r: 36 }, { c: 33, r: 60 }, { c: 49, r: 45 }, { c: 89, r: 51 } ],
 };
 // <<< Couronne de Varenne

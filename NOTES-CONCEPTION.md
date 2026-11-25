@@ -1329,6 +1329,61 @@ avec lui : sur cette carte seulement ; les autres cartes et les campagnes ne cha
 - **Non vérifié** : l'effet sur une partie jouée à la souris ; la fin de partie (au-delà de 20 min) ; pas de
   relecture indépendante (changement de données seulement).
 
+#### Lot 3 (25 novembre 2026, `?v=50`) : extracteurs à capturer
+
+Demande du propriétaire : des bâtiments « style extracteur » disséminés sur la carte, en nombre raisonnable, au
+moins un par camp, capturés par un technicien resté plusieurs secondes à côté. Décidé par lui : c'est l'ouvrier
+existant qui capture. Présents seulement sur la Couronne de Varenne (champ `extracteurs` de la carte), en
+escarmouche hors ligne.
+
+- **Règles** (`EXTRACTEUR`, `jeu.js`) : 10 extracteurs neutres, un à environ 620 px de chaque QG et deux près de
+  la ville ; 1 200 PV. Clic droit d'un ouvrier sur un extracteur neutre ou ennemi : ordre `capturer`. La capture
+  dure 10 s à côté du bâtiment ; elle repart de zéro si l'ouvrier s'éloigne, meurt ou reçoit un autre ordre ;
+  plusieurs ouvriers ne vont pas plus vite ; deux équipes ennemies en même temps : rien n'avance. Capturé, il
+  rapporte 10 réserves toutes les 5 s, sans multiplicateur de difficulté. Un ennemi le reprend par capture, ou le
+  détruit (perdu pour la partie). Neutre, il ne reçoit aucun dégât. Jamais réparé ; ne compte pas pour rester en
+  vie ; redevient neutre quand son propriétaire est éliminé.
+- **Jamais visé d'office** (`chercherCible`, `chercherCibleAvion`) : aucune unité ne tire d'elle-même sur un
+  extracteur ; on le détruit sur ordre (clic droit d'unités armées) ou par une arme de zone. Raison mesurée : avec
+  le tir d'office, 4 à 6 extracteurs sur 10 étaient détruits en 12 à 15 min de partie à huit ordinateurs ; sans
+  lui, il en reste 9 et 10.
+- **Ordinateur** (`captureIA`, `IA_CAPTURE`) : même ordre que le joueur. Facile ne capture pas ; Normale,
+  Difficile et Ultra envoient un seul ouvrier libre, s'ils en ont au moins deux, vers l'extracteur le plus proche
+  du QG (1 000 px ; Difficile et Ultra jusqu'à 2 600 px) ; jamais base menacée, jamais vers une cible gardée
+  (unité ou défense armée hostile à moins de 700 px) ; abandon après 15 s de capture contestée ; 120 s d'attente
+  avant de retourner là où un ouvrier est mort ou a renoncé. Il ne prend jamais un extracteur pour objectif
+  d'attaque (vagues, frappes aériennes, Ultra, vaisseau du mode Surprises) : il le reprend par capture.
+- **Interface et rendu** : fiche (propriétaire, revenu, capture en cours), anneau de progression au sol, rond sur
+  la minicarte, curseur des ouvriers, ligne dans la fenêtre « Commandes » ; modèle 3D original
+  (`extracteurPompage`, `r3d-batiments.js` : chevalet à balancier, deux cuves, dalle), gris quand il est neutre.
+- **Technique** : `BATIMENTS.extracteur` est déclaré non énumérable, pour que les tables du jeu en ligne et la
+  barre de construction ne le voient pas. Une zone de 150 px sans rochers entoure chaque extracteur : la
+  disposition des rochers de cette carte a changé par rapport à `?v=49`.
+- **Vu passer par l'orchestrateur**, code final : duel `7d442efb`, quatre camps `69b4664e`, inchangés ;
+  `testerDefense()` 83 sur 83 ; `avecGraine(7, () => testerGaleries())` 72 sur 72 ; `testerExtracteurs()` 29 sur
+  29 sur la grande carte, 2 sur 2 sur Port-Calmes (aucun extracteur créé) ; mission `karsk-2` une minute, aucun
+  extracteur ; deux parties à huit ordinateurs à pas irrégulier (niveaux mélangés avec Ultra, 700 s ; Difficile
+  et Normale, 900 s) : aucune erreur, écart de réserves 0, 9 puis 10 extracteurs restants, passés entre plusieurs
+  mains ; images regardées : modèle capturé et fiche. `testerDefenseEnLigne()` rejoué trois fois sur le code final : 19 sur 20 la première fois (« proposition lourde jamais reçue par l'invité », déroulé arrêté), puis 21 sur 21 deux fois. Échec non expliqué ; il n'a pas été reproduit, le lot ne touche ni `reseau.js` ni ce déroulé, et l'essai dépend du temps réel dans un volet masqué. À surveiller : s'il revient, le chercher avant tout autre lot. `testerGaleriesEnLigne()` pas rejoué.
+- **Rapporté par l'agent qui a programmé, non rejoué** : captures à 10,013 et 10,028 s à pas irrégulier, revenu
+  de 120 en 60 s, images du modèle neutre et de l'anneau de capture.
+- **Relecture indépendante** (lecture seule) : rien de bloquant. Corrigés ensuite par l'orchestrateur, non relus
+  par un tiers : ouvrier d'un camp éliminé qui capturait encore ; ordinateur qui sacrifiait ses ouvriers sur une
+  cible gardée ; deux ordinateurs bloqués sur la même capture ; extracteurs pris pour objectifs d'attaque ;
+  points de commandement d'un extracteur détruit (valeur 300 au lieu de 800).
+- **Non vérifié** : le jeu à la souris (clic droit, curseur, anneau en mouvement, balancier animé) ; les cas de
+  l'ordinateur corrigés après relecture n'ont pas d'essai propre (seulement les deux parties à huit) ; une partie
+  de plus de 15 min.
+- **Limites connues** : la ligne d'aide de la fenêtre « Commandes » apparaît aussi là où il n'y a pas
+  d'extracteur ; pendant la trêve du mode Surprises, deux alliés de circonstance se gênent encore sur une
+  capture ; l'ordinateur ne rappelle pas un ouvrier parti capturer quand sa base est attaquée ensuite ; les
+  bases nord-ouest et sud-est sont un peu plus près d'un extracteur de la ville (1 274 px contre 1 460 à 1 605).
+- **Choix faits sans le propriétaire, à valider** : 10 extracteurs et leurs places ; 10 s de capture ; revenu de
+  10 toutes les 5 s ; 1 200 PV ; jamais réparé ; détruit = perdu pour la partie ; neutre intouchable ; aucun tir
+  d'office sur un extracteur ; capture contestée figée plutôt que remise à zéro ; retour au neutre à
+  l'élimination du propriétaire ; le nom « Extracteur » et son allure (pompe à saumure) ; les seuils de
+  l'ordinateur.
+
 ### Commandes
 
 Souris pour sélectionner et ordonner, molette ou touches + et − (rangée

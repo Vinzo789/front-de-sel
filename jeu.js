@@ -309,6 +309,24 @@ const BATIMENTS = {
     defense:{genre:'zenith', limite:1, zone:900, coutMunition:300, tempsMunition:60, stockMax:2, chancesBase:15, chancesAvecRadars:[42, 58, 75]},
     desc:'Défense antimissile de haute altitude : peut abattre en vol un missile lourd qui vise sa zone (pas le léger). Une seule par camp.'},
 };
+// Extracteur (25 novembre 2026, lot 3 de la grande carte) : installation neutre à capturer par un ouvrier, posée au
+// départ d'une escarmouche hors ligne sur une carte qui porte un champ « extracteurs » (voir poserExtracteurs).
+// Non constructible (absent de batimentsConstructibles), jamais réparé, ne compte pas pour rester en vie.
+// Déclaré NON ÉNUMÉRABLE : BATIMENTS.extracteur se lit comme les autres, mais Object.keys(BATIMENTS) et les boucles
+// « for in » ne le voient pas. Ainsi la table des bâtiments du jeu en ligne (tablesReseau, qui doit finir par la
+// Zénith), le préchauffage des modèles 3D et les vignettes restent exactement ceux d'avant : l'extracteur n'existe
+// jamais en ligne. Réglages : objet EXTRACTEUR ci-dessous.
+Object.defineProperty(BATIMENTS, 'extracteur', {enumerable:false, value:{nom:'Extracteur', taille:2, pv:1200, cout:0, temps:0, extracteur:true,
+  desc:'Pompe la saumure du sous-sol. Un ouvrier le capture en restant 10 s à côté ; il rapporte ensuite des réserves à son propriétaire. Jamais réparé.'}});
+// Extracteurs (25 novembre 2026, lot 3) : durée de la capture (s de jeu cumulées, ouvrier à portée), revenu versé au
+// propriétaire toutes les « periode » s (sans multiplicateur de difficulté), distance (px, bord du bâtiment) où
+// l'ouvrier s'arrête (approche) et jusqu'où sa capture compte encore (portee : un peu plus, pour que les petites
+// poussées entre unités voisines n'interrompent pas la capture).
+// valeur : ce qu'il vaut en points de commandement pour qui le détruit (un bâtiment sans prix vaut 800).
+const EXTRACTEUR = {duree:10, revenu:10, periode:5, approche:30, portee:60, valeur:300};
+// Une entité est-elle un extracteur ? (fonction pure ; toujours fausse sans extracteur, ce qui laisse sans effet
+// tous les filtres qui l'emploient sur les cartes, missions et parties en ligne qui n'en ont pas)
+function estExtracteur(e){ return !!(e && e.def && e.def.extracteur); }
 // Une entité est-elle une galerie de tir ? (fonction pure ; faux pour tout ce qui n'est pas un bâtiment galerie)
 function estGalerie(e){ return !!(e && e.def && e.def.galerie); }
 // Galerie fermée (novembre 2026) : terminée et hors cycle de tir. Règle « porte close, rien ne passe » :
@@ -568,6 +586,12 @@ function emplacementsCarte(carte){
   return [];
 }
 
+// Extracteurs d'une carte (25 novembre 2026, lot 3) : champ facultatif « extracteurs » [{c, r}, ...] (coin haut-gauche
+// en cases, bâtiment de 2 × 2 cases), entrées invalides écartées. Fonction pure ; liste vide sans ce champ.
+function extracteursCarte(carte){
+  const l = carte && carte.extracteurs;
+  return Array.isArray(l) ? l.filter(e => e && Number.isInteger(e.c) && Number.isInteger(e.r) && e.c >= 0 && e.r >= 0 && e.c + 2 <= COLS && e.r + 2 <= LIGNES) : [];
+}
 // Charge une carte (objet de données) : remplit les globales et la grille.
 // « evitements » : cercles {x, y, r} où ne pas poser de rochers (départ d'une mission).
 function chargerCarte(carte, evitements){
@@ -612,6 +636,9 @@ function chargerCarte(carte, evitements){
   const maxEssais = Math.max(500, (voulu - roches.length)*12);
   const margeRoutes = nombre(carte.margeRoutes, MARGE_ROUTE);
   const sansRochers = (Array.isArray(carte.zonesSansRochers) ? carte.zonesSansRochers : []).filter(z => z && isFinite(z.x) && isFinite(z.y) && z.l > 0 && z.h > 0);
+  // Extracteurs (25 novembre 2026, lot 3) : aucun rocher isolé à moins de 150 px de leur centre. Carte sans champ
+  // « extracteurs » : liste vide, la condition ne rejette rien et le tirage est exactement celui d'avant.
+  const centresExtr = extracteursCarte(carte).map(e => ({x:(e.c + 1)*TUILE, y:(e.r + 1)*TUILE}));
   let essais = 0;
   while(roches.length < voulu && essais++ < maxEssais){
     const x = Z.x + alea()*Z.l, y = Z.y + alea()*Z.h, r = 22 + alea()*22;
@@ -625,6 +652,7 @@ function chargerCarte(carte, evitements){
     if(RIVIERES.some(rv => distPolyligne(x, y, rv.points) < rv.largeur/2 + r + 30)) continue;
     if(PONTS.some(p => Math.hypot(x-p.x, y-p.y) < p.longueur/2 + 80)) continue;
     if(bosquets.some(b => Math.hypot(x-b.x, y-b.y) < b.r + r + 20)) continue;
+    if(centresExtr.length && centresExtr.some(z => Math.hypot(x-z.x, y-z.y) < 150)) continue;
     roches.push({x, y, r});
   }
   // Grille de passage
@@ -773,6 +801,8 @@ function creerBatiment(type, camp, c, r, fini){
   // Le rendu lira plus tard b.intT (heure du dernier tir d'intercepteur, absent avant) et b.angleT (caisson).
   // Batterie Zénith (21 novembre 2026, cahier § 12.2) : même état b.para que la Parasol.
   if(D.defense && (D.defense.genre === 'parasol' || D.defense.genre === 'zenith')) b.para = {stock:0, fab:0, fabT:0, autorise:{}};
+  // Extracteur (25 novembre 2026, lot 3) : capture en cours et horloge du revenu (voir majExtracteurs).
+  if(D.extracteur) Object.assign(b, {capture:null, revenuT:0});
   for(let rr=Math.max(0,r); rr<Math.min(LIGNES,r+t); rr++) for(let cc=Math.max(0,c); cc<Math.min(COLS,c+t); cc++) grille[rr*COLS+cc] = 3;
   ents.push(b);
   return b;
@@ -967,6 +997,9 @@ function chercherCible(u, rayon, auRepos){
   let best = null, bs = Infinity;
   for(const e of ents){
     if(!peutCibler(u,e)) continue;
+    // Extracteur (25 novembre 2026) : jamais pris pour cible de lui-même ; on ne le détruit que sur ordre (clic droit
+    // d'unités armées) ou par une arme de zone. Sans cela, les unités de passage les rasaient tous en un quart d'heure.
+    if(estExtracteur(e)) continue;
     const d = distBord(u,e);
     if(d > rayon) continue;
     if(auRepos && e.est === 'batiment' && d > u.def.portee) continue;
@@ -1131,7 +1164,7 @@ function batimentAReparer(u, rayon){
   let best = null, bd = rayon || REPARATION_RAYON;
   for(const b of ents){
     if(b.est !== 'batiment' || b.mort || b.enCours || b.camp !== u.camp || b.pv >= b.pvMax*0.9) continue;
-    if(b.def.galerie) continue;   // galerie de tir (novembre 2026) : jamais réparée
+    if(b.def.galerie || b.def.extracteur) continue;   // galerie de tir (novembre 2026), extracteur (25 novembre 2026) : jamais réparés
     const d = dist(u, b); if(d < bd){ bd = d; best = b; }
   }
   return best;
@@ -1170,11 +1203,23 @@ function majOuvrier(u, dt){
     // Réparation gratuite : la moitié des PV du bâtiment en un temps de construction (au moins 20 s).
     const b = o.bat;
     // Galerie de tir (novembre 2026) : jamais réparée, ordre manuel compris (l'ordre tombe).
-    if(!b || b.mort || b.enCours || b.pv >= b.pvMax || estGalerie(b)){ u.ordre = null; return; }
+    // (Extracteur, 25 novembre 2026 : jamais réparé non plus.)
+    if(!b || b.mort || b.enCours || b.pv >= b.pvMax || estGalerie(b) || estExtracteur(b)){ u.ordre = null; return; }
     if(distBord(u,b) > 30){ allerVers(u, b.x, b.y, dt); return; }
     u.chemin = null; u.travaille = true;
     u.angle = Math.atan2(b.y-u.y, b.x-u.x);
     if(seulReparateur(u, b)) b.pv = Math.min(b.pvMax, b.pv + b.pvMax*0.5*dt/Math.max(20, b.def.temps || 40));
+    return;
+  }
+  if(o.type === 'capturer'){
+    // Extracteur (25 novembre 2026, lot 3) : l'ouvrier se place à côté ; la capture elle-même avance dans
+    // majExtracteurs. L'ordre tombe si l'extracteur est détruit ou n'est plus capturable (devenu le sien, ou allié).
+    const b = o.bat;
+    if(!b || b.mort || refusCapture(u.camp, b)){ u.ordre = null; u.chemin = null; return; }
+    const d = distBord(u, b);
+    if(d > EXTRACTEUR.approche && !(o.arrive && d <= EXTRACTEUR.portee)){ allerVers(u, b.x, b.y, dt); return; }
+    o.arrive = true; u.chemin = null; u.travaille = true;
+    u.angle = Math.atan2(b.y-u.y, b.x-u.x);
     return;
   }
   u.ordre = null;   // ordre inconnu des ouvriers (dont l'ancien « recolter »)
@@ -1189,6 +1234,90 @@ function seulReparateur(u, b){
   return true;
 }
 
+// ---------- Extracteurs à capturer (25 novembre 2026, lot 3 de la grande carte) ----------
+// Règles (demande du propriétaire) : un ouvrier qui a l'ordre « capturer » va se placer à côté de l'extracteur ;
+// tant qu'il y reste (bord à moins de EXTRACTEUR.portee px), la capture avance, en secondes de jeu cumulées (juste à
+// pas de temps irrégulier). Elle repart de zéro dès qu'aucun ouvrier de l'équipe n'est plus là (éloigné, mort, autre
+// ordre). Plusieurs ouvriers d'une même équipe n'accélèrent rien ; des ouvriers de deux équipes ennemies présents
+// ensemble figent la capture (« contestée »). Au bout de EXTRACTEUR.duree s, l'extracteur passe au camp de l'ouvrier.
+// État sur le bâtiment : b.capture = {camp, equipe, t, conteste} ou null ; b.revenuT : s accumulées vers le prochain
+// versement. Rien de tout cela n'existe sans extracteur.
+// Pose des extracteurs d'une carte, neutres et intacts (départ d'escarmouche hors ligne : voir demarrer).
+function poserExtracteurs(carte){
+  const l = [];
+  for(const e of extracteursCarte(carte)) l.push(creerBatiment('extracteur', 'N', e.c, e.r, true));
+  return l;
+}
+// Raison pour laquelle ce camp ne peut pas capturer ce bâtiment, ou null (fonction pure). Neutre ou ennemi :
+// capturable ; à soi ou à un allié : non.
+function refusCapture(camp, b){
+  if(!estExtracteur(b)) return 'Seul un extracteur peut être capturé.';
+  if(!camps[camp] || camps[camp].elimine) return 'Un camp éliminé ne capture plus.';
+  if(b.mort) return 'Cet extracteur est détruit.';
+  if(b.camp === camp) return 'Cet extracteur est déjà à vous.';
+  if(allies(camp, b.camp)) return 'Cet extracteur appartient à un allié.';
+  if(b.camp !== 'N' && !hostile(camp, b.camp)) return 'Cet extracteur ne peut pas être capturé.';
+  return null;
+}
+// Ouvriers qui capturent cet extracteur en ce moment : ordre « capturer » sur lui, à portée, capture permise.
+function capteursDe(b){
+  const l = [];
+  for(const u of ents){
+    if(u.mort || u.est !== 'unite' || !u.def.ouvrier || !u.ordre || u.ordre.type !== 'capturer' || u.ordre.bat !== b) continue;
+    if(distBord(u, b) <= EXTRACTEUR.portee && !refusCapture(u.camp, b)) l.push(u);
+  }
+  return l;
+}
+// Appelé à chaque pas par miseAJour : revenu des extracteurs possédés, puis avancement des captures.
+function majExtracteurs(dt){
+  for(let i = 0; i < ents.length; i++){
+    const b = ents[i];
+    if(b.mort || !b.def.extracteur) continue;
+    revenuExtracteur(b, dt);
+    majCaptureExtracteur(b, dt);
+  }
+}
+// Revenu : EXTRACTEUR.revenu réserves toutes les EXTRACTEUR.periode s au propriétaire (camp de joueur en jeu), compté
+// depuis la capture ; aucun multiplicateur de difficulté.
+function revenuExtracteur(b, dt){
+  const C = camps[b.camp];
+  if(!C || C.elimine || !CAMPS_JOUEURS.includes(b.camp)) return;
+  b.revenuT = (b.revenuT || 0) + dt;
+  while(b.revenuT >= EXTRACTEUR.periode - 1e-9){ b.revenuT -= EXTRACTEUR.periode; C.reserves += EXTRACTEUR.revenu; }
+}
+function majCaptureExtracteur(b, dt){
+  const presents = capteursDe(b);
+  if(!presents.length){ b.capture = null; return; }
+  const equipes = new Set(presents.map(u => equipeDe(u.camp)));
+  if(equipes.size > 1){
+    // Capture contestée : rien n'avance, rien ne se perd (l'avancement de l'équipe qui était là reste).
+    if(!b.capture) b.capture = {camp:null, equipe:null, t:0, conteste:true}; else b.capture.conteste = true;
+    return;
+  }
+  const eq = equipeDe(presents[0].camp);
+  let K = b.capture;
+  if(!K || K.equipe !== eq) K = b.capture = {camp:presents[0].camp, equipe:eq, t:0, conteste:false};
+  K.conteste = false;
+  // Deux camps alliés ensemble : la capture va au premier arrivé, ou à l'allié resté si le premier est parti.
+  if(!presents.some(u => u.camp === K.camp)) K.camp = presents[0].camp;
+  K.t += dt;
+  if(K.t >= EXTRACTEUR.duree - 1e-9) capturerExtracteur(b, K.camp);
+}
+// Fin de capture : l'extracteur change de camp (PV conservés), messages au nouveau et à l'ancien propriétaire.
+function capturerExtracteur(b, camp){
+  const ancien = b.camp;
+  b.camp = camp; b.capture = null; b.revenuT = 0; b.cible = null; b.rally = null;
+  notifier(camp, 'Extracteur capturé : +' + EXTRACTEUR.revenu + ' réserves toutes les ' + EXTRACTEUR.periode + ' s.', 'succes');
+  if(CAMPS_JOUEURS.includes(ancien))
+    notifier(ancien, 'Un extracteur nous a été pris (camp ' + nomCamp(camp).toLowerCase() + ').', 'alerte');
+}
+// Propriétaire éliminé : ses extracteurs redeviennent neutres (PV conservés, revenu arrêté).
+function rendreExtracteursNeutres(camp){
+  for(const b of ents) if(!b.mort && estExtracteur(b) && b.camp === camp){ b.camp = 'N'; b.revenuT = 0; b.cible = null; b.rally = null; }
+  // Ses ouvriers encore en vie ne capturent plus rien (leurs ordres de capture tombent).
+  for(const u of ents) if(!u.mort && u.camp === camp && u.ordre && u.ordre.type === 'capturer'){ u.ordre = null; u.chemin = null; }
+}
+
 // ---------- Réparateurs (mécano, infirmier, atelier mobile, dépanneuse) ----------
 // Jamais d'arme. Le fantassin (soigne 'infanterie') soigne l'infanterie et répare les bâtiments ; le
 // véhicule (soigne 'vehicules') répare les véhicules, les drones, les hélicoptères et les bâtiments.
@@ -1201,7 +1330,7 @@ const SOIN_CONTACT = 40, SOIN_AUTO = 320, SOIN_EN_ROUTE = 200;
 function peutSoigner(u, e){
   if(!e || e === u || e.mort || e.demo || e.pv >= e.pvMax - 0.5) return false;
   if(e.camp !== u.camp && !allies(u.camp, e.camp)) return false;
-  if(e.est === 'batiment') return !e.enCours && !e.def.neutre && !e.def.galerie;   // galerie de tir : jamais réparée
+  if(e.est === 'batiment') return !e.enCours && !e.def.neutre && !e.def.galerie && !e.def.extracteur;   // galerie de tir, extracteur : jamais réparés
   const D = e.def;
   if(D.avion || D.forme === 'vaisseauMere') return false;
   const fantassin = D.blindage === 'infanterie';
@@ -1525,6 +1654,7 @@ function chercherCibleAvion(u, offensif){
   let best = null, bs = Infinity;
   for(const e of ents){
     if(!peutCibler(u, e)) continue;
+    if(estExtracteur(e)) continue;   // jamais de lui-même (voir chercherCible)
     const vole = enVol(e);
     if(!offensif && ((!vole && D.chasse) || (e.est === 'batiment' && !e.def.arme))) continue;
     // Chasseur en attaque-déplacement : au sol, seulement une proie que son canon blesse vraiment
@@ -1841,6 +1971,8 @@ function tirer(u, c){
 function infliger(c, deg, auteur){
   // Galerie de tir fermée (novembre 2026) : aucun dégât, quel que soit le chemin du coup (filet de sécurité).
   if(c.mort || deg <= 0 || galerieFermee(c)) return;
+  // Extracteur neutre (25 novembre 2026, lot 3) : on le capture, on ne le détruit pas (explosions de zone comprises).
+  if(c.camp === 'N' && estExtracteur(c)) return;
   if(c.def.bouclier && c.bouclier > 0){ deg = absorberBouclier(c, deg, auteur); if(deg <= 0) return; }   // section 14 bis
   c.pv -= deg; c.toucheT = temps;
   noterCombat(c, auteur, deg);
@@ -1852,7 +1984,7 @@ function infliger(c, deg, auteur){
   // Alerte du camp touché (chaque camp de joueur a la sienne ; seul le camp local l'affiche).
   if(CAMPS_JOUEURS.includes(c.camp) && (c.est === 'batiment' || c.def.ouvrier || c.def.collecteur) && temps - alerteDe(c.camp).t > 15){
     alertes[c.camp] = {t:temps, x:c.x, y:c.y};
-    if(!window.MODE_DEMO) notifier(c.camp, c.est === 'batiment' ? 'Notre base est attaquée ! (Espace pour y aller)' :
+    if(!window.MODE_DEMO) notifier(c.camp, estExtracteur(c) ? 'Un de nos extracteurs est attaqué ! (Espace)' : c.est === 'batiment' ? 'Notre base est attaquée ! (Espace pour y aller)' :
       c.def.collecteur ? 'Un collecteur est attaqué ! (Espace)' : 'Nos ouvriers sont attaqués ! (Espace)', 'alerte');
   }
   if(c.est === 'unite' && c.def.arme && auteur && (auteur.est === 'unite' || auteur.est === 'batiment') && !auteur.mort
@@ -1876,7 +2008,7 @@ function tuer(c, auteur){
   if(auteur && auteur.camp && auteur.camp !== c.camp && camps[auteur.camp]){
     // Galerie de tir (novembre 2026) : une destruction due à son missile ne rapporte aucun point de
     // commandement (pas de boule de neige avec la super-arme). Détruire une galerie rapporte les points habituels.
-    if(!auteur.galerie) camps[auteur.camp].points += (c.def.cout || 800) / (c.est === 'batiment' ? 180 : 220);
+    if(!auteur.galerie) camps[auteur.camp].points += (c.def.cout || (estExtracteur(c) ? EXTRACTEUR.valeur : 800)) / (c.est === 'batiment' ? 180 : 220);
     if(auteur.est === 'unite' && !auteur.mort){
       auteur.kills++;
       const r = auteur.kills >= 6 ? 2 : auteur.kills >= 2 ? 1 : 0;
@@ -1947,7 +2079,7 @@ function planifier(delai, fn){ evenements.push({t:delai, fn}); }
 function batimentRenforts(campId){
   // Galerie de tir (novembre 2026) : pas un lieu d'arrivée (elle ne compte pas pour rester en vie).
   return ents.find(b => b.est === 'batiment' && b.camp === campId && b.type === 'qg' && !b.mort)
-      || ents.find(b => b.est === 'batiment' && b.camp === campId && !b.mort && !estGalerie(b)) || null;
+      || ents.find(b => b.est === 'batiment' && b.camp === campId && !b.mort && !estGalerie(b) && !estExtracteur(b)) || null;   // (ni un extracteur, 25 novembre 2026)
 }
 // Le pouvoir peut-il produire son effet ? Renvoie null si oui, sinon la raison (texte pour le joueur).
 // Vérifié AVANT de prélever points et recharge : un pouvoir sans effet ne coûte rien.
@@ -2833,7 +2965,9 @@ function economieIA(C, F, bats, ouvriers, armee, qg){
         // D.galerie est toujours faux : même appel qu'avant, dans le même ordre.)
         const pos = D.galerie ? emplacementGalerieIA(C.id, ia.besoin, qg || bats[0])
           : trouverEmplacement(ia.besoin, U ? centreChantierUltra(C.id, ia.besoin, qg || bats[0]) : (qg || bats[0]));
-        const o = ouvriers.find(libre) || ouvriers[0];
+        // (Extracteurs, 25 novembre 2026 : faute d'ouvrier libre, un ouvrier qui ne capture pas passe d'abord ; sans
+        // capture en cours, c'est ouvriers[0] comme avant.)
+        const o = ouvriers.find(libre) || ouvriers.find(u => !(u.ordre && u.ordre.type === 'capturer')) || ouvriers[0];
         if(pos && o){
           const nb = construireBatiment(C.id, ia.besoin, pos.c, pos.r, [o]);
           if(nb && D.galerie) noterGalerieIA(C.id, {quoi:'chantier', x:Math.round(nb.x), y:Math.round(nb.y)});
@@ -2969,6 +3103,72 @@ function economieIA(C, F, bats, ouvriers, armee, qg){
     }
   }
 }
+// ---------- Extracteurs : capture par l'ordinateur (25 novembre 2026, lot 3) ----------
+// Sans triche : le même ordre « capturer » que le joueur (executerOrdre, mêmes contrôles). Par niveau : pres = rayon
+// (px, depuis le QG) où il capture sans condition ; loin = rayon où il va plus loin s'il n'y a pas d'armée ennemie
+// (unité armée hostile) à moins de armee px de la cible (0 : jamais). Facile : absent, il ne capture pas.
+// Jamais quand la base est menacée (unité armée hostile à moins de menace px d'un de ses bâtiments) ; un seul ouvrier
+// en capture à la fois, et seulement s'il en reste au moins un autre pour construire.
+const IA_CAPTURE = {
+  normal:   {pres:1000, loin:0},
+  difficile:{pres:1000, loin:2600},
+  ultra:    {pres:1000, loin:2600},
+};
+// conteste : s de capture contestée avant d'abandonner ; attente : s avant de retenter un extracteur abandonné ou
+// où l'ouvrier envoyé est mort (sans cela l'ordinateur y sacrifiait ses ouvriers l'un après l'autre).
+const IA_CAPTURE_ZONES = {menace:600, armee:700, conteste:15, attente:120};
+function captureIA(id, bats, ouvriers, qg){
+  const R = IA_CAPTURE[niveauIA(id)];
+  if(!R || !qg || MISSION || ouvriers.length < 2) return;
+  const M = IA_CAPTURE_ZONES;
+  if(!ents.some(b => !b.mort && b.def.extracteur)) return;                 // carte sans extracteur : rien, aucun état
+  const E = etatIA(id), K = E.capture || (E.capture = {ouvrier:null, bat:null, contesteT:null, attente:{}});
+  const enCours = ouvriers.find(o => o.ordre && o.ordre.type === 'capturer');
+  if(enCours){                                                             // un seul à la fois
+    const b = enCours.ordre.bat;
+    K.ouvrier = enCours.id; K.bat = b ? b.id : null;
+    // Capture contestée trop longtemps : il renonce et n'y revient pas avant un moment.
+    if(b && b.capture && b.capture.conteste){
+      if(K.contesteT == null) K.contesteT = temps;
+      else if(temps - K.contesteT > M.conteste){
+        executerOrdre(id, {type:'arret', ids:[enCours.id]});
+        K.attente[b.id] = temps + M.attente; K.contesteT = null; K.ouvrier = null;
+      }
+    } else K.contesteT = null;
+    return;
+  }
+  // L'ouvrier envoyé est mort en route ou sur place : cet extracteur est gardé, on attend avant d'y retourner.
+  if(K.ouvrier != null){
+    const w = ents.find(e => e.id === K.ouvrier);
+    if((!w || w.mort) && K.bat != null) K.attente[K.bat] = temps + M.attente;
+    K.ouvrier = null; K.contesteT = null;
+  }
+  const cibles = [];
+  for(const b of ents){
+    if(b.mort || !b.def.extracteur || refusCapture(id, b) || K.attente[b.id] > temps) continue;
+    if(b.capture && (b.capture.equipe === equipeDe(id) || b.capture.conteste)) continue;   // déjà pris en main, ou disputé
+    cibles.push(b);
+  }
+  if(!cibles.length) return;
+  const libres = ouvriers.filter(o => !o.ordre || o.ordre.type === 'reparer');
+  if(!libres.length) return;
+  // Menace : unité armée hostile, ou défense fixe armée hostile (tourelle, bunker, batterie).
+  const armeHostile = e => !e.mort && hostile(id, e.camp) && !!e.def.arme && !e.def.ouvrier && (e.est === 'batiment' ? !e.enCours : e.est === 'unite' && !(e.def.avion && enVol(e)));
+  for(const e of ents) if(armeHostile(e) && e.est === 'unite' && bats.some(b => dist(b, e) < M.menace)) return;   // base menacée
+  cibles.sort((a, c) => dist(a, qg) - dist(c, qg));
+  let cible = null;
+  for(const b of cibles){
+    const d = dist(b, qg);
+    if(d > Math.max(R.pres, R.loin)) break;
+    if(ents.some(e => armeHostile(e) && dist(e, b) < M.armee)) continue;   // cible gardée : pas d'ouvrier sacrifié
+    cible = b; break;
+    if(d > Math.max(R.pres, R.loin)) break;
+  }
+  if(!cible) return;
+  const o = libres.slice().sort((a, c) => dist(a, cible) - dist(c, cible))[0];
+  executerOrdre(id, {type:'capturer', ids:[o.id], cibleId:cible.id});
+  K.ouvrier = o.id; K.bat = cible.id;
+}
 // ---------- Aviation de l'IA ----------
 // Interceptions : tout appareil ennemi en vol à moins de IA_INTERCEPTION px d'un de ses bâtiments est
 // pris en chasse par ses avions armés contre le ciel. Appui : ses avions d'attaque au sol engagent les
@@ -3014,7 +3214,7 @@ function cibleFrappe(camp, depuis, risqueMax, aa){
   aa = aa || defensesAA(camp);
   let best = null, bs = -Infinity;
   for(const e of ents){
-    if(e.mort || e.est !== 'batiment' || !hostile(camp, e.camp) || galerieFermee(e)) continue;   // galerie fermée : intouchable
+    if(e.mort || e.est !== 'batiment' || !hostile(camp, e.camp) || galerieFermee(e) || estExtracteur(e)) continue;   // galerie fermée : intouchable ; extracteur : pas une cible de frappe
     const risque = risqueFrappe(camp, depuis, e, aa);
     if(risqueMax != null && risque > risqueMax) continue;
     const valeur = e.def.aeroport ? 5 : (e.def.arme || e.type === 'usine') ? 4 : e.type === 'qg' ? 2 : 3;
@@ -3135,11 +3335,11 @@ function choisirCampCible(id, centre){
       if(e.mort) continue;
       if(e.camp === c){
         // Galerie de tir fermée (novembre 2026) : ni visée ni comptée (elle n'est pas une base à attaquer).
-        if(e.est === 'batiment'){ if(!galerieFermee(e)) d = Math.min(d, dist(e, centre)); }
+        if(e.est === 'batiment'){ if(!galerieFermee(e) && !estExtracteur(e)) d = Math.min(d, dist(e, centre)); }
         else if(e.def.arme && !e.def.ouvrier) force += e.def.cout || 0;
       } else if(e.est === 'unite' && e.enVague && e.camp !== id && allies(id, e.camp) && e.ordre && e.ordre.type === 'attaqueDeplacement'){
         // Vague alliée en route vers une base de c ?
-        if(ents.some(b => b.camp === c && b.est === 'batiment' && !galerieFermee(b) && Math.hypot(b.x - e.ordre.x, b.y - e.ordre.y) < 500)) pression++;
+        if(ents.some(b => b.camp === c && b.est === 'batiment' && !galerieFermee(b) && !estExtracteur(b) && Math.hypot(b.x - e.ordre.x, b.y - e.ordre.y) < 500)) pression++;
       }
     }
     // Riposte (novembre 2026) : un camp qui l'a frappé dans les 90 dernières secondes est préféré, d'autant
@@ -3159,7 +3359,9 @@ function choisirCampCible(id, centre){
 }
 function majIACamp(id, ia){
   const C = camps[id], F = FACTIONS[C.faction];
-  const bats = ents.filter(e => e.camp === id && e.est === 'batiment' && !e.mort);
+  // Extracteurs capturés (25 novembre 2026, lot 3) : hors de « bats » (ils ne sont pas la base : ni plan, ni défense,
+  // ni réparation, ni centre de la base). Sans extracteur, la liste est exactement celle d'avant.
+  const bats = ents.filter(e => e.camp === id && e.est === 'batiment' && !e.mort && !e.def.extracteur);
   const uns = ents.filter(e => e.camp === id && e.est === 'unite' && !e.mort);
   // Les avions ont leur propre conduite (majIAAviation) : ils ne suivent ni vagues ni rassemblement.
   const ouvriers = uns.filter(u => u.def.ouvrier);
@@ -3172,6 +3374,7 @@ function majIACamp(id, ia){
   const U = estUltra(id);
   if(U) analyserUltra(id, etatUltra(id), bats, uns);
   economieIA(C, F, bats, ouvriers, armee, qg);
+  captureIA(id, bats, ouvriers, qg);   // extracteurs (25 novembre 2026, lot 3), tous niveaux sauf Facile, Ultra compris
   const centre = qg || bats[0];
   // Rassemblement : 280 px devant la base, vers le centre de la carte (à deux camps : vers l'autre moitié,
   // comme avant novembre 2026).
@@ -3522,6 +3725,7 @@ function cibleVague(centre, camp, seul){
   for(const e of ents){
     if(e.mort || (e.def.avion && enVol(e))) continue;   // une vague ne court pas après un avion en vol
     if(galerieFermee(e)) continue;                       // ni après une galerie de tir fermée (novembre 2026)
+    if(estExtracteur(e)) continue;                       // ni vers un extracteur : il se reprend par capture (25 novembre 2026)
     if(seul ? e.camp !== seul : camp ? !hostile(camp, e.camp) : e.camp !== campJoueur) continue;
     const d = dist(e, centre) + (e.est === 'batiment' ? 0 : 400);
     if(d < bd){ bd = d; best = e; }
@@ -4127,7 +4331,7 @@ function construireDefenseIA(C, d, bats, ouvriers, qg, garde){
   if(D.requiert && !bats.some(b => b.type === D.requiert && !b.enCours)) return;
   if(ents.some(e => e.camp === C.id && e.est === 'batiment' && e.enCours && !e.mort)) return;
   const pos = emplacementDefenseIA(d.quoi, bats, qg, R, memoireDefenseIA(C.id).radarsPerdus);
-  const o = ouvriers.find(o => !o.ordre || o.ordre.type === 'reparer') || ouvriers[0];
+  const o = ouvriers.find(o => !o.ordre || o.ordre.type === 'reparer') || ouvriers.find(u => !(u.ordre && u.ordre.type === 'capturer')) || ouvriers[0];   // (capture : voir economieIA)
   if(!pos || !o) return;
   const nb = construireBatiment(C.id, d.quoi, pos.c, pos.r, [o]);
   if(nb){ memoireDefenseIA(C.id).epargne = 0; noterDefenseIA(C.id, {quoi:'chantier', type:d.quoi, x:Math.round(nb.x), y:Math.round(nb.y)}); }
@@ -4552,7 +4756,7 @@ function analyserUltra(id, S, bats, uns){
     // découlent (objectif d'assaut, harcèlement, zones des pouvoirs, grille de voisinage).
     if(e.mort || e.demo || galerieFermee(e) || e.camp === 'N' || !hostile(id, e.camp)) continue;
     const K = A.ennemis[e.camp] || (A.ennemis[e.camp] = {camp:e.camp, armee:[], bats:[], eco:[], valeur:0});
-    if(e.est === 'batiment') K.bats.push(e);
+    if(e.est === 'batiment' && !estExtracteur(e)) K.bats.push(e);   // extracteur : jamais un objectif d'Ultra
     else if(e.def.collecteur || e.def.ouvrier) K.eco.push(e);
     else if(e.def.arme){ K.armee.push(e); K.valeur += valeurCombat(e); }
     if(e.est === 'unite' && e.def.aerien && e.def.forme !== 'vaisseauMere') A.appareils++;
@@ -5812,6 +6016,7 @@ function dessinerCalque(){
         g.beginPath(); g.moveTo(x,y); g.lineTo(x+4,y+3); g.lineTo(x+8,y); g.lineTo(x+8,y+2); g.lineTo(x+4,y+5); g.lineTo(x,y+2); g.closePath(); g.fill(); }
     }
   }
+  dessinerCaptures(g);   // extracteurs (25 novembre 2026) : sans capture en cours, ne dessine rien
   // Cadre de sélection
   if(souris.bas && (Math.abs(souris.x-souris.dx) > 5 || Math.abs(souris.y-souris.dy) > 5)){
     g.strokeStyle = '#7dff8a'; g.lineWidth = 1; g.fillStyle = 'rgba(125,255,138,.08)';
@@ -5845,6 +6050,29 @@ function dessinerZonesProtegees(g){
   }
   g.restore();
 }
+// Capture d'un extracteur en cours (25 novembre 2026, lot 3) : anneau au sol autour du bâtiment, qui se remplit à la
+// couleur du camp qui capture ; pointillé orangé quand la capture est contestée (rien n'avance).
+function dessinerCaptures(g){
+  for(const e of ents){
+    if(e.mort || !e.def.extracteur || !e.capture) continue;
+    const c = R3D.solVersEcran(e.x, e.y, 1);
+    if(!c.devant || c.x < -150 || c.y < -150 || c.x > largEcran + 150 || c.y > hautEcran + 150) continue;
+    const K = e.capture, r = e.def.taille*TUILE*0.78, k = Math.max(0, Math.min(1, K.t/EXTRACTEUR.duree));
+    g.save();
+    g.lineWidth = 6; g.strokeStyle = 'rgba(0,0,0,.5)'; cercleSol(g, e.x, e.y, r, 48); g.stroke();
+    if(K.conteste){ g.setLineDash([7, 6]); g.lineWidth = 2.5; g.strokeStyle = '#ff9a5c'; cercleSol(g, e.x, e.y, r, 48); g.stroke(); g.setLineDash([]); }
+    if(k > 0){
+      const n = Math.max(2, Math.ceil(48*k));
+      g.beginPath();
+      for(let i = 0; i <= n; i++){
+        const a = -Math.PI/2 + i/n*k*Math.PI*2, p = R3D.solVersEcran(e.x + Math.cos(a)*r, e.y + Math.sin(a)*r, 1);
+        i ? g.lineTo(p.x, p.y) : g.moveTo(p.x, p.y);
+      }
+      g.lineWidth = 3.5; g.strokeStyle = couleurCamp(K.camp) || '#ffd27a'; g.globalAlpha = K.conteste ? 0.5 : 1; g.stroke();
+    }
+    g.restore();
+  }
+}
 function cellulePlacement(){
   const t = BATIMENTS[mode.bat].taille;
   return {c:Math.round(souris.mx/TUILE - t/2), r:Math.round(souris.my/TUILE - t/2), t};
@@ -5875,6 +6103,7 @@ const miniVue = {x:NaN, y:NaN, d:NaN, a:NaN};
 // l'allié des missions : violet clair).
 const COULEUR_MINERAI_MINI = '#efe6d2';   // blanc cassé
 const COULEUR_ALERTE_MINI = '#ff4fd8';    // magenta vif
+const COULEUR_EXTRACTEUR_MINI = '#9ea6ab';   // extracteur neutre : gris (25 novembre 2026)
 function dessinerMinicarte(){
   const g = mctx;
   g.drawImage(miniFond, 0, 0);
@@ -5895,6 +6124,11 @@ function dessinerMinicarte(){
       g.strokeStyle = F.couleur; g.lineWidth = 1.5; rond(g, e.x*ECH, e.y*ECH, Math.max(5, e.rayon*ECH*0.8)); g.stroke();
       rond(g, e.x*ECH, e.y*ECH, 2.5); g.fill();
       if(e.cibleRayon){ g.strokeStyle = '#ff7a5c'; rond(g, e.cibleRayon.x*ECH, e.cibleRayon.y*ECH, 4); g.stroke(); }
+    }
+    else if(e.def.extracteur){
+      // Extracteur (25 novembre 2026, lot 3) : rond cerclé de sombre, couleur du propriétaire, gris neutre sinon.
+      if(e.camp === 'N') g.fillStyle = COULEUR_EXTRACTEUR_MINI;
+      rond(g, e.x*ECH, e.y*ECH, 2.6); g.fill(); g.strokeStyle = '#1b1d1f'; g.lineWidth = 1; g.stroke();
     }
     else if(e.est === 'batiment'){ const t = e.def.taille*TUILE*ECH; g.fillRect(e.x*ECH-t/2, e.y*ECH-t/2, t, t); }
     else if(e.def.avion && enVol(e)){
@@ -6008,6 +6242,12 @@ function etatUnite(u){
     if(!u.ordre) return 'Disponible';
     if(u.ordre.type === 'construire') return 'Construction';
     if(u.ordre.type === 'reparer') return 'Réparation';
+    if(u.ordre.type === 'capturer'){   // extracteur (25 novembre 2026, lot 3)
+      const K = u.ordre.bat && u.ordre.bat.capture;
+      if(!u.travaille) return 'Capture : en route vers l’extracteur';
+      if(K && K.conteste) return 'Capture : contestée (ouvriers ennemis sur place)';
+      return 'Capture' + (K && K.equipe === equipeDe(u.camp) ? ' : ' + Math.ceil(EXTRACTEUR.duree - K.t - 1e-9) + ' s' : '');
+    }
     return 'En mouvement';
   }
   if(u.def.collecteur){
@@ -6059,6 +6299,12 @@ function construirePanneau(){
     infos.innerHTML = `${htmlVignette('batiment', e.type, factionVignette(e), 'vign')}<h3>${e.def.nom}${suffixeCamp(e)}</h3>
       <div class="barrePv"><i id="ipv"></i></div><div class="ligne" id="ipvt"></div><div class="ligne" id="ietat"></div>
       <div class="desc">${e.def.desc}</div>`;
+  } else if(estExtracteur(e)){
+    // Extracteur (25 novembre 2026, lot 3) : propriétaire, revenu et capture en cours avant la description (lignes
+    // écrites par rafraichirPanneau : ligneProprioExtracteur, ligneRevenuExtracteur, ligneCaptureExtracteur).
+    infos.innerHTML = `${htmlVignette('batiment', e.type, factionVignette(e), 'vign')}<h3>${e.def.nom}</h3>
+      <div class="barrePv"><i id="ipv"></i></div><div class="ligne" id="ipvt"></div><div class="ligne" id="iproprio"></div>
+      <div class="ligne" id="irevenu"></div><div class="ligne" id="ietat"></div><div class="desc">${e.def.desc}</div>`;
   } else if(e.def.defense){
     // Défense antimissile (19 novembre 2026) : même ordre que la galerie (états avant la description), plus une
     // ligne pour les chances (#idef). Les deux lignes sont écrites par rafraichirPanneau (ligneEtatDefense).
@@ -6241,6 +6487,7 @@ function rafraichirPanneau(){
       if(e.est === 'unite') ecrireTexte(s, 'État : ' + etatUnite(e));
       else if(e.enCours) ecrireTexte(s, 'En construction : ' + Math.floor(e.progres*100) + ' %');
       else if(estGalerie(e)) ecrireTexte(s, 'État : ' + ligneEtatGalerie(e, e.camp === campJoueur));   // galerie de tir (novembre 2026)
+      else if(estExtracteur(e)) ecrireTexte(s, ligneCaptureExtracteur(e));                              // extracteur (25 novembre 2026)
       else if(e.def.defense) ecrireTexte(s, ligneEtatDefense(e, e.camp === campJoueur).etat);         // défense antimissile (19 novembre 2026)
       else if(e.def.arme) ecrireTexte(s, (e.cible ? 'Engage une cible' : 'En veille') + ' · portée ' + e.def.portee);
       else if(e.file.length) ecrireTexte(s, e.bloque ? (e.blocage === 'places' ? 'Production suspendue : aucune place libre' : 'Production suspendue : effectif maximal atteint')
@@ -6255,6 +6502,9 @@ function rafraichirPanneau(){
     if(f) ecrireTexte(f, e.file.length ? 'File : ' + e.file.map(t => UNITES[t].nom).join(', ') : 'File vide · clic droit sur la carte : point de ralliement');
     const d = el('idef');   // défense antimissile (19 novembre 2026) : n'existe que sur sa fiche
     if(d) ecrireTexte(d, e.enCours || !e.def.defense ? '' : ligneEtatDefense(e, e.camp === campJoueur).chances);
+    const ip = el('iproprio'), ir = el('irevenu');   // extracteur (25 novembre 2026) : n'existent que sur sa fiche
+    if(ip) ecrireTexte(ip, ligneProprioExtracteur(e, campJoueur));
+    if(ir) ecrireTexte(ir, ligneRevenuExtracteur(e, campJoueur));
   }
   for(const b of el('actions').querySelectorAll('button.act')){
     if(b.dataset.cout){
@@ -6291,8 +6541,26 @@ function rafraichirPanneau(){
     if(n && e) { let k = 0; for(const t of e.file) if(t === n.dataset.type) k++; ecrireTexte(n, k ? k : ''); }
   }
 }
+// Lignes de la fiche d'un extracteur (25 novembre 2026, lot 3 ; fonctions pures). vue : camp qui regarde.
+function ligneProprioExtracteur(e, vue){
+  if(e.camp === 'N') return 'Propriétaire : neutre';
+  if(e.camp === vue) return 'Propriétaire : vous';
+  return 'Propriétaire : ' + nomCamp(e.camp) + ' (' + faction(e.camp).nom + (allies(e.camp, vue) ? ', allié' : ', ennemi') + ')';
+}
+function ligneRevenuExtracteur(e, vue){
+  const t = EXTRACTEUR.revenu + ' réserves toutes les ' + EXTRACTEUR.periode + ' s';
+  if(e.camp === 'N') return 'Revenu : ' + t + ' pour qui le capture';
+  return 'Revenu : ' + t + (e.camp === vue ? ' · prochain versement dans ' + Math.max(0, Math.ceil(EXTRACTEUR.periode - (e.revenuT || 0) - 1e-9)) + ' s' : '');
+}
+function ligneCaptureExtracteur(e){
+  const K = e.capture;
+  if(!K) return e.camp === 'N' ? 'Aucune capture en cours · un ouvrier le capture par clic droit' : 'Aucune capture en cours';
+  if(K.conteste) return 'Capture contestée : ouvriers de deux équipes ennemies sur place';
+  return 'Capture en cours : ' + Math.ceil(EXTRACTEUR.duree - K.t - 1e-9) + ' s (' + nomCamp(K.camp) + ')';
+}
 function majPanneau(){
-  const sig = selection.map(e => e.id + (e.enCours ? 'c' : '')).join(',');
+  // (Extracteur, 25 novembre 2026 : son camp entre dans la signature, la fiche est refaite quand il change de main.)
+  const sig = selection.map(e => e.id + (e.enCours ? 'c' : '') + (e.def.extracteur ? e.camp : '')).join(',');
   if(sig !== signaturePanneau){ signaturePanneau = sig; construirePanneau(); }
   if(mode && mode.type === 'galerie' && !galerieViseeValide()) mode = null;   // galerie détruite pendant la visée
   const curseurMini = mode && mode.type === 'galerie' ? 'crosshair' : '';      // la minicarte vise aussi
@@ -6994,7 +7262,10 @@ function ordonner(ordre){
 // =====================================================================
 const TYPES_ORDRES = ['droit', 'attaqueDeplacement', 'arret', 'ralliement', 'construire', 'produire', 'retirer',
   'pouvoir', 'pause', 'abandon', 'alliance', 'proposerTreve', 'fabriquerMissile', 'tirGalerie', 'fabriquerMunition', 'repondreInterception',
-  'fabriquerMissileLourd'];
+  'fabriquerMissileLourd', 'capturer'];
+// Extracteurs (25 novembre 2026, lot 3) : 'capturer' {ids (ouvriers), cibleId (extracteur)} ; le clic droit d'ouvriers
+// sur un extracteur neutre ou ennemi y mène aussi (appliquerOrdreDroit), et l'ordinateur s'en sert (captureIA). Sans
+// code réseau : refusé en ligne (l'extracteur n'y existe d'ailleurs pas).
 // Lot B (cahier § 12.1) : 'fabriquerMissileLourd' {id} ; code réseau 'fabLourd' depuis le 22 novembre 2026 (§ 12.7),
 // accepté en ligne quand l'hôte a coché « Galeries de tir ». 'fabriquerMunition' vaut pour les deux batteries, et
 // 'tirGalerie' tire ce que la galerie contient (légers ou lourd).
@@ -7210,6 +7481,14 @@ function validerOrdre(camp, o){
       const m = empechementMunition(b);
       return m ? non(m, m === MOTIF_RESERVES ? 'reserves' : 'defense', 'alerte') : {bat:b};
     }
+    case 'capturer': {
+      const l = entitesDeLOrdre(camp, o.ids, 'unite');
+      if(typeof l === 'string') return non(l, 'entites');
+      if(!l.every(u => u.def.ouvrier)) return non('Seuls les ouvriers capturent un extracteur.', 'entites', 'alerte');
+      const c = cibleDe(); if(c.motif) return non(c.motif, 'cible');
+      const m = refusCapture(camp, c.cible);
+      return m ? non(m, 'cible', 'alerte') : {entites:l, cible:c.cible};
+    }
     case 'repondreInterception': {
       if(!galeriesActives()) return non(MOTIF_SANS_GALERIES, 'galerie', 'alerte');
       if(typeof o.oui !== 'boolean') return non('Champ « oui » invalide.');
@@ -7279,6 +7558,7 @@ function appliquerOrdre(camp, o, v){
     case 'fabriquerMissileLourd': return commanderMissileLourd(v.bat) ? fait(null, {id:v.bat.id}) : {ok:false, motif:'Commande refusée.', code:'galerie'};
     case 'fabriquerMunition': return commanderMunition(v.bat) ? fait(null, {id:v.bat.id}) : {ok:false, motif:'Commande refusée.', code:'defense'};
     case 'repondreInterception': return repondreInterception(camp, o.oui, o.cle) ? fait() : {ok:false, motif:'Réponse refusée.', code:'etat'};
+    case 'capturer': return fait(ordonnerCapture(v.entites, v.cible));
   }
   return {ok:false, motif:'Type d’ordre inconnu.', code:'invalide'};
 }
@@ -7293,19 +7573,31 @@ function retirerDeFile(b, type){
   if(i === 0) b.prodT = 0;
   return true;
 }
+// Ordre « capturer » donné à des ouvriers (déjà validé) ; renvoie la marque au sol.
+function ordonnerCapture(ouvriers, b){
+  for(const u of ouvriers){ u.ordre = {type:'capturer', bat:b}; u.cible = null; u.chemin = null; }
+  return [{x:b.x, y:b.y, couleur:'#ffd27a'}];
+}
 // Clic droit intelligent (ancien ordreDroit, pour un camp et des entités déjà validées). Renvoie les marques
 // au sol à montrer au joueur qui a donné l'ordre.
 function appliquerOrdreDroit(camp, mes, x, y, cibleForcee){
   const retour = [];
   const unites = mes.filter(e => e.est === 'unite');
   if(!unites.length){
-    for(const b of mes) if(b.est === 'batiment' && !b.def.arme) b.rally = {x, y};
+    for(const b of mes) if(b.est === 'batiment' && !b.def.arme && !b.def.extracteur) b.rally = {x, y};   // (extracteur : il ne produit rien)
     retour.push({x, y, couleur:'#7dff8a'});
     return retour;
   }
   const cible = cibleForcee !== undefined ? cibleForcee : entiteSous(x, y);
   const n = noeuds.find(k => k.reste > 0 && Math.hypot(k.x-x, k.y-y) < k.rayon+10);
   const ouvriers = unites.filter(u => u.def.ouvrier), collecteurs = unites.filter(u => u.def.collecteur);
+  // Extracteur neutre ou ennemi (25 novembre 2026, lot 3) : les ouvriers vont le capturer ; les autres unités gardent
+  // leur comportement habituel (attaque s'il est ennemi, déplacement sinon). Sans extracteur, rien ne change.
+  if(ouvriers.length && estExtracteur(cible) && !refusCapture(camp, cible)){
+    const marques = ordonnerCapture(ouvriers, cible);
+    const autres = unites.filter(u => !u.def.ouvrier);
+    return autres.length ? marques.concat(appliquerOrdreDroit(camp, autres, x, y, cible)) : marques;
+  }
   for(const u of collecteurs) u.gare = false;   // tout nouvel ordre lève l'arrêt
   let reste = unites;
   // Réparateur sur un allié qu'il ne sait pas soigner (13 novembre 2026 : l'ordre était ignoré sans
@@ -7331,7 +7623,7 @@ function appliquerOrdreDroit(camp, mes, x, y, cibleForcee){
   } else if(cible && cible.camp === camp && cible.est === 'batiment' && cible.enCours && ouvriers.length){
     for(const u of ouvriers){ u.ordre = {type:'construire', bat:cible}; u.chemin = null; }
     reste = unites.filter(u => !u.def.ouvrier);
-  } else if(cible && cible.camp === camp && cible.est === 'batiment' && !cible.enCours && cible.pv < cible.pvMax && !estGalerie(cible) && ouvriers.length){
+  } else if(cible && cible.camp === camp && cible.est === 'batiment' && !cible.enCours && cible.pv < cible.pvMax && !estGalerie(cible) && !estExtracteur(cible) && ouvriers.length){
     // (Galerie de tir, novembre 2026 : jamais réparée ; les ouvriers s'y rendent simplement.)
     for(const u of ouvriers){ u.ordre = {type:'reparer', bat:cible}; u.chemin = null; }
     reste = unites.filter(u => !u.def.ouvrier);
@@ -7415,7 +7707,9 @@ cv.addEventListener('mousemove', e => {
   const t = performance.now(); if(t - survolT < 80) return; survolT = t;
   const c = entiteSousEcran(e.clientX, e.clientY);
   // (galerie adverse fermée : pas de croix d'attaque, elle est intouchable)
-  cv.style.cursor = mode ? 'crosshair' : (c && !galerieFermee(c) && hostile(campJoueur,c.camp) && selection.some(s => s.camp === campJoueur && s.est === 'unite')) ? 'crosshair' : (c ? 'pointer' : 'default');
+  // (Extracteur capturable avec des ouvriers sélectionnés, 25 novembre 2026 : curseur « copie ».)
+  const capture = !mode && estExtracteur(c) && !refusCapture(campJoueur, c) && selection.some(s => s.camp === campJoueur && s.est === 'unite' && s.def.ouvrier);
+  cv.style.cursor = capture ? 'copy' : mode ? 'crosshair' : (c && !galerieFermee(c) && hostile(campJoueur,c.camp) && selection.some(s => s.camp === campJoueur && s.est === 'unite')) ? 'crosshair' : (c ? 'pointer' : 'default');
 });
 // Zoom : multiplie la distance de la caméra, entre les bornes de la vue (les mêmes pour la molette et le clavier).
 function zoomer(facteur){
@@ -8906,7 +9200,7 @@ function majSurprise(dt){
     if(S.etat === 'signes' && S.def.signes) S.def.signes(reste);
     if(reste <= 0){
       // Partie déjà jouée (un camp n'a plus de bâtiment) : la fin normale passe avant l'événement.
-      const aBat = c => ents.some(e => e.camp === c && e.est === 'batiment' && !e.mort && !estGalerie(e));   // galerie : ne compte pas
+      const aBat = c => ents.some(e => e.camp === c && e.est === 'batiment' && !e.mort && !estGalerie(e) && !estExtracteur(e));   // galerie, extracteur : ne comptent pas
       if(aBat(campJoueur) && campsEnJeu().some(c => hostile(campJoueur, c) && aBat(c))) S.def.declencher(); else S.instant = temps + 1;
     }
   } else if(S.etat === 'combat') majEnvahisseurs(dt);
@@ -9119,7 +9413,7 @@ function absorberBouclier(c, deg, auteur){
 // préférence pour le joueur le faisait viser le camp J toute la partie.)
 function baseVisee(u){
   // Galerie de tir (novembre 2026) : ne compte pas pour une base encore debout, et n'est pas visée fermée.
-  const aDesBats = camp => ents.some(b => b.camp === camp && b.est === 'batiment' && !b.mort && !estGalerie(b));
+  const aDesBats = camp => ents.some(b => b.camp === camp && b.est === 'batiment' && !b.mort && !estGalerie(b) && !estExtracteur(b));   // (extracteur : 25 novembre 2026)
   const sante = (u.pv || 0) + (u.bouclier || 0);
   let changer = !u.campVise || !aDesBats(u.campVise);
   if(!changer && (temps >= (u.alterneT || 0) || (u.santeVisee || 0) - sante >= ALTERNANCE_DEGATS*((u.pvMax || 0) + (u.bouclierMax || 0)))){
@@ -9134,7 +9428,7 @@ function baseVisee(u){
     // À plus de deux camps : la base visitée il y a le plus longtemps (jamais visitée d'abord), puis la plus
     // proche, pour faire le tour de toutes les bases.
     u.vises = u.vises || {};
-    for(const b of ents) if(b.est === 'batiment' && !b.mort && !galerieFermee(b) && hostile('X', b.camp) && b.camp !== exclu){
+    for(const b of ents) if(b.est === 'batiment' && !b.mort && !galerieFermee(b) && !estExtracteur(b) && hostile('X', b.camp) && b.camp !== exclu){
       const d = dist(u, b) - (b.camp === campJoueur ? PREFERENCE_JOUEUR : 0) + (u.vises[b.camp] != null ? 1e6 + u.vises[b.camp]*1e3 : 0);
       if(d < bd){ bd = d; best = b.camp; }
     }
@@ -9403,6 +9697,7 @@ function miseAJour(dt){
     for(const k in C.recharges) C.recharges[k] = Math.max(0, C.recharges[k] - dt);
   }
   revenuSecours(dt);
+  majExtracteurs(dt);   // extracteurs (25 novembre 2026, lot 3) : revenu et captures ; sans extracteur, ne fait rien
   for(let i=0; i<ents.length; i++){
     const e = ents[i]; if(e.mort) continue;
     if(e.est === 'unite') majUnite(e, dt); else majBatiment(e, dt);
@@ -9535,9 +9830,11 @@ function separer(dt){
 function verifierEliminations(){
   for(const id of campsEnJeu()){
     const C = camps[id];
-    if(C.elimine || ents.some(e => e.camp === id && e.est === 'batiment' && !e.mort && !estGalerie(e))) continue;
+    // (Extracteur, 25 novembre 2026, lot 3 : ne compte pas non plus ; à l'élimination, il redevient neutre.)
+    if(C.elimine || ents.some(e => e.camp === id && e.est === 'batiment' && !e.mort && !estGalerie(e) && !estExtracteur(e))) continue;
     C.elimine = true; C.elimineT = temps;
     for(const g of ents) if(g.camp === id && !g.mort && estGalerie(g)) tuer(g, null);
+    rendreExtracteursNeutres(id);
     notifier('tous', v => ({texte:(id === v ? 'Votre camp' : 'Le camp ' + nomCamp(id).toLowerCase() + ' (' + faction(id).nom + (camps[id].equipe ? ', équipe ' + camps[id].equipe : '') + ')') + ' est éliminé.',
       genre:id === v || allies(id, v) ? 'alerte' : 'succes'}));
   }
@@ -9804,6 +10101,8 @@ const TEXTE_COMMANDES = `
  clic droit : retirer de la file · survol : fiche détaillée · <b>F1 à F4</b> : changer d’onglet<br>
  <b>Réparateurs</b> (mécano, infirmier, atelier, dépanneuse) : clic droit sur un allié blessé pour le soigner ;
  sans ordre, ils soignent seuls les blessés proches<br>
+ <b>Ouvriers</b> : clic droit sur un extracteur neutre ou ennemi (grande carte) : le capturer, en restant 10 s à côté ;
+ il rapporte ensuite 10 réserves toutes les 5 s<br>
  <b>Clic droit</b> avec un bâtiment sélectionné : point de ralliement<br>
  <b>A</b> puis clic : attaque-déplacement · <b>S</b> : arrêt (avions : retour à l’aéroport)<br>
  <b>Ctrl + 1…9</b> : créer un groupe · <b>1…9</b> : le rappeler<br>
@@ -9938,6 +10237,9 @@ function demarrer(facJ, config, options){
     const fant = F.production.caserne[0];
     for(let k=0;k<3;k++){ const p = positionSortie(qg); creerUnite(fant, camp, p.x + (k-1)*20, p.y + 40); }
   }
+  // Extracteurs neutres (25 novembre 2026, lot 3) : escarmouche hors ligne seulement, carte à champ « extracteurs ».
+  // Ailleurs (autres cartes, vitrine ?demo, jeu en ligne) rien n'est créé, ni aucun tirage au hasard fait.
+  if(!MISSION && modeReseau === null && !window.MODE_DEMO && !(options && options.campLocal)) poserExtracteurs(CARTE);
   statsCamps = {};   // statistiques de fin, par camp (les unités de départ ne comptent pas)
   el('menu').classList.add('cache');
   for(const id of ['barre','panneau','mini']) el(id).classList.remove('cache');

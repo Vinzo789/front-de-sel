@@ -795,10 +795,24 @@ function partieOrdinateurs(liste, duree, opts){
   if(niveaux.J && niveaux.J !== 'robot') confierAOrdinateur('J', niveaux.J);
   if(opts.preparer) opts.preparer();   // (réglage d'un essai juste après le départ ; aucun outil ne s'en sert aujourd'hui)
   const ids = campsEnJeu();
-  const compta = Object.fromEntries(ids.map(id => [id, {depart:camps[id].reserves, collecte:0, charge:0, dechargements:0, secours:0, depenses:0, unites:0, commandes:0, renforts:0}]));
+  // (extracteurs, captures : lot 3 de la grande carte, 25 novembre 2026 ; restent à 0 sans extracteur.)
+  const compta = Object.fromEntries(ids.map(id => [id, {depart:camps[id].reserves, collecte:0, charge:0, dechargements:0, secours:0, depenses:0, unites:0, commandes:0, renforts:0, extracteurs:0, captures:0}]));
   // Instruments (remis en place à la fin).
   const orig = {majCollecteur:window.majCollecteur, commander:window.commander, construireBatiment:window.construireBatiment, revenuSecours:window.revenuSecours, creerUnite:window.creerUnite, activerPouvoir:window.activerPouvoir,
-    commanderMissile:window.commanderMissile, commanderMunition:window.commanderMunition, commanderMissileLourd:window.commanderMissileLourd};
+    commanderMissile:window.commanderMissile, commanderMunition:window.commanderMunition, commanderMissileLourd:window.commanderMissileLourd,
+    majExtracteurs:window.majExtracteurs, capturerExtracteur:window.capturerExtracteur};
+  // Extracteurs (25 novembre 2026, lot 3) : leur revenu compte comme une recette expliquée (contrôle anti-triche), et
+  // chaque capture est notée pour le camp qui capture. Sans extracteur, majExtracteurs ne change aucune réserve.
+  window.majExtracteurs = function(){
+    const r0 = ids.map(id => camps[id].reserves);
+    const res = orig.majExtracteurs.apply(this, arguments);
+    ids.forEach((id, i) => { if(camps[id].reserves !== r0[i]) compta[id].extracteurs += camps[id].reserves - r0[i]; });
+    return res;
+  };
+  window.capturerExtracteur = function(b, camp){
+    if(compta[camp]) compta[camp].captures++;
+    return orig.capturerExtracteur.apply(this, arguments);
+  };
   let enProduction = 0;
   // Défense antimissile (19 novembre 2026) : le prix des munitions d'interception compte aussi. Option décochée,
   // commanderMunition n'est jamais appelée : rien ne change.
@@ -886,8 +900,8 @@ function partieOrdinateurs(liste, duree, opts){
     const k = compta[id], C = camps[id];
     res.camps[id] = {niveau:niveaux[id], faction:C.faction, elimine:!!C.elimine, valeur:valeur(id), reserves:Math.round(C.reserves),
       collecte:Math.round(k.collecte), parCharge:k.charge ? +(k.collecte/k.charge).toFixed(3) : null, dechargements:k.dechargements,
-      secours:Math.round(k.secours), depenses:Math.round(k.depenses),
-      inexplique:Math.round(C.reserves - (k.depart + k.collecte + k.secours - k.depenses)),
+      secours:Math.round(k.secours), depenses:Math.round(k.depenses), extracteurs:Math.round(k.extracteurs), captures:k.captures,
+      inexplique:Math.round(C.reserves - (k.depart + k.collecte + k.secours + k.extracteurs - k.depenses)),
       unitesSansCommande:Math.max(0, k.unites - k.commandes - k.renforts)};
   }
   return res;
@@ -4943,3 +4957,282 @@ function bilanSerieUltra(parties){
   return B;
 }
 window.bilanSerieUltra = bilanSerieUltra;
+
+// ---------------------------------------------------------------------
+//  Extracteurs à capturer (25 novembre 2026, lot 3 de la grande carte). À lancer depuis la page de l'escarmouche,
+//  sur une carte qui en porte : front-de-sel.html?verif&carte=couronneVarenne
+//    testerExtracteurs()                  → carte (emplacements, rochers, accès) et règles (capture, revenu, reprise…)
+//    testerExtracteurs('partie', 600)     → partie de 8 ordinateurs (Difficile et Normale mélangés), graine fixée,
+//                                           durée en s (découper si l'appel dépasse le temps permis : 600 s ≈ 20 s)
+//  Renvoie une liste de verdicts {nom, ok, detail}, comme testerDefense. Sur une carte sans champ « extracteurs », dit
+//  qu'il n'y en a pas et vérifie qu'aucun extracteur n'existe après le départ d'une partie.
+// ---------------------------------------------------------------------
+function testerExtracteurs(quoi, duree){
+  if(MISSION) return [{nom:'page', ok:false, detail:'testerExtracteurs se lance depuis la page d’escarmouche (?verif), pas depuis une mission'}];
+  window.enregistrerVictoire = () => {};
+  const verdicts = [];
+  const V = (nom, ok, detail) => { verdicts.push({nom, ok:!!ok, detail:typeof detail === 'string' ? detail : JSON.stringify(detail)}); };
+  const r2 = v => Math.round(v*1000)/1000;
+  const liste3 = [{id:'J', faction:'halden', equipe:'A', ia:false}, {id:'I', faction:'karsk', equipe:'B', ia:true}, {id:'K', faction:'halden', equipe:'A', ia:true}];
+  const extracteursEnJeu = () => ents.filter(e => estExtracteur(e) && !e.mort);
+  if(!extracteursCarte(CARTE).length){
+    reinitialiserPartie(); demarrer('halden', liste3.slice(0, 2));
+    V('carte sans champ « extracteurs » (' + CARTE.id + ') : aucun extracteur à tester', true, 'lancer sur ?verif&carte=couronneVarenne pour les règles');
+    V('carte sans champ « extracteurs » : aucun extracteur créé au départ', extracteursEnJeu().length === 0, {n:extracteursEnJeu().length});
+    return verdicts;
+  }
+  if(quoi === 'partie') return partie8();
+  // Espions (remis en place à la fin) : messages par camp, versements des extracteurs par camp.
+  const orig = {majExtracteurs:window.majExtracteurs};
+  const ecouteurAvant = ecouteurNotifications;
+  let messages = [], verse = {};
+  window.majExtracteurs = function(){
+    const r0 = {}; for(const id of campsEnJeu()) r0[id] = camps[id].reserves;
+    const res = orig.majExtracteurs.apply(this, arguments);
+    for(const id of campsEnJeu()) if(camps[id].reserves !== r0[id]) verse[id] = (verse[id] || 0) + camps[id].reserves - r0[id];
+    return res;
+  };
+  try {
+    ecouteurNotifications = (camp, texte) => messages.push({camp, texte});
+    essaisCarte(); essaisRegles();
+  } catch(err){
+    V('exécution de l’essai', false, 'ERREUR t=' + (typeof temps === 'number' ? temps.toFixed(2) : '?') + ' ' + err.message + ' | ' + String(err.stack || '').split('\n').slice(1, 3).join(' | '));
+  } finally {
+    Object.assign(window, orig);
+    ecouteurNotifications = ecouteurAvant;
+  }
+  return verdicts;
+
+  // Scène : J (joueur) et K alliés (équipe A), I ennemi (équipe B) ; ordinateurs arrêtés, plus aucune unité.
+  function scene(){
+    reinitialiserPartie();
+    demarrer('halden', liste3);
+    for(const id in etatsIA) etatsIA[id].active = false;
+    for(const e of ents) if(e.est === 'unite') e.mort = true;
+    miseAJour(0.05);
+    projectiles.length = 0; messages = []; verse = {};
+    for(const id of campsEnJeu()) camps[id].reserves = 5000;
+  }
+  function qg(id){ return ents.find(e => e.camp === id && e.type === 'qg' && !e.mort); }
+  function plusProche(id){ return extracteursEnJeu().sort((a, b) => dist(a, qg(id)) - dist(b, qg(id)))[0]; }
+  // Unité posée au point libre le plus proche du point (dx, dy) relatif à l'extracteur (par défaut : juste au sud).
+  function pres(type, camp, b, dx, dy){ const p = pointLibre(b.x + (dx || 0), b.y + (dy === undefined ? b.rayon + 25 : dy)); return creerUnite(type, camp, p.x, p.y); }
+  function ouvrierDe(camp){ return FACTIONS[camps[camp].faction].ouvrier; }
+  function capturer(u, b){ return executerOrdre(u.camp, {type:'capturer', ids:[u.id], cibleId:b.id}); }
+  // Avance au pas dt (nombre ou fonction) jusqu'à cond() ou max s ; rend la durée écoulée, ou null.
+  function jusqua(cond, max, dt){
+    const pas = typeof dt === 'function' ? dt : () => dt || 0.05, t0 = temps;
+    while(temps - t0 < max){ miseAJour(pas()); if(cond()) return temps - t0; }
+    return null;
+  }
+  function avancer(s, dt){ jusqua(() => false, s, dt); }
+  // Durée de capture mesurée : de l'instant (début du pas) où la capture commence à celui où l'extracteur change de camp.
+  function dureeCapture(b, camp, dt, max){
+    const pas = typeof dt === 'function' ? dt : () => dt || 0.05;
+    let debut = null; const t0 = temps;
+    while(temps - t0 < (max || 60)){
+      const avant = temps, h = pas();
+      miseAJour(h);
+      if(debut === null && b.capture && !b.capture.conteste) debut = avant;
+      if(b.camp === camp) return {duree:debut === null ? null : temps - debut, pasMax:h};
+    }
+    return {duree:null};
+  }
+
+  // ----------------------------------------------------------------- carte
+  function essaisCarte(){
+    scene();
+    const E = extracteursEnJeu(), voulus = extracteursCarte(CARTE);
+    V('carte : ' + voulus.length + ' extracteurs posés au départ, neutres, intacts, aux cases de la carte',
+      E.length === voulus.length && E.every(b => b.camp === 'N' && b.pv === b.pvMax) && voulus.every(v => E.some(b => b.c === v.c && b.r === v.r)),
+      {poses:E.length, voulus:voulus.length});
+    const mesures = E.map(b => {
+      const roc = Math.min(...roches.map(k => Math.hypot(k.x - b.x, k.y - b.y) - k.r));
+      const champ = Math.min(...noeuds.map(n => Math.hypot(n.x - b.x, n.y - b.y)));
+      const route = Math.min(Infinity, ...ROUTES.map(rt => distPolyligne(b.x, b.y, rt)));
+      const struct = Math.min(...STRUCTURES.map(s => Math.hypot(Math.max(s.x - b.x, 0, b.x - s.x - s.l), Math.max(s.y - b.y, 0, b.y - s.y - s.h))));
+      const bosq = Math.min(Infinity, ...bosquets.map(k => Math.hypot(k.x - b.x, k.y - b.y) - k.r));
+      return {id:b.id, c:b.c, r:b.r, roc:Math.round(roc), champ:Math.round(champ), route:Math.round(route), struct:Math.round(struct), bosq:Math.round(bosq)};
+    });
+    // Le bâtiment fait 80 × 80 px : demi-diagonale 57 px. Rocher : bord à plus de 60 px du centre ; champ (rayon logique
+    // 40, dessin d'environ 55) à plus de 200 ; route à plus de 90 (centre), structure et bosquet à plus de 80.
+    V('carte : aucun rocher sur un extracteur (bord du rocher à plus de 60 px du centre)', mesures.every(m => m.roc > 60), mesures.map(m => m.c + ',' + m.r + ' roc ' + m.roc).join(' ; '));
+    V('carte : à l’écart des champs (> 200 px), des routes (> 90 px), des structures et des bosquets (> 80 px)',
+      mesures.every(m => m.champ > 200 && m.route > 90 && m.struct > 80 && m.bosq > 80), mesures.map(m => m.c + ',' + m.r + ' champ ' + m.champ + ' route ' + m.route + ' struct ' + m.struct + ' bosq ' + m.bosq).join(' ; '));
+    // Accès à pied : depuis chaque QG d'emplacement de la carte (positions des bases), chemin jusqu'à moins de 70 px du centre.
+    const bases = emplacementsCarte(CARTE).map(e => ({x:(e.c + 1.5)*TUILE, y:(e.r + 1.5)*TUILE + 90}));
+    const acces = [];
+    for(const b of E){
+      const depart = bases.slice().sort((a, c) => Math.hypot(a.x - b.x, a.y - b.y) - Math.hypot(c.x - b.x, c.y - b.y))[0];
+      const p = pointLibre(depart.x, depart.y), ch = trouverChemin(p.x, p.y, b.x, b.y), f = ch && ch.length ? ch[ch.length - 1] : null;
+      acces.push({c:b.c, r:b.r, fin:f ? Math.round(Math.hypot(f.x - b.x, f.y - b.y)) : null});
+    }
+    V('carte : chaque extracteur accessible à pied depuis la base la plus proche (fin du chemin à moins de 70 px du centre)',
+      acces.every(a => a.fin !== null && a.fin < 70), acces.map(a => a.c + ',' + a.r + ' ' + a.fin).join(' ; '));
+    V('carte : l’extracteur ne figure ni dans la barre de construction ni dans la table du jeu en ligne',
+      ['halden', 'karsk'].every(f => !batimentsConstructibles(FACTIONS[f]).includes('extracteur')) && !Object.keys(BATIMENTS).includes('extracteur') && !tablesReseau().batiments.includes('extracteur'), '');
+  }
+
+  // ----------------------------------------------------------------- règles
+  function essaisRegles(){
+    // 1. Capture en 10 s, messages, ordre et fiche.
+    scene();
+    let b = plusProche('J'), u = pres(ouvrierDe('J'), 'J', b);
+    const r = capturer(u, b);
+    jusqua(() => u.travaille, 30);
+    const enCours = jusqua(() => b.capture && b.capture.t > 4, 10) !== null;
+    const etat = etatUnite(u), fiche = ligneCaptureExtracteur(b);
+    let m = dureeCapture(b, 'J', 0.05, 20);
+    V('capture : ordre accepté, ouvrier « Capture », fiche « Capture en cours : n s »', r.ok && /^Capture/.test(etat) && /^Capture en cours : \d+ s/.test(fiche) && enCours, {r:r.ok, etat, fiche});
+    // (la durée mesurée ici part du moment où la capture a commencé : on refait une mesure propre plus bas)
+    scene(); b = plusProche('J'); u = pres(ouvrierDe('J'), 'J', b); capturer(u, b);
+    m = dureeCapture(b, 'J', 0.05, 40);
+    V('capture en 10 s au pas fixe de 0,05 s (durée mesurée ' + (m.duree === null ? '—' : r2(m.duree)) + ' s)', m.duree !== null && Math.abs(m.duree - EXTRACTEUR.duree) < 1e-6, m);
+    V('capture : l’extracteur passe au camp de l’ouvrier, PV conservés ; message au camp qui capture ; ordre de l’ouvrier terminé',
+      b.camp === 'J' && b.pv === b.pvMax && messages.some(x => x.camp === 'J' && /Extracteur capturé/.test(x.texte)) && (miseAJour(0.05), !u.ordre), {camp:b.camp, messages:messages.slice(-3)});
+    // 1 bis. Pas irrégulier (entre 1/60 et 1/20 s, générateur propre à graine fixe).
+    for(const g of [3, 11]){
+      scene(); b = plusProche('J'); u = pres(ouvrierDe('J'), 'J', b); capturer(u, b);
+      let s = g; const pasIrr = () => { s = (s*1103515245 + 12345) % 2147483648; return 1/60 + (1/20 - 1/60)*s/2147483648; };
+      m = dureeCapture(b, 'J', pasIrr, 40);
+      V('capture à pas irrégulier (1/60 à 1/20 s, graine ' + g + ') : même durée à un pas près (' + (m.duree === null ? '—' : r2(m.duree)) + ' s)',
+        m.duree !== null && m.duree >= EXTRACTEUR.duree - 1e-6 && m.duree < EXTRACTEUR.duree + 1/20 + 1e-6, m);
+    }
+    // 1 ter. Plusieurs ouvriers du même camp : pas plus vite.
+    scene(); b = plusProche('J');
+    const us = [0, 1, 2].map(k => pres(ouvrierDe('J'), 'J', b, (k - 1)*30));
+    executerOrdre('J', {type:'capturer', ids:us.map(x => x.id), cibleId:b.id});
+    m = dureeCapture(b, 'J', 0.05, 40);
+    V('trois ouvriers du même camp : toujours 10 s (' + (m.duree === null ? '—' : r2(m.duree)) + ' s)', m.duree !== null && Math.abs(m.duree - EXTRACTEUR.duree) < 1e-6, m);
+    // 2. Interruptions : éloignement, mort, autre ordre.
+    const interruption = (nom, faire) => {
+      scene(); const x = plusProche('J'), o = pres(ouvrierDe('J'), 'J', x); capturer(o, x);
+      jusqua(() => x.capture && x.capture.t >= 5, 40);
+      const avant = x.capture ? r2(x.capture.t) : null;
+      faire(o, x); miseAJour(0.05);
+      const apres = x.capture ? r2(x.capture.t) : null;
+      return {x, o, avant, apres};
+    };
+    let k = interruption('loin', (o, x) => { o.x = x.x + 400; o.y = x.y; const p = pointLibre(o.x, o.y); o.x = p.x; o.y = p.y; o.chemin = null; });
+    const reprise = dureeCapture(k.x, 'J', 0.05, 60);
+    V('interruption : l’ouvrier éloigné (400 px) arrête la capture ; revenu, il repart de zéro (10 s)',
+      k.avant >= 5 && k.apres === null && k.x.camp === 'J' && reprise.duree !== null && Math.abs(reprise.duree - EXTRACTEUR.duree) < 1e-6, {avant:k.avant, apres:k.apres, reprise});
+    k = interruption('mort', o => tuer(o, null));
+    avancer(8);
+    V('interruption : ouvrier tué, la capture tombe (et rien n’avance ensuite)', k.avant >= 5 && k.apres === null && !k.x.capture && k.x.camp === 'N', {avant:k.avant, apres:k.apres});
+    k = interruption('ordre', o => executerOrdre('J', {type:'arret', ids:[o.id]}));
+    avancer(8);
+    V('interruption : autre ordre (arrêt), la capture tombe', k.avant >= 5 && k.apres === null && !k.x.capture && k.x.camp === 'N', {avant:k.avant, apres:k.apres});
+    k = interruption('deplacement', (o, x) => executerOrdre('J', {type:'droit', ids:[o.id], x:x.x + 500, y:x.y, cibleId:null}));
+    V('interruption : ordre de déplacement, la capture tombe', k.avant >= 5 && k.apres === null, {avant:k.avant, apres:k.apres});
+    // 3. Capture contestée.
+    scene(); b = plusProche('J');
+    const uj = pres(ouvrierDe('J'), 'J', b, 0, b.rayon + 25), ui = pres(ouvrierDe('I'), 'I', b, 0, -b.rayon - 25);
+    capturer(uj, b);
+    jusqua(() => b.capture && b.capture.t >= 4, 40);
+    const tAvant = b.capture && b.capture.t;
+    capturer(ui, b);
+    jusqua(() => b.capture && b.capture.conteste, 40);
+    const fige = b.capture ? b.capture.t : null;
+    avancer(15);
+    const apres15 = b.capture ? {t:b.capture.t, conteste:b.capture.conteste} : null;
+    V('capture contestée (J et I sur place) : rien n’avance pendant 15 s, l’extracteur reste neutre',
+      tAvant >= 4 && fige !== null && apres15 && apres15.conteste && Math.abs(apres15.t - fige) < 1e-9 && b.camp === 'N' && /contestée/.test(ligneCaptureExtracteur(b)), {tAvant, fige, apres15});
+    tuer(ui, null);
+    m = dureeCapture(b, 'J', 0.05, 30);
+    V('fin de la contestation : J reprend où il en était (temps total hors contestation : 10 s)', b.camp === 'J' && m.duree !== null && Math.abs(m.duree - (EXTRACTEUR.duree - fige)) < 0.051, {fige, reste:m.duree});
+    // 4. Allié ou à soi : pas de capture.
+    scene(); b = plusProche('J');
+    capturerExtracteur(b, 'K');
+    u = pres(ouvrierDe('J'), 'J', b);
+    const refus = capturer(u, b);
+    executerOrdre('J', {type:'droit', ids:[u.id], x:b.x, y:b.y, cibleId:b.id});
+    avancer(12);
+    V('extracteur d’un allié : ordre « capturer » refusé, clic droit sans capture, il reste à l’allié',
+      !refus.ok && /allié/.test(refus.motif) && !(u.ordre && u.ordre.type === 'capturer') && b.camp === 'K' && !b.capture, {refus, ordre:u.ordre && u.ordre.type});
+    capturerExtracteur(b, 'J');
+    const refus2 = capturer(u, b);
+    V('extracteur à soi : ordre refusé', !refus2.ok && /déjà à vous/.test(refus2.motif), refus2);
+    // Jamais réparé.
+    b.pv = b.pvMax*0.5;
+    executerOrdre('J', {type:'droit', ids:[u.id], x:b.x, y:b.y, cibleId:b.id});
+    avancer(5);
+    V('extracteur entamé : ni réparé par un ouvrier (clic droit), ni proposé à la réparation', !(u.ordre && u.ordre.type === 'reparer') && b.pv === b.pvMax*0.5 && batimentAReparer(u, 2000) !== b, {ordre:u.ordre && u.ordre.type, pv:b.pv});
+    // 5. Revenu exact sur 60 s.
+    scene(); b = plusProche('J'); u = pres(ouvrierDe('J'), 'J', b); capturer(u, b);
+    dureeCapture(b, 'J', 0.05, 40);
+    verse = {};
+    avancer(60, 0.05);
+    const v1 = verse.J || 0;
+    verse = {}; const res0 = camps.J.reserves;
+    let s2 = 7; const pasIrr2 = () => { s2 = (s2*1103515245 + 12345) % 2147483648; return 1/60 + (1/20 - 1/60)*s2/2147483648; };
+    const t0 = temps; avancer(60, pasIrr2);
+    const v2 = verse.J || 0, duree2 = temps - t0;
+    V('revenu : 10 réserves toutes les 5 s, 120 sur 60 s au pas fixe (' + v1 + ') ; à pas irrégulier ' + v2 + ' sur ' + r2(duree2) + ' s',
+      v1 === 120 && v2 === 120, {v1, v2, duree2:r2(duree2)});
+    V('fiche : revenu affiché', /10 réserves toutes les 5 s/.test(ligneRevenuExtracteur(b, 'J')) && ligneProprioExtracteur(b, 'J') === 'Propriétaire : vous' && ligneProprioExtracteur(plusProcheN() || {camp:'N'}, 'J') === 'Propriétaire : neutre',
+      [ligneProprioExtracteur(b, 'J'), ligneRevenuExtracteur(b, 'J')]);
+    // 6. Reprise par un ennemi, messages aux deux camps, revenu qui change de main.
+    messages = [];
+    const uI = pres(ouvrierDe('I'), 'I', b, 0, -b.rayon - 25);
+    capturer(uI, b);
+    m = dureeCapture(b, 'I', 0.05, 60);
+    verse = {}; avancer(10.01);
+    V('reprise par un ennemi : 10 s, messages au nouveau et à l’ancien propriétaire, le revenu va au nouveau',
+      b.camp === 'I' && m.duree !== null && Math.abs(m.duree - EXTRACTEUR.duree) < 1e-6 && messages.some(x => x.camp === 'I' && /capturé/.test(x.texte)) && messages.some(x => x.camp === 'J' && /nous a été pris/.test(x.texte))
+      && (verse.I || 0) === 20 && !verse.J, {camp:b.camp, duree:m.duree, verse, messages});
+    // 7. Destruction par l'ennemi (J attaque l'extracteur de I).
+    const soldat = pres('operateur', 'J', b, 0, b.rayon + 120);
+    for(let n = 0; n < 5; n++) pres('operateur', 'J', b, (n - 2)*30, b.rayon + 150);
+    const att = ents.filter(e => e.camp === 'J' && e.type === 'operateur' && !e.mort);
+    const peut = peutCibler(soldat, b);
+    executerOrdre('J', {type:'droit', ids:att.map(e => e.id), x:b.x, y:b.y, cibleId:b.id});
+    const tDetruit = jusqua(() => b.mort, 240);
+    avancer(2);
+    V('destruction : un extracteur ennemi s’attaque et se détruit ; perdu pour la partie', peut && b.mort && tDetruit !== null && !ents.some(e => e === b) && extracteursEnJeu().length === extracteursCarte(CARTE).length - 1,
+      {peut, tDetruit, restants:extracteursEnJeu().length});
+    // 8. Neutre non attaquable (ordre, tir automatique, explosion de zone).
+    scene(); b = plusProche('J');
+    const s1 = pres('operateur', 'J', b, 0, b.rayon + 60);
+    executerOrdre('J', {type:'droit', ids:[s1.id], x:b.x, y:b.y, cibleId:b.id});
+    avancer(6);
+    explosionZone(b.x, b.y, 120, 500, 'obus', s1);
+    V('extracteur neutre : ni visé (ordre devenu déplacement), ni touché par une explosion de zone', !peutCibler(s1, b) && !(s1.ordre && s1.ordre.type === 'attaquer') && b.pv === b.pvMax, {ordre:s1.ordre && s1.ordre.type, pv:b.pv});
+    // 9. Propriétaire éliminé → neutre ; l'extracteur ne compte pas pour rester en vie.
+    scene(); b = plusProche('I');
+    capturerExtracteur(b, 'I');
+    b.pv = 900;
+    for(const e of ents) if(e.camp === 'I' && e.est === 'batiment' && !estExtracteur(e)) tuer(e, null);
+    avancer(2.5);
+    V('ne compte pas pour rester en vie : I, qui n’a plus que son extracteur, est éliminé', camps.I.elimine, {elimine:camps.I.elimine});
+    V('propriétaire éliminé : l’extracteur redevient neutre, PV conservés, plus de revenu', b.camp === 'N' && b.pv === 900 && !b.mort && (verse = {}, avancer(6), !verse.I), {camp:b.camp, pv:b.pv});
+    // 10. Clic droit : ouvriers et soldats mêlés sur un extracteur ennemi.
+    scene(); b = plusProche('I'); capturerExtracteur(b, 'I');
+    const o2 = pres(ouvrierDe('J'), 'J', b, 0, b.rayon + 60), s3 = pres('operateur', 'J', b, 40, b.rayon + 60);
+    executerOrdre('J', {type:'droit', ids:[o2.id, s3.id], x:b.x, y:b.y, cibleId:b.id});
+    V('clic droit mêlé sur un extracteur ennemi : l’ouvrier capture, le soldat attaque', o2.ordre && o2.ordre.type === 'capturer' && s3.ordre && s3.ordre.type === 'attaquer',
+      {ouvrier:o2.ordre && o2.ordre.type, soldat:s3.ordre && s3.ordre.type});
+    const refus3 = executerOrdre('J', {type:'capturer', ids:[s3.id], cibleId:b.id});
+    V('ordre « capturer » donné à un soldat : refusé', !refus3.ok, refus3);
+  }
+  function plusProcheN(){ return extracteursEnJeu().find(e => e.camp === 'N'); }
+
+  // ----------------------------------------------------------------- partie de 8 ordinateurs
+  function partie8(){
+    const ids = CAMPS_JOUEURS.slice(0, Math.min(8, emplacementsCarte(CARTE).length));
+    const liste = ids.map((id, i) => ({id, faction:i % 2 ? 'karsk' : 'halden', equipe:'ABCDEFGH'[i], niveau:i % 3 === 1 ? 'normal' : 'difficile'}));
+    const r = avecGraine(808, () => partieOrdinateurs(liste, duree || 600));
+    const captures = Object.fromEntries(Object.entries(r.camps).map(([id, c]) => [id, c.captures]));
+    const total = Object.values(captures).reduce((s, n) => s + n, 0);
+    const triche = Object.entries(r.camps).filter(([id, c]) => c.inexplique !== 0).map(([id, c]) => id + ' ' + c.inexplique);
+    const parNiveau = {};
+    for(const [id, c] of Object.entries(r.camps)) parNiveau[c.niveau] = (parNiveau[c.niveau] || 0) + c.captures;
+    V('partie de ' + ids.length + ' ordinateurs (' + r.temps + ' s) : aucune erreur', !r.erreur, r.erreur || '');
+    V('partie : des extracteurs capturés par les ordinateurs (' + total + ' captures)', total >= 3, {captures, parNiveau});
+    V('partie : écart « inexpliqué » des réserves nul pour chaque camp (revenu des extracteurs compté)', !triche.length,
+      {triche, extracteurs:Object.fromEntries(Object.entries(r.camps).map(([id, c]) => [id, c.extracteurs]))});
+    V('partie : état des extracteurs à la fin', true, extracteursEnJeu().map(b => b.camp).join(' ') + ' (détruits : ' + (extracteursCarte(CARTE).length - extracteursEnJeu().length) + ')');
+    return verdicts;
+  }
+}
+window.testerExtracteurs = testerExtracteurs;

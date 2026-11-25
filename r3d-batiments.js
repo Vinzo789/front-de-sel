@@ -1572,6 +1572,76 @@
     }
   }
 
+  // --------------------------------------------------- EXTRACTEUR (25 novembre 2026, lot 3 de la grande carte)
+  // Petite installation de pompage de saumure, capturable : chevalet à balancier à l'ouest (pied en A, balancier
+  // animé lentement, tête de cheval au-dessus de la tête de puits, réducteur et contrepoids à l'est), deux cuves de
+  // stockage à l'est, tuyauterie sur supports, armoire de commande. Marque de camp : bordure de dalle, bandeaux des
+  // cuves, capot du réducteur et bande du balancier, à la couleur du propriétaire ; GRISE quand il est neutre (la
+  // palette Régie, bleue, n'est pas reprise : un extracteur neutre n'appartient à personne). Un seul modèle pour tous
+  // les camps (comme la station de pompage), teintes Régie et accents du camp.
+  // Anim « balancier » : rotation autour de l'axe Z du pivot (oscillation), voir majBatiment.
+  const GRIS_NEUTRE = {accent:'#8f979c', accentF:'#4f565b'};
+  function extracteurPompage(m, P0){
+    const P = Object.assign({}, paletteRegie(P0), P0.style === 'neutre' ? GRIS_NEUTRE : null);
+    const B = m.statique, h0 = 1.2, acier = '#59636a', jaune = '#c9a23a';
+    dalle(B, P, 36, h0);
+    // Socle du chevalet, tête de puits
+    B.boite('opaque', '#9c9a92', -31, h0, -6, 12, 2.2, 6, {ao:0.2});
+    B.cyl('metal', '#4a5258', -26, 2.2, 0, 1.6, 3, 10);                                   // tête de puits
+    B.cyl('metal', '#6b767d', -26, 5.2, 0, 0.7, 2.2, 8);
+    for(const dz of [-2.2, 2.2]) B.piece('metal', gTore(), '#c8382a', -26, 4.2, dz, 2, 2, 2, Math.PI/2, 0, 0, {ao:0});   // vannes
+    // Pied en A (deux paires de jambes) et chapeau du pivot
+    for(const dz of [-3.6, 3.6]){
+      B.poutre('metal', acier, -14, 2.2, dz, -8.4, 18.4, dz*0.35, 1.1);
+      B.poutre('metal', acier, -2, 2.2, dz, -7.6, 18.4, dz*0.35, 1.1);
+      B.poutre('metal', acier, -12.5, 7, dz*0.9, -3.5, 7, dz*0.9, 0.6);                    // entretoise
+    }
+    B.boite('metal', '#3d454b', -9.4, 18.2, -1.8, -6.6, 19, 1.8, {ao:0});
+    // Réducteur, manivelles et contrepoids (fixes), moteur
+    B.boite('metal', '#4e585f', 3, 2.2, -2.6, 11, 7.4, 2.6);
+    B.boite('opaque', P.accent, 2.8, 7.4, -2.8, 11.2, 8.2, 2.8, {ao:0});                  // capot à la couleur du camp
+    for(const dz of [-3.4, 3.4]){
+      B.boiteC('metal', '#2f3539', 7, 7.2, dz, 1.4, 9, 0.8);                               // manivelle
+      B.piece('metal', gCyl(14, 1), '#3a4146', 7, 3.6, dz, 6.4, 0.9, 6.4, Math.PI/2, 0, 0);   // contrepoids
+    }
+    B.boite('metal', '#7a858c', 13, 2.2, -2, 18, 5.8, 2);                                  // moteur
+    B.cylH('metal', '#2f3539', 15.5, 4, 2.6, 0.5, 1.8, 'z', 8);
+    // Cuves de stockage (la grande au nord-est, la petite au sud-est), bandeaux du camp, échelle
+    B.cyl('opaque', '#cfd1cc', 22, h0, -18, 9, 13, 20, {ao:0.15});
+    B.cyl('opaque', P.accent, 22, h0 + 9.5, -18, 9.15, 1.6, 20, {ao:0});
+    B.piece('opaque', gCone(20), '#b9bcb7', 22, h0 + 14.2, -18, 18.4, 2.4, 18.4, 0, 0, 0, {ao:0});
+    B.cyl('metal', acier, 22, h0 + 13, -18, 9.4, 0.4, 20, {ao:0});
+    for(const dx of [-0.8, 0.8]) B.boite('metal', '#5c6469', 22 + dx - 0.15, h0, -8.95, 22 + dx + 0.15, h0 + 13.4, -8.7, {ao:0});
+    for(let y = h0 + 1.2; y < h0 + 13; y += 1.6) B.boite('metal', '#5c6469', 21, y, -8.9, 23, y + 0.2, -8.7, {ao:0});
+    B.cyl('opaque', '#d8d9d4', 24, h0, 15, 6.2, 9, 18, {ao:0.15});
+    B.cyl('opaque', P.accent, 24, h0 + 6.2, 15, 6.35, 1.2, 18, {ao:0});
+    B.piece('opaque', gCone(18), '#b9bcb7', 24, h0 + 9.9, 15, 12.6, 1.8, 12.6, 0, 0, 0, {ao:0});
+    // Tuyauterie : tête de puits → collecteur → cuves, sur supports
+    B.cylH('metal', jaune, -26, 3.2, 6.5, 0.7, 5, 'z', 10);
+    B.cylH('metal', jaune, -3.5, 3.2, 9, 0.8, 45, 'x', 10);
+    B.cylH('metal', jaune, 19, 3.2, -0.5, 0.8, 19, 'z', 10);
+    B.cylH('metal', jaune, 19, 3.2, 12, 0.8, 6, 'z', 10);
+    for(const x of [-20, -8, 4, 16]) B.boite('opaque', '#8f8d86', x - 0.6, h0, 8.2, x + 0.6, 2.6, 9.8, {ao:0});
+    B.cyl('metal', '#4a5258', 19, h0, -9.5, 1.1, 3.4, 10);
+    B.piece('metal', gTore(), '#c8382a', 19, 5.2, 9, 2, 2, 2, 0, 0, 0, {ao:0});
+    // Armoire de commande et fanal
+    B.boite('metal', '#d6dadc', -4, h0, 18, 2, h0 + 6.5, 22);
+    B.boite('opaque', P.accent, -4.2, h0 + 6.5, 17.8, 2.2, h0 + 7.1, 22.2, {ao:0});
+    B.boite('emis', '#7dff9a', -2.6, h0 + 4.4, 22, -1.4, h0 + 5.2, 22.3);
+    lampadaire(B, -30, 24, 8, P.lumiere, P.acier);
+    // Balancier animé : poutre, bande de camp, tête de cheval à l'ouest, bielle accrochée à l'est (pivot au chapeau)
+    const bal = new Bati(0, 'metal');
+    bal.boite('metal', '#4a5359', -17, -0.9, -1, 15, 0.9, 1);
+    bal.boite('metal', P.accent, -6, 0.9, -1.05, 6, 1.4, 1.05, {ao:0});
+    bal.boite('metal', '#3d464c', -19.6, -4.6, -1.3, -16.4, 2.2, 1.3);                     // tête de cheval
+    bal.boite('metal', '#3d464c', -20.8, -3.6, -1.1, -19.4, 1.2, 1.1);
+    bal.boite('metal', '#2a3035', -18.4, -13, -0.25, -17.9, -4.6, 0.25);                  // câble vers la tige du puits
+    bal.boite('metal', '#2f3539', 13.6, -10.6, -0.6, 14.6, -0.9, 0.6);                     // bielle
+    m.anims.push({type:'balancier', vitesse:1.3, amplitude:0.2, x:-8, y:19.6, z:0, bati:bal});
+    m.corps = [-31, -27, 31, 24, 16];
+    m.points = [[22, 15, -18], [-8, 19, 0], [7, 8, 0]];
+  }
+
   // --------------------------------------------------- ENTREPÔT (Régie des eaux)
   // Hangar à voûte en tôle ondulée, quai de chargement couvert à l'est avec camion-citerne,
   // palettes de bidons d'eau dans la cour, bureau et mât de drapeau au sud-est.
@@ -2916,6 +2986,8 @@
     aeroport:{halden:aeroportHalden, karsk:aeroportKarsk},
     // Bâtiments de la Régie : un seul modèle, teintes Régie et accents du camp propriétaire.
     station:{neutre:stationRegie}, entrepot:{neutre:entrepotRegie},
+    // Extracteur (25 novembre 2026) : un seul modèle, accents du camp propriétaire (gris quand il est neutre).
+    extracteur:{neutre:extracteurPompage},
     // Défenses fixes : modèle du camp qui les construit, repris tel quel par les autres camps.
     tourelle:{halden:tourelleHalden}, bunker:{karsk:bunkerKarsk},
     // Batterie mixte sol-air : un modèle par camp.
@@ -2950,7 +3022,7 @@
       m.statique.boite('opaque', P.accent, -d*0.72, 10, -d*0.72, d*0.72, 11, d*0.72, {ao:0});
       m.corps = [-d*0.7, -d*0.7, d*0.7, d*0.7, 12]; m.points = [[0, 12, 0]];
     }
-    if(couleurVar(fac) && base === 'halden' && f && type !== 'aeroport' && !BATIMENTS[type].galerie) cadreCamp(m, palette(fac));
+    if(couleurVar(fac) && base === 'halden' && f && type !== 'aeroport' && !BATIMENTS[type].galerie && !BATIMENTS[type].extracteur) cadreCamp(m, palette(fac));
     m.geos = m.statique.construire();
     for(const a of m.anims){
       if(a.bati) a.geos = a.bati.construire();
@@ -3151,7 +3223,7 @@
     const sel = new THREE.Mesh(geoSelection(m.taille), b.camp === local ? matSelJ : b.camp === 'N' ? matSelN : matSelI);
     sel.position.y = 1.9; sel.visible = false; racine.add(sel);
     groupe.add(racine);
-    return {b, fac, m, racine, inst, proxy, sel, etat:'normal', chantier:null, porte:0,
+    return {b, camp:b.camp, fac, m, racine, inst, proxy, sel, etat:'normal', chantier:null, porte:0,
       activite:(!b.enCours && b.file && b.file.length) ? 1 : 0,
       phase:(b.id*0.618) % 1, tFumee:Math.random()*0.3, tFeu:0, tChem:0, rally:null,
       feux:inst.meshes.filter(me => me.userData.canal === 'feux' || me.userData.canal === 'nuitF'),
@@ -3272,6 +3344,7 @@
       // (phase tirée de la position, comme les pièces tournantes animées dans le shader)
       if(d.type === 'rotation') a.pivot.rotation.y = phL*6.28 + temps*d.vitesse;
       else if(d.type === 'balayage') a.pivot.rotation.y = d.base + Math.sin(temps*d.vitesse + phL*6.28)*d.amplitude;
+      else if(d.type === 'balancier') a.pivot.rotation.z = Math.sin(temps*d.vitesse + s.phase*6.28)*d.amplitude;   // extracteur (25 novembre 2026)
       else if(d.type === 'porte') a.pivot.scale.y = Math.max(0.06, 1 - 0.94*s.activite);
       else if(d.type === 'pont') a.pivot.position.z = d.z + Math.sin(temps*0.45 + s.phase*6.28)*d.amplitude*s.activite;
       else if(d.type === 'galerie'){
@@ -3809,6 +3882,9 @@
         if(b.est !== 'batiment' || !camps[b.camp]) continue;
         vus.add(b.id);
         let s = etats.get(b.id);
+        // Bâtiment passé à un autre camp (extracteur capturé, ou redevenu neutre, 25 novembre 2026) : refait avec le
+        // modèle et les crochets de sélection de son nouveau camp, sans décombres. Aucun autre bâtiment ne change de camp.
+        if(s && s.camp !== b.camp){ retirer(s); etats.delete(b.id); s = null; }
         if(!s){ s = creer(b); etats.set(b.id, s); }
         majBatiment(s, b, temps, dt);
       }
