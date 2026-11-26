@@ -2825,7 +2825,85 @@ function niveauIA(id){
 // Les règles réservées jusqu'ici à Difficile s'appliquent aussi à Ultra (même rythme, sans bonus de revenu).
 function niveauDur(id){ const n = niveauIA(id); return n === 'difficile' || n === 'ultra'; }
 function estUltra(id){ return !MISSION && niveauIA(id) === 'ultra'; }
+// Lot « tous les bâtiments, pas de demi-tour » (26 novembre 2026, demande du propriétaire : « À partir de difficile et
+// ultra, il faut que l'ennemi utilise tous les bâtiments (y compris galerie de tir et batterie de défense) et élabore
+// de bonnes stratégies. Pas de bug style l'ennemi attaque puis repart. » ; mesures : travaux/ia-ultra/MESURES-BATIMENTS.md
+// et MESURES-RETRAITES.md). Escarmouche seulement, Difficile et Ultra : Facile, Normale et les missions ne passent
+// jamais par ces règles (lotIA faux). Réglages regroupés dans LOT_IA.
+// Interrupteur d'essai (mesures en miroir, nouveau contre ancien) : etatIA(id).lotAncien, posé par les outils de
+// verif-missions-moteur.js seulement ; vrai, le camp joue comme avant le lot.
+function lotAncienIA(id){ const E = etatsIA[id]; return !!(E && E.lotAncien); }
+function lotIA(id){ return !MISSION && niveauDur(id) && !lotAncienIA(id); }
+function lotDifficileIA(id){ return lotIA(id) && niveauIA(id) === 'difficile'; }
 const RESERVE_COLLECTEUR = 400;   // gardé de côté tant qu'il manque un collecteur (voir economieIA)
+// Réglages du lot du 26 novembre 2026 (voir lotIA ; mesures : travaux/ia-ultra/MESURES-BATIMENTS.md) :
+//   attenteAvion : s d'attente du premier avion (aéroport vide) après lesquelles Difficile n'y garde plus le prix d'un
+//                  char avant lui : l'avion est acheté et le plan, qu'il retenait, reprend. Relevé avant le lot (graines
+//                  fixes, Port-Calmes et Gorges) : l'aéroport posé vers 250-300 s, Difficile ne bâtissait presque plus
+//                  rien d'autre de la partie (ni seconde caserne, ni seconde usine, ni défense fixe), y compris dans des
+//                  parties de 25 minutes : tant que ses blindés tombaient, le prix d'un char (480) restait gardé avant
+//                  l'avion, l'avion n'était jamais payé, et le plan restait bloqué derrière lui ;
+//   attentePlan  : s d'attente après lesquelles le plan reprend même sans avion (1e9 : jamais). Essayé à 45 s : le plan
+//                  repris tout de suite coûtait des parties en miroir (nouveau Difficile contre ancien, Port-Calmes et
+//                  Gorges, 96 parties : 44 à 50 %) ; avec l'avion acheté d'abord : 50 à 56 % ;
+//   calme        : vrai, ces deux levées attendent que Difficile ne soit pas en retard (enRetardIA) ;
+//   avionSansChar : vrai, la levée attenteAvion porte sur le prix du char (faux : sans effet) ;
+//   contact      : px de son objectif ; une unité d'assaut d'Ultra qui en est plus près n'est pas renvoyée vers le
+//                  barycentre de son groupe ;
+//   contactVague : px d'un bâtiment ennemi ; une unité de vague de Difficile qui en est plus près est « au contact »
+//                  (la distance où la mesure juge qu'une unité a quitté la base ennemie) ;
+//   menaceMin    : valeur de combat (valeurCombat) en deçà de laquelle une menace est « mineure » ;
+//   depotMin, depotMax, depotLibre : champ visé par le dépôt avancé de Halden Difficile (au moins depotMin de minerai,
+//                  à au plus depotMax px du QG, aucun dépôt à moins de depotLibre px) ; sans champ qui convient, pas
+//                  de dépôt au plan ;
+//   recul        : px ; une unité d'Ultra à longue portée en assaut ne recule plus au-delà de ce retard sur le
+//                  barycentre de son groupe (elle tient sa place) ;
+//   rappel       : part de la menace que nos unités restées à la base doivent couvrir avant qu'Ultra rappelle des
+//                  unités engagées dans un assaut (1 : elles ne suffisent pas à elles seules) ;
+//   apresUltra, epargneUltra : s de jeu après lesquelles Ultra épargne peu à peu (crédits par s) pour le prochain bâtiment
+//                  de son plan (productionUltra).
+const LOT_IA = {attenteAvion:45, attentePlan:1e9, calme:true, avionSansChar:true, contact:700, contactVague:1100, menaceMin:300,
+  depotMin:600, depotMax:1500, depotLibre:450, depotsRebatis:2, recul:250, rappel:1, apresUltra:600, epargneUltra:4, epargneDifficile:4, ratioEpargne:1,
+  retraiteTete:true, sansUsure:true, rejoindre:true, blesses:'recule', abriLoin:1000, reculBlesse:300, posteDefense:true};
+//   blesses, abriLoin, reculBlesse : blessés d'un assaut d'Ultra dont l'abri est loin (replierBlessesUltra) ;
+//   posteDefense : la défense d'Ultra respecte la position de tir d'une unité qui vient de reculer (defendreUltra).
+//   retraiteTete, sansUsure, rejoindre : règles d'assaut d'Ultra du lot (forces jugées à la tête de l'assaut ; pas de
+//                  retraite pour la seule usure ; unités libres qui rejoignent l'assaut), réglables une à une pour la mesure.
+//   epargneDifficile, ratioEpargne : crédits par s épargnés par Difficile pour un bâtiment du plan qui suit l'aéroport
+//                  (economieIA), seulement quand son armée vaut au moins ratioEpargne fois la plus forte armée hostile
+//                  et qu'aucun ennemi n'est près de sa base (enRetardIA).
+// Difficile est-il en retard (lot du 26 novembre 2026) ? Son armée vaut moins de 0,8 fois la plus forte armée hostile, ou
+// une unité ennemie armée au sol est à moins de 550 px d'un de ses bâtiments. Lecture seule.
+// (Troisième passe : le relevé est fait une fois par réflexion, releveRetardIA ; enRetardIA(R, ratio) le lit.)
+function releveRetardIA(id, armee, bats){
+  const menace = ents.some(e => e.est === 'unite' && !e.mort && e.def.arme && !(e.def.avion && enVol(e)) && hostile(id, e.camp) && bats.some(b => dist(b, e) < 550));
+  let moi = 0; for(const u of armee) moi += valeurCombat(u);
+  return {menace, moi, fort:menace ? 0 : plusForteArmeeHostile(id)};
+}
+function enRetardIA(R, ratio){ return R.menace || R.moi < (ratio || 0.8) * R.fort; }
+// Champ visé par le dépôt avancé de Halden Difficile (lot du 26 novembre 2026) : le plus proche du QG parmi ceux qui ont
+// encore LOT_IA.depotMin de minerai, à au plus LOT_IA.depotMax px, sans dépôt (QG compris) à moins de LOT_IA.depotLibre
+// px, et nettement plus près de notre QG que de tout bâtiment ennemi (même règle que le dépôt avancé d'Ultra). null :
+// aucun. Lecture seule (ce que voit tout joueur).
+function champDepotIA(id, bats, qg){
+  if(!qg) return null;
+  let best = null, bd = Infinity;
+  for(const n of noeuds){
+    if(n.reste < LOT_IA.depotMin || bats.some(b => b.def.depot && dist(b, n) < LOT_IA.depotLibre)) continue;
+    const d = dist(qg, n);
+    if(d > LOT_IA.depotMax || d >= bd) continue;
+    if(ents.some(e => !e.mort && e.est === 'batiment' && e.camp !== 'N' && hostile(id, e.camp) && !estExtracteur(e) && dist(e, n) < d*1.25)) continue;
+    // (Troisième passe : pas de champ gardé par des unités ennemies armées à moins de 600 px.)
+    if(ents.some(e => !e.mort && e.est === 'unite' && e.def.arme && !e.def.ouvrier && !(e.def.avion && enVol(e)) && hostile(id, e.camp) && dist(e, n) < 600)) continue;
+    bd = d; best = n;
+  }
+  return best;
+}
+// Point où chercher la place du dépôt avancé : 120 px en deçà du champ, côté QG (comme centreChantierUltra).
+function centreDepotIA(n, qg){
+  const dx = qg.x - n.x, dy = qg.y - n.y, d = Math.hypot(dx, dy) || 1;
+  return {x:n.x + dx/d*120, y:n.y + dy/d*120};
+}
 const IA_OUVRIERS_MAX = 4;
 function economieIA(C, F, bats, ouvriers, armee, qg){
   const ia = etatIA(C.id);
@@ -2873,6 +2951,22 @@ function economieIA(C, F, bats, ouvriers, armee, qg){
     : menaceAir ? ['caserne', F.special, 'usine', F.special, 'aeroport', 'batterie', 'caserne', 'usine', F.defense]
                 : ['caserne', F.special, 'usine', F.special, 'aeroport', 'caserne', 'usine', F.defense, 'batterie'])
     .filter(t => t && BATIMENTS[t] && ((t !== 'aeroport' && t !== 'batterie') || autorise('batiments', t)));
+  // Lot du 26 novembre 2026 : Halden Difficile met aussi un dépôt avancé à son plan, avant sa défense fixe (après la
+  // seconde usine), quand un champ éloigné le justifie (champDepotIA) ; il sert alors de point de déchargement (relevé
+  // avant le lot : aucun dépôt chez Halden Difficile, le dépôt n'étant pas dans son plan). Karsk a déjà le sien (son
+  // bâtiment spécial).
+  // (Troisième passe, relecture du 26 novembre 2026 : le champ n'est cherché que s'il ne reste aucun dépôt ; un dépôt perdu
+  // n'est rebâti que LOT_IA.depotsRebatis fois dans la partie, et jamais près d'unités ennemies armées : voir champDepotIA.)
+  ia.champDepot = null;
+  if(!U && lotDifficileIA(C.id) && F.special !== 'depot' && (F.extras || []).includes('depot') && autorise('batiments', 'depot')){
+    const depots = bats.filter(b => b.type === 'depot'), vus = ia.depotsVus || (ia.depotsVus = {});
+    for(const d of depots) vus[d.id] = true;
+    const perdus = Object.keys(vus).length - depots.length;
+    if(!depots.length && perdus <= LOT_IA.depotsRebatis){
+      const n = champDepotIA(C.id, bats, qg), i = plan.indexOf(F.defense);
+      if(n && i >= 0){ ia.champDepot = n; plan.splice(i, 0, 'depot'); }
+    }
+  }
   // Galerie de tir (novembre 2026, option cochée seulement) : ajoutée au plan selon le niveau (§ 9.1).
   if(galeriesActives()) ajouterGalerieAuPlan(C.id, F, plan, U);
   // Aviation : avion à commander (null : rien pour l'instant). Un aéroport prêt, avec une place libre
@@ -2929,7 +3023,22 @@ function economieIA(C, F, bats, ouvriers, armee, qg){
   // gardée avec les deux autres. 0 option décochée, à Normale et Facile, et avant LOURD_IA.apres.
   const epL = galeriesActives() ? projetLourdIA(C, bats, armee, gardeC) : 0;
   const epD = defD.ep, epGD = epG + epD + epL;
-  if(!chantiers.length && (!premierAvion || galerieLibre)){
+  // Lot du 26 novembre 2026 (Difficile, escarmouche) : passé LOT_IA.attenteAvion s d'attente du premier avion, le prix
+  // d'un char n'est plus gardé avant lui (avionLibere, voir l'achat de l'avion plus bas) : il est acheté, et le plan,
+  // qu'il retenait, reprend. Passé LOT_IA.attentePlan s (planLibere), les bâtiments suivants passent même sans avion
+  // (l'épargne de l'avion reste). Ailleurs : faux, comme avant.
+  let avionLibere = false, planLibere = false, releveR = null;
+  const retardR = () => releveR || (releveR = releveRetardIA(C.id, armee, bats));   // une fois par réflexion au plus
+  if(lotDifficileIA(C.id)){
+    if(!premierAvion) ia.attenteAvionT = null;
+    else if(ia.attenteAvionT == null) ia.attenteAvionT = temps;
+    else {
+      const attente = temps - ia.attenteAvionT, calme = !(LOT_IA.calme && enRetardIA(retardR()));
+      avionLibere = attente > LOT_IA.attenteAvion && calme;
+      planLibere = attente > LOT_IA.attentePlan && calme;
+    }
+  }
+  if(!chantiers.length && (!premierAvion || galerieLibre || planLibere)){
     const compte = {};
     // Galerie épargnée : elle passe avant les bâtiments manquants qui la précèdent (batterie qui attend le
     // premier avion, bâtiment détruit) ; sinon elle est sautée (lot 3). Option décochée : galDue.due est faux.
@@ -2949,7 +3058,7 @@ function economieIA(C, F, bats, ouvriers, armee, qg){
     // finies encore finies 69 % → 83 %. Contrôle de l'étape 2, chantiersPartieGaleries, DH-DK, DH-NK, NK-DH, NH-NK
     // × graines 1 à 5 : sans cette ligne, 19 parties sur 20 avec batterie, caserne, usine, relais ou tourelle
     // bâtis pendant l'attente du premier avion ; avec elle, 0 sur 20.)
-    if(galerieLibre && iBesoin !== plan.indexOf(F.galerie)){ ia.besoin = null; iBesoin = -1; }
+    if(galerieLibre && !planLibere && iBesoin !== plan.indexOf(F.galerie)){ ia.besoin = null; iBesoin = -1; }
     // Ultra sous la menace : seuls les bâtiments vitaux (première caserne, première usine, batterie contre
     // des appareils ou le vaisseau) ; le reste attend, et son prix n'est pas mis de côté.
     if(U && ia.besoin && !batimentPermisUltra(C.id, ia.besoin, bats)){ ia.besoin = null; iBesoin = -1; }
@@ -2964,7 +3073,8 @@ function economieIA(C, F, bats, ouvriers, armee, qg){
         // (Lot 3, défaut 5 : la galerie a sa propre recherche d'emplacement, emplacementGalerieIA. Option décochée,
         // D.galerie est toujours faux : même appel qu'avant, dans le même ordre.)
         const pos = D.galerie ? emplacementGalerieIA(C.id, ia.besoin, qg || bats[0])
-          : trouverEmplacement(ia.besoin, U ? centreChantierUltra(C.id, ia.besoin, qg || bats[0]) : (qg || bats[0]));
+          : trouverEmplacement(ia.besoin, U ? centreChantierUltra(C.id, ia.besoin, qg || bats[0])
+            : ia.besoin === 'depot' && ia.champDepot && qg ? centreDepotIA(ia.champDepot, qg) : (qg || bats[0]));   // (dépôt avancé : lot du 26 novembre 2026)
         // (Extracteurs, 25 novembre 2026 : faute d'ouvrier libre, un ouvrier qui ne capture pas passe d'abord ; sans
         // capture en cours, c'est ouvriers[0] comme avant.)
         const o = ouvriers.find(libre) || ouvriers.find(u => !(u.ordre && u.ordre.type === 'capturer')) || ouvriers[0];
@@ -2989,8 +3099,24 @@ function economieIA(C, F, bats, ouvriers, armee, qg){
   // (Galerie de tir, lot 3, 19 novembre 2026 : pour Normale et Difficile, l'épargne progressive epG remplace son
   // prix entier, et elle est gardée quel que soit le bâtiment voulu. Option décochée, D.galerie est toujours faux
   // et epG vaut 0 : même calcul qu'avant.)
-  const reserveMin = (ia.besoin && collecteurs >= 2 && !apresAero
+  let reserveMin = (ia.besoin && collecteurs >= 2 && !apresAero
     ? (BATIMENTS[ia.besoin].galerie && !U ? 0 : BATIMENTS[ia.besoin].cout) : 0) + gardeC + epGD;   // epGD : défense comprise (0 option décochée)
+  // Lot du 26 novembre 2026 (Difficile) : un bâtiment du plan qui suit l'aéroport (seconde caserne, seconde usine, dépôt,
+  // défense fixe, batterie) a son prix épargné peu à peu (LOT_IA.epargneDifficile par s), sauf quand Difficile est en
+  // retard (enRetardIA) ; sans cela il n'était payé que lorsque l'argent dormait, c'est-à-dire presque jamais. Ailleurs :
+  // rien, comme avant.
+  if(lotDifficileIA(C.id)){
+    const dtE = ia.epBatT == null ? 0 : Math.min(2, Math.max(0, temps - ia.epBatT));
+    ia.epBatT = temps;
+    if(ia.besoin && apresAero && !BATIMENTS[ia.besoin].galerie){
+      // (Troisième passe, relecture : en retard, l'épargne n'est plus retenue du tout, comme celle de la galerie, pour que
+      // Difficile puisse produire de quoi se défendre ; elle est aussi plafonnée aux réserves du moment.)
+      const enRetard = enRetardIA(retardR(), LOT_IA.ratioEpargne);
+      if(!enRetard) ia.epBat = (ia.epBat || 0) + LOT_IA.epargneDifficile*dtE;
+      ia.epBat = Math.min(BATIMENTS[ia.besoin].cout, ia.epBat || 0, Math.max(0, C.reserves - reserveMin));
+      if(!enRetard) reserveMin += ia.epBat;
+    } else ia.epBat = 0;
+  }
   const infanterie = armee.filter(u => u.def.forme === 'infanterie').length;
   const aUsine = bats.some(b => b.type === 'usine' && !b.enCours);
   // Blindés de combat (armés, au sol, hors DCA et dépannage). Hors mission, tant qu'il y en a moins de
@@ -3013,10 +3139,15 @@ function economieIA(C, F, bats, ouvriers, armee, qg){
   if(avionVoulu && (urgent || premierAvion || ia.tourAvion || peuDAvions)){
     // (Lot 3, 19 novembre 2026 : les deux premiers avions ne prennent pas non plus l'épargne de la galerie, epG,
     // 0 option décochée ; relevé du même jour : sans cela, elle retombait de 700 à 0 à chaque achat d'appareil.)
-    if(C.reserves - UNITES[avionVoulu].cout >= (peuDAvions ? gardeC + epGD : reserveMin) + (urgent ? 0 : reserveChar)){
+    // (Lot du 26 novembre 2026, Difficile : passé l'attente du premier avion, le prix d'un char n'est plus gardé avant
+    // lui ; relevé avant le lot : l'aéroport de Difficile ne faisait sortir un appareil que dans 5 parties longues sur 18.)
+    if(C.reserves - UNITES[avionVoulu].cout >= (peuDAvions ? gardeC + epGD : reserveMin) + (urgent || (LOT_IA.avionSansChar && avionLibere && premierAvion) ? 0 : reserveChar)){
       if(commander(aero, avionVoulu)){ ia.tourAvion = false; ia.nAvions++; if(!urgent) ia.indexAvion++; }
     } else if(premierAvion || peuDAvions || armee.length >= 6) epargne = UNITES[avionVoulu].cout;
   }
+  // (Lot du 26 novembre 2026, Difficile : passé l'attente, l'épargne du premier avion retient aussi les chars prioritaires ;
+  // sans cela, l'usine reprenait chaque crédit dès qu'il rentrait et l'avion n'était toujours pas payé. Faux ailleurs.)
+  const avionPrioritaire = LOT_IA.avionSansChar && avionLibere && premierAvion && epargne > 0;
   // Hélicoptères d'appui (novembre 2026) : IA_HELICOS selon la difficulté, en alternant mitrailleur et
   // lance-missiles ; ils rejoignent l'armée de terre (vagues, défense). Le premier est acheté dès que les
   // réserves le couvrent (hors rachat de collecteur) ; les suivants passent après l'avion voulu.
@@ -3094,7 +3225,7 @@ function economieIA(C, F, bats, ouvriers, armee, qg){
     // L'épargne pour un avion retient les usines, et les casernes dès que quatre fantassins gardent la base.
     // La DCA réclamée par des appareils adverses passe avant (seul le rachat d'un collecteur la retient).
     const seuil = dcaUrgente && choix === F.antiair ? gardeC
-      : prioriteChar ? (blindes < 2 && blindeCombat(choix) ? gardeC + epGD : reserveMin)   // epG : lot 3, 0 option décochée (epGD : défense comprise)
+      : prioriteChar ? (blindes < 2 && blindeCombat(choix) ? gardeC + epGD : reserveMin) + (avionPrioritaire ? epargne : 0)   // epG : lot 3, 0 option décochée (epGD : défense comprise) ; avionPrioritaire : lot du 26 novembre 2026
       : reserveMin + (b.type === 'usine' || infanterie >= 4 ? epargne : 0) + (b.type === 'caserne' && infanterie >= 4 ? charAttendu : 0);
     if(choix && C.reserves - UNITES[choix].cout >= seuil){
       const ok = commander(b, choix);
@@ -3357,6 +3488,21 @@ function choisirCampCible(id, centre){
   }
   return best;
 }
+// Lot du 26 novembre 2026 : une unité est-elle au contact d'une base ennemie (bâtiment hostile, ni neutre ni
+// extracteur, à moins de LOT_IA.contactVague px) ? Lecture seule.
+function auContactIA(id, u){
+  for(const e of ents) if(e.est === 'batiment' && !e.mort && e.camp !== 'N' && !estExtracteur(e) && hostile(id, e.camp) && dist(e, u) < LOT_IA.contactVague) return true;
+  return false;
+}
+// Menace « majeure » sur notre base (lot du 26 novembre 2026) : elle vaut au moins LOT_IA.menaceMin et plus que nos
+// unités qui ne sont pas en vague et se trouvent déjà à moins de 700 px de nos bâtiments (valeurCombat). Sinon, la base
+// se défend sans rappeler les vagues engagées. Lecture seule.
+function menaceMajeureIA(id, menaces, armee, bats){
+  let m = 0; for(const e of menaces) m += valeurCombat(e);
+  if(m < LOT_IA.menaceMin) return false;
+  let maison = 0; for(const u of armee) if(!u.enVague && bats.some(b => dist(b, u) < 700)) maison += valeurCombat(u);
+  return m > maison;
+}
 function majIACamp(id, ia){
   const C = camps[id], F = FACTIONS[C.faction];
   // Extracteurs capturés (25 novembre 2026, lot 3) : hors de « bats » (ils ne sont pas la base : ni plan, ni défense,
@@ -3421,13 +3567,24 @@ function majIACamp(id, ia){
       aide = ents.find(e => e.def.forme !== 'vaisseauMere' && menace(e)) || ents.find(e => e.def.forme === 'vaisseauMere' && menace(e)) || null;
     }
   }
+  // Lot du 26 novembre 2026 (Difficile, escarmouche, hors trêve) : une unité de vague au contact d'une base ennemie
+  // (LOT_IA.contactVague) n'est plus rappelée pour une menace mineure sur notre base (moins de LOT_IA.menaceMin, ou que nos
+  // unités restées à la base suffisent à couvrir : menaceMajeureIA), ni pour aider un allié. Relevé avant le lot
+  // (MESURES-RETRAITES.md) : des unités de vague repartaient de la base ennemie qu'elles attaquaient.
+  const lot = lotDifficileIA(id) && !alliance;
+  const retenueVague = lot && menaces.length ? !menaceMajeureIA(id, menaces, armee, bats) : false;
   if(menaces.length){
     // Le vaisseau-mère passe après les envahisseurs au sol : sous lui, une armée de terre est surtout une cible.
     const m = menaces.find(e => e.def.forme !== 'vaisseauMere') || menaces[0];
-    for(const u of armee) if((!u.enVague || dist(u,m) < 900) && !u.cible) u.ordre = {type:'attaqueDeplacement', x:m.x, y:m.y};
+    for(const u of armee) if((!u.enVague || dist(u,m) < 900) && !u.cible){
+      if(retenueVague && u.enVague && auContactIA(id, u)) continue;
+      u.ordre = {type:'attaqueDeplacement', x:m.x, y:m.y};
+    }
   } else if(aide){
-    for(const u of armee) if(!u.cible && (!u.ordre || u.ordre.type !== 'attaqueDeplacement' || Math.hypot(u.ordre.x - aide.x, u.ordre.y - aide.y) > 300))
+    for(const u of armee) if(!u.cible && (!u.ordre || u.ordre.type !== 'attaqueDeplacement' || Math.hypot(u.ordre.x - aide.x, u.ordre.y - aide.y) > 300)){
+      if(lot && u.enVague && auContactIA(id, u)) continue;
       u.ordre = {type:'attaqueDeplacement', x:aide.x + (Math.random()-.5)*120, y:aide.y + (Math.random()-.5)*120};
+    }
   } else {
     const dispo = armee.filter(u => !u.enVague);
     if(temps > ia.premiereVague && dispo.length >= ia.vague){
@@ -3442,8 +3599,21 @@ function majIACamp(id, ia){
   // Pendant la trêve, il dirige ses vagues contre les envahisseurs (le vaisseau-mère d'abord).
   const cibleJ = alliance ? (ents.find(e => e.camp === 'X' && !e.mort && e.def.forme === 'vaisseauMere') || cibleVague(centre, id))
     : ia.campCible ? cibleVague(centre, id, ia.campCible) : null;
-  for(const u of armee) if(u.enVague && !u.ordre && !u.cible && cibleJ)
-    u.ordre = {type:'attaqueDeplacement', x:cibleJ.x + (Math.random()-.5)*80, y:cibleJ.y + (Math.random()-.5)*80};
+  // Lot du 26 novembre 2026 (Difficile) : chaque unité de vague garde le camp qu'elle attaque (u.campVague) tant qu'il
+  // est en vie, au lieu de suivre le camp choisi pour la vague suivante (sinon, à plus de deux camps, une vague engagée
+  // quittait la base qu'elle attaquait pour une autre, à l'autre bout de la carte) ; il passe ensuite au camp du moment.
+  const ciblesCamp = {};
+  const cibleDe = u => {
+    if(!lot) return cibleJ;
+    const c = u.campVague && enVie(u.campVague) && hostile(id, u.campVague) ? u.campVague : ia.campCible;
+    u.campVague = c;
+    if(!c) return null;
+    return c in ciblesCamp ? ciblesCamp[c] : (ciblesCamp[c] = cibleVague(centre, id, c));
+  };
+  for(const u of armee) if(u.enVague && !u.ordre && !u.cible){
+    const b = cibleDe(u);
+    if(b) u.ordre = {type:'attaqueDeplacement', x:b.x + (Math.random()-.5)*80, y:b.y + (Math.random()-.5)*80};
+  }
   if(galeriesActives()) riposteGalerieIA(id, C, bats);   // galerie hostile ouverte : riposte (19 novembre 2026, § 9.4)
   pouvoirsIA(C, menaces, armeeAll);
   if(galeriesActives()) tirGalerieIA(id, bats);   // galerie de tir (novembre 2026, § 9.3)
@@ -4216,6 +4386,11 @@ function galerieHostileVue(id){
   for(const e of ents) if(e.est === 'batiment' && !e.mort && estGalerie(e) && hostile(id, e.camp)) return true;
   return false;
 }
+// Un camp hostile a-t-il une galerie terminée (capable de tirer) ? Lecture seule (lot du 26 novembre 2026).
+function galerieHostileFinie(id){
+  for(const e of ents) if(e.est === 'batiment' && !e.mort && !e.enCours && estGalerie(e) && hostile(id, e.camp)) return true;
+  return false;
+}
 // Prochain bâtiment de défense à poser (fonction de lecture) : la batterie d'abord, puis les radars jusqu'à R.radars ;
 // rien tant qu'un chantier de défense est en cours (un à la fois), ni pour un radar avant la batterie terminée.
 // zenithVoulue (lot B, 22 novembre 2026) : la Zénith passe alors après la Parasol et le premier radar, avant les autres
@@ -4239,6 +4414,10 @@ function prochaineDefenseIA(bats, R, zenithVoulue){
 function zenithVoulueIA(id, R, M, bats){
   if(!R.zenith || !galeriesActives()) return false;
   if(M.lourdVu) return true;
+  // Lot du 26 novembre 2026 (Difficile et Ultra) : dès qu'un camp hostile a une galerie (M.menace : chantier compris,
+  // visible de tous), sans attendre une ouverture en tir lourd. (Relevé avant le lot : aucune Zénith bâtie par un
+  // ordinateur sur les parties mesurées.)
+  if(lotIA(id) && M.menace) return true;
   if(R.zenith !== 'complet') return false;
   const p = bats.find(b => estParasol(b) && !b.enCours);
   if(!p || p.para.stock < R.stockVise || bats.filter(b => estRadar(b) && !b.enCours).length < R.radars) return false;
@@ -4284,7 +4463,10 @@ function defenseDueIA(C, bats, armee, garde, galDue, veutGalerie){
   if(!M.menace || !bats.some(b => b.type === 'usine' && !b.enCours)) return SANS_DEFENSE_DUE;
   // (galeriePosee : une galerie déjà bâtie puis détruite ne remet pas la défense en attente.)
   if(!M.galeriePosee && bats.some(b => estGalerie(b))) M.galeriePosee = true;
-  if(veutGalerie && !M.subi && !M.galeriePosee){ M.epargneT = null; return SANS_DEFENSE_DUE; }
+  // (Lot du 26 novembre 2026, Difficile et Ultra : l'attente de sa propre galerie cesse dès qu'une galerie hostile est
+  // terminée, donc capable de tirer. Relevé avant le lot : Halden Difficile, qui ne réunissait jamais le prix de son
+  // Aiguille, ne posait jamais de Parasol, même 650 s après la galerie adverse.)
+  if(veutGalerie && !M.subi && !M.galeriePosee && !(lotIA(C.id) && galerieHostileFinie(C.id))){ M.epargneT = null; return SANS_DEFENSE_DUE; }
   let quoi = prochaineDefenseIA(bats, R, zenithVoulueIA(C.id, R, M, bats));
   if(quoi === 'radar' && !radarPermisIA(M)) quoi = null;
   if(!quoi){ M.epargneT = null; return SANS_DEFENSE_DUE; }
@@ -5016,7 +5198,17 @@ function productionUltra(C, F, bats, armee, gardeC, reserveMin, epargne){
     || !!BATIMENTS[besoin].galerie);
   const domine = monArmee >= plusForte*1.2 + 800;
   S.domine = domine;
-  const resBat = besoin && !coeur && !domine ? Math.max(0, reserveMin - BATIMENTS[besoin].cout) : reserveMin;
+  let resBat = besoin && !coeur && !domine ? Math.max(0, reserveMin - BATIMENTS[besoin].cout) : reserveMin;
+  // Lot du 26 novembre 2026 : passé LOT_IA.apresUltra s, le prochain bâtiment du plan (hors cœur, armée sans domination)
+  // a son prix épargné peu à peu (LOT_IA.epargneUltra par s, rien sous la menace), au lieu de n'être payé que lorsque
+  // l'argent dort ; en urgence, le seuil reste gardeC (plus bas). Relevé avant le lot : dans les parties longues, Ultra ne
+  // posait presque jamais sa défense fixe ni son aéroport. LOT_IA.epargneUltra à 0 : comme avant.
+  const dtE = S.epBatT == null ? 0 : Math.min(2, Math.max(0, temps - S.epBatT));
+  S.epBatT = temps;
+  if(lotIA(id) && besoin && !coeur && !domine && temps > LOT_IA.apresUltra){
+    if(!(S.menace > 0)) S.epBat = Math.min(BATIMENTS[besoin].cout, (S.epBat || 0) + LOT_IA.epargneUltra*dtE, Math.max(0, C.reserves - gardeC));
+    resBat += S.epBat || 0;
+  } else S.epBat = 0;
   // Hors urgence, priorité stricte : la meilleure offre attend ses crédits plutôt que de céder la place.
   // Même en urgence, le rachat d'un collecteur manquant (gardeC) reste prioritaire. (Avant le 13 novembre
   // 2026 : seuil 0 en urgence, les collecteurs perdus n'étaient jamais rachetés quand l'armée était en
@@ -5191,13 +5383,34 @@ function replierBlessesUltra(id, S, combattants, reparateurs, ctx){
   const reste = [];
   for(const u of combattants){
     if(u.ultraRepli){
-      if(u.pv >= u.pvMax*ULTRA.REPRISE_PV || temps - u.ultraRepli > ULTRA.REPLI_MAX){ u.ultraRepli = 0; u.ordre = null; }
+      // (Troisième passe : un blessé posté derrière son groupe, u.ultraRecule, y reste hors de l'assaut tant que l'assaut
+      // dure et qu'il n'est pas soigné ; dès que la phase change (retraite, regroupement), son repli est levé et il suit la
+      // règle ordinaire ci-dessous : il rentre vers un abri au lieu de rester seul.)
+      if(u.ultraRecule){
+        if(S.phase !== 'assaut' || u.pv >= u.pvMax*ULTRA.REPRISE_PV){ u.ultraRepli = 0; u.ultraRecule = false; u.ordre = null; }
+        else continue;
+      } else if(u.pv >= u.pvMax*ULTRA.REPRISE_PV || temps - u.ultraRepli > ULTRA.REPLI_MAX){ u.ultraRepli = 0; u.ordre = null; }
       else continue;
     }
     if(u.pv < u.pvMax*ULTRA.REPLI_PV && u.def.forme !== 'antiair'){
       const genre = u.def.forme === 'infanterie' ? 'infanterie' : 'vehicules';
       const rep = plusProche(u, reparateurs.filter(r => r.def.soigne === genre));
       const abri = rep || (karsk ? depotProche(u) : null);
+      // Seconde passe du lot (26 novembre 2026, travaux/ia-ultra/DIAGNOSTIC-RETRAITES.md, cause 1) : pendant un assaut,
+      // un blessé dont l'abri est à plus de LOT_IA.abriLoin px ne rentre plus à la base (son départ vidait l'assaut, qui
+      // battait ensuite en retraite sans perte). LOT_IA.blesses : 'reste' (il reste au combat, correction 1 du
+      // diagnostic) ; 'recule' (il quitte la ligne de feu et se poste LOT_IA.reculBlesse px derrière le barycentre de son
+      // groupe, côté rassemblement, marqué u.ultraRecule ; aucun réparateur n'étant à moins de abriLoin px, personne ne
+      // vient le soigner là : il reste seulement avec son groupe, hors de l'assaut, jusqu'à la fin de l'assaut ; voir
+      // plus haut) ; null : comme avant.
+      const loin = !!abri && lotIA(id) && LOT_IA.blesses && u.ultra === 'assaut' && S.phase === 'assaut' && dist(u, abri) > LOT_IA.abriLoin;
+      if(loin && LOT_IA.blesses === 'recule' && S.marche && temps - S.marche.t < 2){
+        const M = S.marche, p = pointLibre(M.x - M.fx*LOT_IA.reculBlesse, M.y - M.fy*LOT_IA.reculBlesse);
+        u.ultraRepli = temps; u.ultraRecule = true; u.cible = null; u.chemin = null;
+        u.ordre = Math.hypot(p.x - u.x, p.y - u.y) > 120 ? {type:'aller', x:p.x, y:p.y} : null;   // déjà derrière : il y reste
+        journalUltra(id, 'repli de ' + u.type + ' (' + Math.round(u.pv) + ' PV) derrière le groupe');
+        continue;
+      } else if(loin){ reste.push(u); continue; }
       if(abri && dist(u, abri) > 120){
         u.ultraRepli = temps; u.cible = null; u.chemin = null;
         const p = pointLibre(abri.x + (Math.random()-.5)*60, abri.y + (Math.random()-.5)*60);
@@ -5317,8 +5530,15 @@ function defendreUltra(id, S, A, ctx, libres){
     const g = groupes[0], dx = g.tete.x - ctx.centre.x, dy = g.tete.y - ctx.centre.y, d = Math.hypot(dx, dy) || 1;
     S.axe.x = S.axe.x*0.9 + dx/d; S.axe.y = S.axe.y*0.9 + dy/d;
   }
+  // Lot du 26 novembre 2026 : valeur de nos unités hors assaut déjà près de la base (700 px de nos bâtiments). Un assaut
+  // n'est abandonné, et une unité d'assaut n'est rappelée, que si la menace dépasse ce qu'elles peuvent couvrir
+  // (LOT_IA.rappel) et vaut au moins LOT_IA.menaceMin : sinon la base se défend seule et l'assaut va au bout.
+  const lot = lotIA(id);
+  let maison = 0;
+  if(lot) for(const u of libres) if(u.ultra !== 'assaut' && proteges.some(b => dist(b, u) < 700)) maison += valeurCombat(u);
+  const rappelPermis = force => !lot || (force >= LOT_IA.menaceMin && maison < LOT_IA.rappel*force);
   // Grosse menace sur notre base : l'assaut est abandonné (on ne perd pas la base pour une attaque).
-  if(intrus.length && menaceTotale > total*0.5 && S.phase !== 'regroupe'){
+  if(intrus.length && menaceTotale > total*0.5 && S.phase !== 'regroupe' && rappelPermis(menaceTotale)){
     journalUltra(id, 'assaut abandonné : base menacée (' + Math.round(menaceTotale) + ' contre ' + Math.round(total) + ')');
     S.phase = 'regroupe';
     for(const u of libres) if(u.ultra === 'assaut') u.ultra = null;
@@ -5337,11 +5557,15 @@ function defendreUltra(id, S, A, ctx, libres){
     let engage = 0;
     for(const {u, d} of cand){
       if(engage >= besoin) break;
-      if(u.ultra === 'assaut' && (!intrus.length || d - 1500 > 1400)) continue;
+      if(u.ultra === 'assaut' && (!intrus.length || d - 1500 > 1400 || !rappelPermis(g.force))) continue;
       if(!intrus.length && d > 2000) continue;
       if(intrus.length && !surBase && d > 1100) continue;
       pris.add(u); engage += valeurCombat(u);
       if(u.ultra === 'assaut') u.ultra = null;
+      // (Seconde passe du lot, 26 novembre 2026, DIAGNOSTIC-RETRAITES.md cause 4 : LOT_IA.posteDefense vrai, une unité qui
+      // tient sa position de tir après un recul de combattreUltra reste engagée mais n'est pas renvoyée en avant ; sans
+      // cela, défense et recul se renvoyaient la même unité toutes les quelques secondes.)
+      if(lot && LOT_IA.posteDefense && u.ultraPoste && temps - u.ultraPoste.t <= ULTRA.POSTE_MAX + 2) continue;
       if(!u.cible || !g.membres.includes(u.cible))
         if(!u.ordre || u.ordre.type !== 'attaqueDeplacement' || Math.hypot(u.ordre.x - g.tete.x, u.ordre.y - g.tete.y) > 120){
           u.ordre = {type:'attaqueDeplacement', x:g.tete.x, y:g.tete.y}; u.chemin = null;
@@ -5462,6 +5686,20 @@ function choisirObjectifUltra(id, S, A, depuis, minBesoin){
   }
   return best;
 }
+// Forces sur place à la tête d'un assaut (lot du 26 novembre 2026) : l'unité d'assaut la plus proche de l'objectif, le
+// groupe des unités d'assaut à moins de 600 px d'elle et son barycentre g ; ami = valeur de combat de nos unités armées
+// (hélicoptères compris, avions exclus) et de celles de nos alliés à moins de 600 px de g ; ennemi = force ennemie à moins
+// de 650 px de g (forceEnnemie : toutes les unités et défenses ennemies de la grille, hélicoptères compris, avions en vol
+// comptés à moitié par valeurCombat, comme la règle d'avant). Lecture seule.
+// (Troisième passe, relecture : les hélicoptères de l'assaut étaient exclus, `!e.def.aerien` ; une tête faite
+// d'hélicoptères donnait ami = 0 et l'assaut ne se repliait jamais.)
+function forcesTeteUltra(id, A, enAssaut, cible){
+  const tete = cible ? plusProche(cible, enAssaut) : enAssaut[0];
+  const g = barycentre(enAssaut.filter(u => dist(u, tete) < 600)) || tete;
+  let ami = 0;
+  for(const e of ents) if(!e.mort && e.est === 'unite' && e.def.arme && !e.def.ouvrier && !e.def.avion && (e.camp === id || allies(id, e.camp)) && Math.hypot(e.x - g.x, e.y - g.y) < 600) ami += valeurCombat(e);
+  return {ami, ennemi:forceEnnemie(A, g.x, g.y, 650), g};
+}
 function attaquerUltra(id, S, A, ctx, libres){
   const R = ctx.rassemblement;
   // Diversion terminée (ordre accompli) : l'unité rejoint l'assaut, ou la réserve.
@@ -5469,7 +5707,7 @@ function attaquerUltra(id, S, A, ctx, libres){
   if(S.phase === 'regroupe') for(const u of libres) if(u.ultra === 'assaut') u.ultra = null;
   let total = 0; for(const u of libres) total += valeurCombat(u);
   const enAssaut = libres.filter(u => u.ultra === 'assaut'), reserve = libres.filter(u => u.ultra !== 'assaut' && u.ultra !== 'diversion');
-  const auRassemblement = () => { for(const u of reserve) if(!u.ordre && !u.cible && dist(u, R) > 220) u.ordre = {type:'aller', x:R.x + (Math.random()-.5)*160, y:R.y + (Math.random()-.5)*200}; };
+  const auRassemblement = () => { for(const u of reserve) if(u.ultra !== 'assaut' && !u.ordre && !u.cible && dist(u, R) > 220) u.ordre = {type:'aller', x:R.x + (Math.random()-.5)*160, y:R.y + (Math.random()-.5)*200}; };
   if(S.phase === 'regroupe'){
     auRassemblement();
     if(temps < debutAssautsUltra(id)) return;
@@ -5557,8 +5795,20 @@ function attaquerUltra(id, S, A, ctx, libres){
     return;
   }
   // Assaut en cours.
+  // Lot du 26 novembre 2026 : une unité sans rôle qui se trouve loin de notre rassemblement (plus de 900 px) et à moins
+  // de 600 px d'une unité d'assaut (défenseur libéré sur place, retardataire) rejoint l'assaut au lieu de rentrer.
+  // (Relevé avant le lot : des unités au contact d'une base ennemie, sans ennemi autour, renvoyées au rassemblement.)
+  if(lotIA(id) && LOT_IA.rejoindre && enAssaut.length) for(const u of reserve){
+    if(u.ultra || dist(u, R) <= 900 || !enAssaut.some(a => dist(a, u) < 600)) continue;
+    u.ultra = 'assaut'; enAssaut.push(u);
+  }
   auRassemblement();
-  if(!enAssaut.length){ S.phase = 'regroupe'; return; }
+  if(!enAssaut.length){
+    // (Troisième passe, relecture : un assaut anéanti laisse la même mémoire d'échec qu'une retraite, pour ne pas repartir
+    // aussitôt sur le même secteur avec moins de forces.)
+    if(lotIA(id) && S.cible && !S.cible.mort) S.echec = {x:S.cible.x, y:S.cible.y, t:temps, ennemi:Math.max(forceEnnemie(A, S.cible.x, S.cible.y, 650), S.valeurDepart*0.8)};
+    S.phase = 'regroupe'; return;
+  }
   if(!S.cible || S.cible.mort || galerieFermee(S.cible)){   // galerie refermée : objectif suivant
     const c0 = barycentre(enAssaut);
     S.cible = enVie(S.campCible) ? cibleVague(c0, id, S.campCible) : null;
@@ -5570,8 +5820,17 @@ function attaquerUltra(id, S, A, ctx, libres){
   const c = barycentre(enAssaut);
   let mien = 0, mienTotal = 0;
   for(const u of enAssaut){ const v = valeurCombat(u); mienTotal += v; if(dist(u, c) < 600) mien += v; }
-  const ennemi = forceEnnemie(A, c.x, c.y, 650);
-  if((mien > 0 && ennemi > ULTRA.RETRAITE*mien) || mienTotal < S.valeurDepart*0.3){
+  let ennemi = forceEnnemie(A, c.x, c.y, 650);
+  // Lot du 26 novembre 2026 : l'usure seule (moins de 30 % de la valeur de départ) ne fait plus battre en retraite un
+  // assaut qui n'est pas dominé sur place ; seule la force ennemie locale (RETRAITE fois la nôtre) le fait, et elle est
+  // jugée là où l'on se bat : autour de la tête de l'assaut (forcesTeteUltra), nos unités et celles de nos alliés
+  // comprises, quel que soit leur rôle. Relevé avant le lot (MESURES-RETRAITES.md) : des assauts repartaient sans aucun
+  // ennemi à moins de 650 px, ou d'une base où ils dominaient, le barycentre de toutes les unités d'assaut tombant entre
+  // deux groupes (grande carte surtout).
+  const lot = lotIA(id);
+  if(lot && LOT_IA.retraiteTete){ const T = forcesTeteUltra(id, A, enAssaut, S.cible); mien = T.ami; ennemi = T.ennemi; }
+  const use = lot && LOT_IA.sansUsure ? false : mienTotal < S.valeurDepart*0.3;
+  if((mien > 0 && ennemi > ULTRA.RETRAITE*mien) || use){
     journalUltra(id, 'retraite générale : ' + Math.round(mien) + ' contre ' + Math.round(ennemi));
     S.phase = 'retraite'; S.retraiteT = temps; S.retraiteIds = new Set(enAssaut.map(u => u.id));
     // Mémoire de l'échec : pas de nouvel assaut sur ce secteur sans rapport de forces rétabli.
@@ -5588,6 +5847,7 @@ function attaquerUltra(id, S, A, ctx, libres){
   const g = barycentre(tireurs), gx = S.cible.x - g.x, gy = S.cible.y - g.y, dg = Math.hypot(gx, gy) || 1, pasG = Math.min(dg, 320);
   const etape = dg < 520 ? {x:S.cible.x, y:S.cible.y} : {x:g.x + gx/dg*pasG, y:g.y + gy/dg*pasG};
   const fx = gx/dg, fy = gy/dg, enAvant = (u, x, y) => (x - u.x)*fx + (y - u.y)*fy;   // > 0 : (x, y) est devant u
+  S.marche = {x:g.x, y:g.y, fx, fy, t:temps};   // (lot du 26 novembre 2026 : lu par combattreUltra pour borner les reculs)
   // A1 : DCA (elle ne tire pas au sol) derrière le groupe, côté rassemblement, au lieu d'aller en tête puis de reculer
   // devant chaque ennemi (le Rempart faisait à lui seul les trois quarts des reculs).
   const dr = Math.hypot(R.x - g.x, R.y - g.y) || 1, arriere = {x:g.x + (R.x - g.x)/dr*150, y:g.y + (R.y - g.y)/dr*150};
@@ -5611,7 +5871,8 @@ function attaquerUltra(id, S, A, ctx, libres){
     // pas renvoyée en arrière : elle attend le groupe sur place.
     const dc = dist(u, g);
     if(dc > ULTRA.REJOINT_ENTREE) u.ultraRejoint = true; else if(dc < ULTRA.REJOINT_SORTIE) u.ultraRejoint = false;
-    const attend = u.ultraRejoint && enAvant(g, u.x, u.y) > 0;
+    // (Lot du 26 novembre 2026 : une unité déjà au contact de l'objectif n'est pas non plus renvoyée vers le barycentre.)
+    const attend = u.ultraRejoint && (enAvant(g, u.x, u.y) > 0 || (lot && dist(u, S.cible) < LOT_IA.contact));
     const p = attend ? {x:u.x, y:u.y} : u.ultraRejoint ? g : etape;
     // A2 : un ordre que l'unité a dépassé (en poursuivant une cible) est remplacé, même pendant qu'elle combat :
     // à la mort de sa cible, le moteur ne la renvoie plus en arrière vers un vieux point d'étape.
@@ -5668,7 +5929,11 @@ function combattreUltra(id, S, A, combattants){
       if(e === u.cible){ actuel = s; vuActuel = true; }
       if(s > bs){ bs = s; best = e; }
     });
-    if(garde && menace && dm < ULTRA.RECUL_ENTREE){
+    // Lot du 26 novembre 2026 : une unité d'assaut déjà LOT_IA.recul px en arrière du barycentre de son groupe (marche
+    // relevée par attaquerUltra dans la même réflexion) ne recule plus : elle tient sa place. (Relevé avant le lot :
+    // des tireurs d'élite reculaient pas à pas jusqu'à quitter la base ennemie, le reste de l'assaut sur place.)
+    const M = S.marche, borne = !!M && u.ultra === 'assaut' && M.t === temps && lotIA(id) && (u.x - M.x)*M.fx + (u.y - M.y)*M.fy < -LOT_IA.recul;
+    if(garde && menace && dm < ULTRA.RECUL_ENTREE && !borne){
       // Recul jusqu'à une position de tir : RECUL_DISTANCE au-delà de la portée de la menace, sans sortir de la
       // nôtre si possible ; la position est tenue (ultraPoste, que la marche groupée respecte) tant que la menace
       // reste à moins de RECUL_SORTIE au-delà de sa portée. Depuis là, l'unité tire (cible prise par le moteur).

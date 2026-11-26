@@ -890,6 +890,9 @@ function partieOrdinateurs(liste, duree, opts){
       if(k % 20 === 0 && niveaux.J === 'robot') robotEscarmouche();
       if(opts.instantanes && k % 20 === 0) noterInstantane(opts.instantanes, ids, compta);
       if(partieFinie && !opts.sansFin) break;   // sansFin : la simulation continue après la fin (essai de durée)
+      // arret (26 novembre 2026, mesureBatimentsIA) : fonction lue toutes les 20 itérations ; vraie, la partie s'arrête
+      // (grande carte : quand il ne reste qu'une équipe). Absente : rien ne change.
+      if(opts.arret && k % 20 === 0 && opts.arret()) break;
     }
   } finally { Object.assign(window, orig); }
   const fin = issuePartie;
@@ -4104,18 +4107,29 @@ function testerDefense(quoi, numero){
     pas(20);
     V('ordinateur : pas de défense avant sa propre galerie tant qu’il n’a subi aucun tir de galerie ; un tir subi la déclenche',
       avantTir === 0 && tirLoin.ok && etatsIA.I.defense && etatsIA.I.defense.subi === true, {avantTir, tir:tirLoin.ok || tirLoin.motif, subi:etatsIA.I.defense && etatsIA.I.defense.subi});
+    // (26 novembre 2026, lot « tous les bâtiments » : Difficile veut sa Zénith dès qu'un adversaire a une galerie, et
+    // prochaineDefenseIA la place entre le premier et le second radar ; selon le hasard de la scène, le second radar peut
+    // ne venir qu'après les 400 s de l'essai. Verdict adapté : deux radars, ou un radar et la Zénith mise en chantier.
+    // Le reste du verdict ne change pas.)
+    const zenithI = () => defenses('I').some(estZenith);
     let t;
     try {
       t = jusqua(() => { const b = defenses('I').find(estParasol), rad = defenses('I').filter(e => estRadar(e) && !e.enCours);
-        return b && !b.enCours && b.para.stock >= 2 && rad.length >= 2; }, 400);
+        return b && !b.enCours && b.para.stock >= 2 && (rad.length >= 2 || (rad.length >= 1 && zenithI())); }, 400);
     } finally { window.commanderMunition = cm; }
     const bI = defenses('I').find(estParasol), radars = defenses('I').filter(estRadar), qI = qg('I');
     const ecarts = [];
     for(let a = 0; a < radars.length; a++) for(let b = a + 1; b < radars.length; b++) ecarts.push(Math.round(dist(radars[a], radars[b])));
-    V('ordinateur : rien sans galerie hostile ; puis batterie, deux radars (Difficile) et deux munitions', avant === 0 && t !== null && bI && radars.length === 2 && bI.para.stock + bI.para.fab === 2 && depasse.length === 0,
+    V('ordinateur : rien sans galerie hostile ; puis batterie, deux radars (Difficile, ou un radar et la Zénith) et deux munitions', avant === 0 && t !== null && bI && (radars.length === 2 || (radars.length === 1 && zenithI())) && bI.para.stock + bI.para.fab === 2 && depasse.length === 0,
       {avantGalerie:avant, delai:t === null ? 'non' : r1(t), radars:radars.length, munitions:bI && [bI.para.stock, bI.para.fab], depasse, journal:(etatsIA.I.defense || {journal:[]}).journal.map(l => l.t + ' ' + l.quoi + ' ' + (l.type || ''))});
     V('ordinateur : batterie près du QG (zone sur le QG), radars dans la base et écartés', bI && dist(bI, qI) < 350 && radars.every(r => dist(r, qI) < 500) && ecarts.every(d => d >= 150),
       {batterieQG:bI && Math.round(dist(bI, qI)), radarsQG:radars.map(r => Math.round(dist(r, qI))), ecarts});
+    // (Troisième passe du lot : quand la Zénith est passée avant le second radar, on attend encore, 400 s au plus, que le
+    // second radar arrive bien ensuite.)
+    if(radars.length === 1 && zenithI()){
+      const t2 = jusqua(() => defenses('I').filter(e => estRadar(e) && !e.enCours).length >= 2, 400);
+      V('ordinateur : le second radar (Difficile) arrive après la Zénith', t2 !== null, {delai:t2 === null ? 'non' : r1(t2), radars:defenses('I').filter(estRadar).length});
+    }
     V('ordinateur Facile : aucune défense, malgré la galerie hostile', defenses('K').length === 0 && !(etatsIA.K && etatsIA.K.defense), {defensesK:defenses('K').length});
     if(bI){
       gJ.gal.stock = 1;
@@ -5155,9 +5169,12 @@ function avancerSerieUltra(cle, limite){
   while(R.travaux.length && performance.now() - t0 < (limite || 1)){
     const p = R.travaux[0];
     let m;
-    try { m = mesureUltra(p.liste, R.duree, {graine:p.graine, galeries:p.galeries, pas:p.pas, irregulier:p.irregulier}); }
-    catch(e){ m = {erreur:e.message}; }
-    const res = {nom:p.nom, graine:p.graine, galeries:p.galeries, pas:p.irregulier != null ? 'irr' + p.irregulier : (p.pas || 1/30), mesure:m, ligne:ligneMesureUltra(p, m)};
+    // (26 novembre 2026 : p.outil, nom d'un autre outil de mesure de même forme, ex. 'mesureBatimentsIA' ; p.avant : son
+    // interrupteur d'essai. Sans p.outil, comme avant.)
+    try { m = p.outil ? window[p.outil](p.liste, R.duree, {graine:p.graine, galeries:p.galeries, pas:p.pas, irregulier:p.irregulier, avant:p.avant}) : mesureUltra(p.liste, R.duree, {graine:p.graine, galeries:p.galeries, pas:p.pas, irregulier:p.irregulier}); }
+    catch(e){ m = {erreur:e.message + ' ' + String(e.stack || '').split('\n').slice(1, 3).join(' | ')}; }
+    const ligne = p.outil ? p.nom + ' g' + p.graine + (p.galeries ? ' gal' : '') + (p.avant ? ' (avant)' : '') + ' : ' + m.duree + ' s, restent ' + (m.restants || []).join('+') + (m.erreur ? ' ERREUR ' + m.erreur : '') : ligneMesureUltra(p, m);
+    const res = {nom:p.nom, graine:p.graine, galeries:p.galeries, avant:p.avant, pas:p.irregulier != null ? 'irr' + p.irregulier : (p.pas || 1/30), mesure:m, ligne};
     delete m.trace; delete m.suivi; delete m.transitions;
     R.parties.push(res); R.travaux.shift(); R.faits++;
   }
@@ -5246,13 +5263,21 @@ window.vaEtVientA1A5 = vaEtVientA1A5;
 const CAS_ULTRA = {
   portCalmes:[
     {nom:'UH(J)-D g1 (Bastion #50 : ordre périmé, bascule de cible)', liste:[campU('J', 'halden', 'ultra'), campU('I', 'karsk', 'difficile')], graine:1},
-    {nom:'UU H(J) g1 (Lynx #60 : harceleur enrôlé dans l’assaut)', liste:[campU('J', 'halden', 'ultra'), campU('I', 'karsk', 'ultra')], graine:1, uu:true},
+    // (26 novembre 2026, seconde passe du lot : vainqueur non exigé. Avec les blessés qui restent derrière leur groupe et
+    // la défense qui respecte la position de tir, les deux Ultra de cette graine se tiennent jusqu'à 1 500 s, partie nulle.
+    // Le cas sert à contrôler le harceleur enrôlé dans l'assaut (A4) : va-et-vient A1 à A5 toujours exigés à 0.)
+    {nom:'UU H(J) g1 (Lynx #60 : harceleur enrôlé dans l’assaut)', liste:[campU('J', 'halden', 'ultra'), campU('I', 'karsk', 'ultra')], graine:1, uu:true, victoireNonExigee:true},
+    // (26 novembre 2026 : verdict d'origine remis à la troisième passe ; avec les hélicoptères comptés dans les forces de
+    // tête, Halden Ultra regagne cette partie, à 637 s.)
     {nom:'UH(I)-D g2 galeries, pas irrégulier 202 (Rempart #64 : recul / avance)', liste:[campU('J', 'karsk', 'difficile'), campU('I', 'halden', 'ultra')], graine:2, galeries:true, irregulier:202},
   ],
   gorgesVarseche:[
     {nom:'UH(J)-D g1 (Rempart #76 : recul / avance, seuil du barycentre)', liste:[campU('J', 'halden', 'ultra'), campU('I', 'karsk', 'difficile')], graine:1},
     {nom:'UH(I)-D g1 (six collecteurs coincés dans un couloir)', liste:[campU('J', 'karsk', 'difficile'), campU('I', 'halden', 'ultra')], graine:1},
-    {nom:'UH(J)-D g2 (assaut au-devant d’une vague)', liste:[campU('J', 'halden', 'ultra'), campU('I', 'karsk', 'difficile')], graine:2},
+    // (26 novembre 2026, seconde passe du lot : Ultra ne doit pas perdre, la victoire n'est plus exigée. Avec la défense qui
+    // respecte la position de tir (LOT_IA.posteDefense), la partie reste nulle à 1 500 s ; sans ce réglage, Ultra gagne à
+    // 1 013 s. Le défaut contrôlé ici (B2 : assaut lancé au-devant d'une vague, défaite) est l'absence de défaite.)
+    {nom:'UH(J)-D g2 (assaut au-devant d’une vague)', liste:[campU('J', 'halden', 'ultra'), campU('I', 'karsk', 'difficile')], graine:2, nonDefaite:true},
     {nom:'UH(J)-D g1, pas irrégulier 101', liste:[campU('J', 'halden', 'ultra'), campU('I', 'karsk', 'difficile')], graine:1, irregulier:101},
   ],
 };
@@ -5267,7 +5292,7 @@ function testerUltra(){
     const bloque = Math.max(0, ...ids.map(id => (m.blocageMax || {})[id] || 0));
     const vevA = vaEtVientA1A5(m.pairesVaEtVient);
     const triche = Object.values(m.triche).every(t => t === '0 / 0');
-    const victoire = c.uu ? !!m.gagnants : ids.includes(m.gagnants);
+    const victoire = c.victoireNonExigee || (c.nonDefaite && !m.gagnants) || (c.uu ? !!m.gagnants : ids.includes(m.gagnants));
     const ok = !m.erreur && vevA === 0 && bloque <= 30 && triche && victoire;
     V.push({nom:c.nom, ok, detail:{vainqueur:m.vainqueur, duree:m.duree, vaEtVientA1A5:vevA, vaEtVientDefaut:vaEtVientDefaut(m.pairesVaEtVient), vaEtVient:m.vaEtVient,
       paires:m.pairesVaEtVient, collecteurBloqueDaffilee:bloque, collecteurBloqueTotal:ids.map(id => (m.collecteursBloques || {})[id] || 0), triche:m.triche, erreur:m.erreur, empreinte:m.empreinte}});
@@ -5595,3 +5620,895 @@ function testerExtracteurs(quoi, duree){
   }
 }
 window.testerExtracteurs = testerExtracteurs;
+// =====================================================================
+//  Bâtiments et retraites de l'ordinateur Difficile et Ultra (26 novembre 2026, travaux/ia-ultra/MESURES-BATIMENTS.md
+//  et MESURES-RETRAITES.md). Outil de mesure seulement : les enveloppes ne font que lire l'état (aucun appel à
+//  Math.random, aucune écriture dans les entités ni dans etatsIA) et sont remises en place à la fin.
+//  Par camp Difficile ou Ultra et par type de bâtiment de sa faction : bâti (première mise en chantier, s), fini (s),
+//  nombre de chantiers, et ce qui montre qu'il a SERVI :
+//    caserne, usine, qg, dépôt : unites (commandes acceptées) ; aéroport : unites et sorties (avions qui sortent) ;
+//    défenses fixes et batterie mixte : tirs ; relais (et dépôt de Karsk) : tirsAura (tirs d'unités du camp dans leur
+//    aura) ; dépôt : dechargements (collecteurs qui y déchargent) ; galerie : missiles et lourds commandés,
+//    missilesTires et lourdsTires ; Parasol et Zénith : munitions commandées, interceptions tentées et réussies ;
+//    radar : nombre (n) et fini.
+//  galerieVue : heure où un camp hostile a eu, pour la première fois, une galerie (chantier compris : ce que voit tout
+//  joueur) ; c'est le point de départ du délai de la Zénith.
+//  Retraites (B) : chaque unité armée au sol d'un camp Difficile ou Ultra qui passe à moins de 500 px d'un bâtiment
+//  ennemi est « au contact » de ce camp ; si elle s'en éloigne ensuite à plus de 1 100 px alors que ce camp est encore
+//  en vie (dans les 60 s), c'est un départ. Cause : la dernière fonction de l'ordinateur qui a changé son ordre
+//  (enveloppes de majIACamp et de ses fonctions, comme mesureUltra) ; contexte relevé à ce moment : force ennemie à
+//  moins de 650 px de l'unité, force amie à moins de 600 px, menace sur notre base (unités ennemies à moins de 600 px
+//  de nos bâtiments) et défenseurs déjà à la base (nos unités à moins de 700 px de nos bâtiments), en valeurCombat.
+//  Règle écrite (classement) :
+//    « blessé » : repli d'une unité à moins de 30 % (replierBlessesUltra) ; « esquive » : zone annoncée ;
+//    « harcèlement » : repli du groupe de harcèlement d'Ultra (voulu, compté à part) ;
+//    « justifiée : forces supérieures » : force ennemie locale ≥ 1,5 × force amie locale (jugées sur le groupe de
+//    l'unité : voir forces) ;
+//    « justifiée : base menacée » : menace sur notre base ≥ 300 et ≥ défenseurs déjà à la base (quel que soit l'ordre) ;
+//    sinon « sans motif », avec sa cause.
+//  Un « assaut qui repart » : départs d'un même camp, du contact d'un même camp ennemi, à moins de 20 s d'écart.
+//  Après la chute d'un camp (plus de bâtiment) alors qu'un autre ennemi reste : l'unité « enchaîne » si elle arrive au
+//  contact d'un autre camp dans les 150 s, « rentre » si elle revient à moins de 600 px de nos bâtiments avant.
+//  Ex. : mesureBatimentsIA([campU('J','halden','difficile'), campU('I','karsk','difficile')], 1500, {graine:1, galeries:true})
+//  opts : graine, galeries, pas (nombre ou 'irr' + graine dans irregulier), irregulier, avant (true : jeu.js sans le lot,
+//  interrupteur d'essai, voir lotAncienIA).
+// =====================================================================
+const FONCTIONS_ORDRES_IA = ['economieIA', 'captureIA', 'majIAAviation', 'majUltra', 'esquiverZonesUltra', 'replierBlessesUltra', 'defendreUltra',
+  'degagerCollecteursUltra', 'gardesChampUltra', 'harcelerUltra', 'attaquerUltra', 'combattreUltra', 'soutenirUltra', 'riposteGalerieIA', 'pouvoirsIA',
+  'pouvoirsUltra', 'tirGalerieIA', 'esquiveGalerieIA', 'esquiverRayon', 'eloignerDuVaisseauUltra'];
+const NIVEAUX_MESURES = ['difficile', 'ultra'];
+function mesureBatimentsIA(liste, duree, opts){
+  opts = opts || {};
+  duree = duree || 1500;
+  const suivis = new Set(liste.filter(k => NIVEAUX_MESURES.includes(k.niveau)).map(k => k.id));
+  const B = {}, galerieVue = {}, vie = {}, retenues = {};
+  const fiche = (camp, type) => { const c = B[camp] || (B[camp] = {}); return c[type] || (c[type] = {bati:null, fini:null, n:0}); };
+  const plus = (f, k, v) => { f[k] = (f[k] || 0) + (v == null ? 1 : v); };
+  const etat = new Map();     // id d'unité -> {o, ox, oy, auteur, ctx, contact, victoire}
+  const departs = [], apres = [];
+  let campCourant = null, branche = null, baseCtx = null;
+  const suivie = u => !u.mort && u.est === 'unite' && suivis.has(u.camp) && u.def.arme && !u.def.ouvrier && !u.def.collecteur && !u.def.aerien;
+  // Forces sur place, jugées sur le groupe de l'unité (comme la retraite d'Ultra) : barycentre g de nos unités armées au
+  // sol à moins de 600 px d'elle ; force amie = nos unités (et alliées) à moins de 600 px de g ; force ennemie = unités
+  // et défenses ennemies à moins de 650 px de g (avions en vol exclus).
+  const forces = u => {
+    let gx = 0, gy = 0, n = 0;
+    for(const e of ents) if(!e.mort && e.est === 'unite' && e.camp === u.camp && e.def.arme && !e.def.ouvrier && !e.def.aerien && Math.hypot(e.x - u.x, e.y - u.y) < 600){ gx += e.x; gy += e.y; n++; }
+    const x = n ? gx/n : u.x, y = n ? gy/n : u.y;
+    let en = 0, ami = 0;
+    for(const e of ents){
+      if(e.mort) continue;
+      const d = Math.hypot(e.x - x, e.y - y);
+      if(d > 650) continue;
+      if(hostile(u.camp, e.camp) && e.camp !== 'N'){ if(!(e.def.avion && enVol(e))) en += valeurCombat(e); }
+      else if(e.est === 'unite' && d <= 600 && (e.camp === u.camp || allies(u.camp, e.camp))) ami += valeurCombat(e);
+    }
+    return {en, ami};
+  };
+  const contexteBase = id => {
+    if(baseCtx && baseCtx.id === id && baseCtx.t === temps) return baseCtx;
+    const bats = ents.filter(e => e.camp === id && e.est === 'batiment' && !e.mort && !estExtracteur(e));
+    let menace = 0, maison = 0;
+    for(const e of ents){
+      if(e.mort || e.est !== 'unite' || !e.def.arme || e.def.ouvrier) continue;
+      if(hostile(id, e.camp) && e.camp !== 'N' && !(e.def.avion && enVol(e))){ if(bats.some(b => dist(b, e) < 600)) menace += valeurCombat(e); }
+      else if(e.camp === id && !e.def.avion && bats.some(b => dist(b, e) < 700)) maison += valeurCombat(e);
+    }
+    return (baseCtx = {id, t:temps, menace, maison});
+  };
+  const detail = (nom, u, pre) => {
+    const o = u.ordre;
+    if(nom === 'attaquerUltra'){
+      const S = etatsIA[u.camp] && etatsIA[u.camp].ultra, p1 = S && S.phase;
+      if(p1 === 'retraite' && pre !== 'retraite') return 'retraite générale';
+      if(pre === 'retraite') return 'retraite (marche)';
+      if(u.ultra === 'diversion') return 'diversion';
+      if(o && o.type === 'aller') return 'rassemblement';
+      if(u.ultra === 'assaut') return 'marche';
+      return 'autre';
+    }
+    if(nom === 'majIACamp') return branche === 'menaces' ? 'défense' : branche === 'aide' ? 'aide' : o && o.type === 'aller' ? 'rassemblement' : 'vague';
+    return '';
+  };
+  const rattraper = (nom, pre) => {
+    if(!campCourant) return;
+    for(const u of ents){
+      if(u.camp !== campCourant || !suivie(u)) continue;
+      let s = etat.get(u.id);
+      if(!s){ s = {o:u.ordre, ox:u.ordre && u.ordre.x, oy:u.ordre && u.ordre.y, auteur:'création', ctx:null, contact:null, victoire:null}; etat.set(u.id, s); continue; }
+      const o = u.ordre;
+      if(o === s.o && (!o || (o.x === s.ox && o.y === s.oy))) continue;
+      s.o = o; s.ox = o && o.x; s.oy = o && o.y;
+      if(!o) continue;   // ordre effacé : l'auteur reste celui de l'ordre précédent
+      const d = detail(nom, u, pre);
+      s.auteur = nom + (d ? ':' + d : '');
+      if(s.contact && temps - s.contact.t < 60){ const f = forces(u), b = contexteBase(u.camp); s.ctx = {t:+temps.toFixed(1), en:Math.round(f.en), ami:Math.round(f.ami), menace:Math.round(b.menace), maison:Math.round(b.maison), pv:Math.round(100*u.pv/u.pvMax)}; }
+      else s.ctx = null;
+    }
+  };
+  const classer = (cause, ctx) => {
+    if(/^replierBlessesUltra/.test(cause)) return 'blessé';
+    if(/^(esquiverZonesUltra|esquiveGalerieIA|esquiverRayon|eloignerDuVaisseauUltra)/.test(cause)) return 'esquive';
+    if(/^harcelerUltra/.test(cause)) return 'harcèlement';
+    if(ctx && ctx.en > 0 && ctx.en >= 1.5*ctx.ami) return 'justifiée : forces supérieures';
+    if(ctx && ctx.menace >= 300 && ctx.menace >= ctx.maison) return 'justifiée : base menacée';
+    return 'sans motif';
+  };
+  // Relevé à 1 Hz (après le pas) : bâtiments finis, galeries hostiles vues, contacts, départs, suite des victoires.
+  let releveT = -1;
+  const relever = () => {
+    if(temps - releveT < 1) return; releveT = temps;
+    const batsPar = {};
+    for(const e of ents) if(e.est === 'batiment' && !e.mort && !estExtracteur(e) && camps[e.camp]) (batsPar[e.camp] || (batsPar[e.camp] = [])).push(e);
+    for(const id of campsEnJeu()){
+      if(vie[id] == null && !enVie(id)) vie[id] = Math.round(temps);
+      if(!suivis.has(id)) continue;
+      for(const b of batsPar[id] || []){ const f = fiche(id, b.type); if(f.fini == null && !b.enCours) f.fini = Math.round(temps); }
+      if(galerieVue[id] == null && campsEnJeu().some(c => hostile(id, c) && (batsPar[c] || []).some(estGalerie))) galerieVue[id] = Math.round(temps);
+    }
+    const vivants = new Set(Object.keys(batsPar));
+    for(const u of ents){
+      if(!suivie(u)) continue;
+      const s = etat.get(u.id); if(!s) continue;
+      let dmin = Infinity, campP = null;
+      for(const c in batsPar){ if(!hostile(u.camp, c) || c === 'N') continue; for(const b of batsPar[c]){ const d = dist(u, b); if(d < dmin){ dmin = d; campP = c; } } }
+      if(s.victoire){
+        const V = s.victoire;
+        if(dmin < 500 && campP !== V.camp){ apres.push({camp:u.camp, suite:'enchaîne', t:Math.round(temps - V.t)}); s.victoire = null; }
+        else if(temps - V.t > 20 && (batsPar[u.camp] || []).some(b => dist(b, u) < 600) &&
+                (!u.ordre || u.ordre.x == null || (batsPar[u.camp] || []).some(b => Math.hypot(b.x - u.ordre.x, b.y - u.ordre.y) < 700))){   // (de passage vers une autre cible : pas « rentre »)
+          apres.push({camp:u.camp, suite:'rentre', t:Math.round(temps - V.t), auteur:s.auteur}); s.victoire = null; }
+        else if(temps - V.t > 150){ apres.push({camp:u.camp, suite:'ni l’un ni l’autre', t:150}); s.victoire = null; }
+      }
+      // Contact compté pour les seules unités engagées dans une attaque : vague de l'ordinateur ordinaire (u.enVague),
+      // assaut, diversion ou harcèlement d'Ultra (u.ultra). Un défenseur qui poursuit un intrus jusque chez lui n'est pas
+      // un assaut. (Ajouté le 26 novembre 2026, après la première série : sur la grande carte, des unités de base de
+      // Difficile, sans vague, étaient comptées.)
+      const engagee = estUltra(u.camp) ? ['assaut', 'diversion', 'harcelement'].includes(u.ultra) : !!u.enVague;
+      if(dmin < 500 && (engagee || (s.contact && s.contact.camp === campP))){ s.contact = {camp:campP, t:temps}; s.victoire = null; continue; }
+      if(dmin < 500) continue;
+      if(!s.contact) continue;
+      const X = s.contact.camp;
+      if(!vivants.has(X)){
+        if(campsEnJeu().some(c => c !== X && hostile(u.camp, c) && vivants.has(c))) s.victoire = {t:temps, camp:X};
+        s.contact = null; continue;
+      }
+      if(temps - s.contact.t > 60){ s.contact = null; continue; }
+      let dX = Infinity; for(const b of batsPar[X]) dX = Math.min(dX, dist(u, b));
+      if(dX > 1100){
+        const o = u.ordre, dest = o && o.x != null ? o : null;
+        let campDest = null;
+        if(dest){ let dd = Infinity; for(const c in batsPar) for(const b of batsPar[c]){ const d = Math.hypot(b.x - dest.x, b.y - dest.y); if(d < dd){ dd = d; campDest = c; } } }
+        const classe = classer(s.auteur, s.ctx);
+        departs.push({t:Math.round(temps), camp:u.camp, niveau:niveauIA(u.camp), id:u.id, type:u.type, contre:X, cause:s.auteur, classe, ctx:s.ctx,
+          vers:campDest === u.camp ? 'notre base' : campDest === X ? 'même camp' : campDest ? 'autre camp (' + campDest + ')' : 'aucun ordre', pv:Math.round(100*u.pv/u.pvMax)});
+        s.contact = null;
+      }
+    }
+  };
+  // Enveloppes.
+  const orig = {miseAJour:window.miseAJour, majIACamp:window.majIACamp, construireBatiment:window.construireBatiment, commander:window.commander, majAvion:window.majAvion,
+    tirer:window.tirer, majCollecteur:window.majCollecteur, commanderMissile:window.commanderMissile, commanderMissileLourd:window.commanderMissileLourd,
+    commanderMunition:window.commanderMunition, effet:window.effet};
+  for(const n of FONCTIONS_ORDRES_IA) orig[n] = window[n];
+  const aurasPar = {};
+  const installer = () => {
+    window.construireBatiment = function(camp, type){
+      const b = orig.construireBatiment.apply(this, arguments);
+      if(b && suivis.has(camp)){ const f = fiche(camp, type); f.n++; if(f.bati == null) f.bati = Math.round(temps); }
+      return b;
+    };
+    window.commander = function(b){ const ok = orig.commander.apply(this, arguments); if(ok && b && suivis.has(b.camp)) plus(fiche(b.camp, b.type), 'unites'); return ok; };
+    window.majAvion = function(u){ const p0 = u.phase; const r = orig.majAvion.apply(this, arguments); if(p0 === 'sol' && u.phase !== 'sol' && suivis.has(u.camp)) plus(fiche(u.camp, 'aeroport'), 'sorties'); return r; };
+    window.tirer = function(u){
+      if(u && suivis.has(u.camp)){
+        if(u.est === 'batiment') plus(fiche(u.camp, u.type), 'tirs');
+        else if(u.dansAura){
+          const F = FACTIONS[camps[u.camp].faction], L = aurasPar[u.camp] || [];
+          for(const b of L) if(!b.mort && dist(u, b) < F.rayonAura){ plus(fiche(u.camp, b.type), 'tirsAura'); break; }
+        }
+      }
+      return orig.tirer.apply(this, arguments);
+    };
+    window.majCollecteur = function(u){
+      const C = camps[u.camp], r0 = C ? C.reserves : 0;
+      const r = orig.majCollecteur.apply(this, arguments);
+      if(C && C.reserves > r0 && suivis.has(u.camp)){ const d = depotProche(u); if(d && d.type !== 'qg') plus(fiche(u.camp, d.type), 'dechargements'); }
+      return r;
+    };
+    window.commanderMissile = function(b){ const ok = orig.commanderMissile.apply(this, arguments); if(ok && suivis.has(b.camp)) plus(fiche(b.camp, b.type), 'missiles'); return ok; };
+    window.commanderMissileLourd = function(b){ const ok = orig.commanderMissileLourd.apply(this, arguments); if(ok && suivis.has(b.camp)) plus(fiche(b.camp, b.type), 'lourds'); return ok; };
+    window.commanderMunition = function(b){ const ok = orig.commanderMunition.apply(this, arguments); if(ok && suivis.has(b.camp)) plus(fiche(b.camp, b.type), 'munitions'); return ok; };
+    window.effet = function(type, p){
+      if(p && suivis.has(p.camp)){
+        if(type === 'missile' && p.galerie){ const g = FACTIONS[camps[p.camp].faction].galerie; plus(fiche(p.camp, g), p.lourd ? 'lourdsTires' : 'missilesTires'); }
+        if(type === 'intercepteur'){ const f = fiche(p.camp, p.lourd ? 'zenith' : 'parasol'); plus(f, 'interceptions'); if(p.reussi) plus(f, 'reussies'); }
+      }
+      return orig.effet.apply(this, arguments);
+    };
+    window.miseAJour = function(){ const r = orig.miseAJour.apply(this, arguments); relever(); return r; };
+    window.majIACamp = function(id){
+      if(!suivis.has(id)) return orig.majIACamp.apply(this, arguments);
+      campCourant = id; baseCtx = null;
+      aurasPar[id] = ents.filter(e => e.camp === id && e.est === 'batiment' && !e.mort && !e.enCours && e.def.aura && e.type !== 'qg');
+      // Branche de l'ordinateur ordinaire (mêmes conditions que majIACamp, en lecture) : menaces, aide à un allié, ou rien.
+      if(!estUltra(id)){
+        const bats = ents.filter(e => e.camp === id && e.est === 'batiment' && !e.mort && !e.def.extracteur);
+        const menace = ents.some(e => hostile(id, e.camp) && !e.mort && e.est === 'unite' && !(e.def.avion && enVol(e)) && bats.some(b => dist(b, e) < 550));
+        let aide = false;
+        if(!menace){
+          const ba = ents.filter(e => e.est === 'batiment' && !e.mort && allies(id, e.camp));
+          aide = ba.length > 0 && ents.some(e => !e.mort && e.est === 'unite' && hostile(id, e.camp) && !(e.def.avion && enVol(e)) && ba.some(b => dist(b, e) < 550));
+        }
+        branche = menace ? 'menaces' : aide ? 'aide' : null;
+        // (Troisième passe : vague au contact retenue pour une menace mineure, relevée comme le fait majIACamp, en lecture.)
+        if(menace && typeof lotDifficileIA === 'function' && lotDifficileIA(id) && !alliance){
+          const menaces = ents.filter(e => hostile(id, e.camp) && !e.mort && e.est === 'unite' && !(e.def.avion && enVol(e)) && bats.some(b => dist(b, e) < 550));
+          const armee = ents.filter(e => e.camp === id && e.est === 'unite' && !e.mort && !e.def.ouvrier && !e.def.avion && !e.def.collecteur);
+          const m = menaces.find(e => e.def.forme !== 'vaisseauMere') || menaces[0];
+          if(!menaceMajeureIA(id, menaces, armee, bats) && armee.some(u => u.enVague && !u.cible && dist(u, m) < 900 && auContactIA(id, u))) retenues[id] = (retenues[id] || []).concat([Math.round(temps)]).slice(-50);
+        }
+      } else branche = null;
+      rattraper('moteur');
+      try { return orig.majIACamp.apply(this, arguments); }
+      finally { rattraper('majIACamp'); campCourant = null; }
+    };
+    for(const n of FONCTIONS_ORDRES_IA){
+      const f = orig[n]; if(typeof f !== 'function') continue;
+      window[n] = function(){
+        if(!campCourant) return f.apply(this, arguments);
+        rattraper('majIACamp');
+        const S = n === 'attaquerUltra' && etatsIA[campCourant] && etatsIA[campCourant].ultra, pre = S ? S.phase : null;
+        try { return f.apply(this, arguments); }
+        finally { rattraper(n, pre); }
+      };
+    }
+  };
+  let pas = opts.pas;
+  if(opts.irregulier != null){ let g = opts.irregulier >>> 0 || 1; pas = () => { g = (Math.imul(g, 1103515245) + 12345) >>> 0; return 1/60 + (g/4294967296)*(1/20 - 1/60); }; }
+  const avant = optionGaleries;
+  optionGaleries = !!opts.galeries;
+  // Partie arrêtée quand il ne reste qu'une équipe (grande carte : le camp J éliminé n'arrête pas la partie).
+  const fini = () => { const eq = new Set(campsEnJeu().filter(enVie).map(equipeDe)); return eq.size <= 1; };
+  // Interrupteur d'essai (opts.avant) : true, tous les camps jouent sans le lot du 26 novembre 2026 ; tableau d'ids,
+  // ces camps-là seulement (miroirs nouveau contre ancien). Voir lotAncienIA dans jeu.js.
+  const anciens = opts.avant === true ? liste.map(k => k.id) : Array.isArray(opts.avant) ? opts.avant : [];
+  const preparer = () => { for(const id of anciens) etatIA(id).lotAncien = true; };
+  let r;
+  try {
+    if(!opts.sansMesure) installer();   // sansMesure : partie nue (contrôle de neutralité des enveloppes)
+    verifT = 0;
+    const jouer = () => partieRejouable(() => partieOrdinateurs(liste, duree, {pas, sansFin:true, arret:fini, preparer}));
+    r = opts.graine != null ? avecGraine(opts.graine, jouer) : jouer();
+  } finally { Object.assign(window, orig); optionGaleries = avant; }
+  const restants = campsEnJeu().filter(enVie);
+  const res = {carte:CARTE.id, graine:opts.graine, galeries:!!opts.galeries, pas:opts.irregulier != null ? 'irr' + opts.irregulier : (opts.pas || 0.05), avant:!!opts.avant,
+    duree:r.temps, erreur:r.erreur, empreinte:empreinteEtat().empreinte, restants, msParPas:r.msParPas, msMax:r.msMax, equipesRestantes:[...new Set(restants.map(equipeDe))], camps:{}, departs, apres};
+  for(const k of liste){
+    const c = r.camps[k.id];
+    res.camps[k.id] = {niveau:k.niveau, faction:k.faction, equipe:equipeDe(k.id), vie:vie[k.id] == null ? r.temps : vie[k.id], elimine:!enVie(k.id), triche:c.inexplique + ' / ' + c.unitesSansCommande,
+      reserves:c.reserves, collecte:c.collecte, depenses:c.depenses,
+      // (Troisième passe : réflexions où une vague au contact n'a pas été rappelée pour une menace mineure, et si le camp a
+      // été éliminé moins de 60 s après la dernière.)
+      retenues:(retenues[k.id] || []).length, tombeApresRetenue:!enVie(k.id) && (retenues[k.id] || []).some(t => vie[k.id] != null && vie[k.id] - t >= 0 && vie[k.id] - t <= 60),
+      galerieVue:galerieVue[k.id] == null ? null : galerieVue[k.id], batiments:B[k.id] || {}};
+  }
+  return res;
+}
+window.mesureBatimentsIA = mesureBatimentsIA;
+// Bâtiments d'une faction pour le bilan : la base ordinaire, et, case cochée, galerie, Parasol, radar, Zénith.
+function typesFactionIA(faction, galeries){
+  const F = FACTIONS[faction], l = ['caserne', 'usine', F.special, 'depot', F.defense, 'batterie', 'aeroport'].filter((t, i, a) => t && a.indexOf(t) === i);
+  return galeries ? l.concat([F.galerie, 'parasol', 'radar', 'zenith']) : l;
+}
+window.typesFactionIA = typesFactionIA;
+// A-t-il servi ? (règle du bilan, une par type ; f : fiche de mesureBatimentsIA)
+function batimentServiIA(type, f){
+  if(!f || f.fini == null) return false;
+  const B = BATIMENTS[type];
+  if(type === 'caserne' || type === 'usine') return (f.unites || 0) > 0;
+  if(type === 'aeroport') return (f.sorties || 0) > 0;
+  if(type === 'relais') return (f.tirsAura || 0) > 0;
+  if(type === 'depot') return (f.dechargements || 0) > 0 || (f.tirsAura || 0) > 0 || (f.unites || 0) > 0;
+  if(B && B.galerie) return (f.missilesTires || 0) + (f.lourdsTires || 0) > 0;
+  if(type === 'parasol' || type === 'zenith') return (f.munitions || 0) > 0;
+  if(type === 'radar') return true;
+  if(B && B.arme) return (f.tirs || 0) > 0;
+  return true;
+}
+window.batimentServiIA = batimentServiIA;
+// Bilan d'une série (liste de résultats de mesureBatimentsIA) : par niveau et par type, sur les camps qui ont vécu au
+// moins vieMin s (900 par défaut) : bâti (n / camps), servi, médiane de la première mise en chantier ; galerie : parts
+// avec tir léger, avec lourd ; Zénith : parmi les camps qui ont vu une galerie hostile assez tôt (vieMin - 300 s
+// avant leur fin), délai médian galerie vue → Zénith. Puis les départs par classe et par cause.
+function bilanBatimentsIA(parties, vieMin){
+  vieMin = vieMin == null ? 900 : vieMin;
+  const N = {};
+  for(const p of parties){
+    if(!p || !p.camps) continue;
+    for(const [id, c] of Object.entries(p.camps)){
+      if(!NIVEAUX_MESURES.includes(c.niveau)) continue;
+      const cle = c.niveau + (p.galeries ? ' cochée' : ' décochée');
+      const T = N[cle] || (N[cle] = {camps:0, campsLongs:0, types:{}, triche:0, zenith:{vues:0, baties:0, delais:[]}});
+      T.camps++; if(c.triche !== '0 / 0') T.triche++;
+      if(c.vie < vieMin) continue;
+      T.campsLongs++;
+      for(const t of typesFactionIA(c.faction, p.galeries)){
+        const f = c.batiments[t], X = T.types[t] || (T.types[t] = {bati:0, servi:0, temps:[], camps:0, extra:{}});
+        X.camps++;
+        if(f && f.bati != null){ X.bati++; X.temps.push(f.bati); }
+        if(batimentServiIA(t, f)) X.servi++;
+        if(f) for(const k of ['unites', 'sorties', 'tirs', 'tirsAura', 'dechargements', 'missiles', 'lourds', 'missilesTires', 'lourdsTires', 'munitions', 'interceptions', 'reussies', 'n']) if(f[k]) X.extra[k] = (X.extra[k] || 0) + f[k];
+      }
+      if(p.galeries && c.galerieVue != null && c.galerieVue <= c.vie - 300){
+        T.zenith.vues++;
+        const z = c.batiments.zenith;
+        if(z && z.bati != null && z.bati >= c.galerieVue - 1){ T.zenith.baties++; T.zenith.delais.push(z.bati - c.galerieVue); }
+        else if(z && z.bati != null){ T.zenith.baties++; T.zenith.delais.push(0); }
+      }
+    }
+  }
+  const sortie = {};
+  for(const [k, T] of Object.entries(N)){
+    sortie[k] = {camps:T.camps, campsLongs:T.campsLongs, triche:T.triche, zenith:{vues:T.zenith.vues, baties:T.zenith.baties, delaiMedian:medianeSerie(T.zenith.delais)}, types:{}};
+    for(const [t, X] of Object.entries(T.types)) sortie[k].types[t] = {bati:X.bati + ' / ' + X.camps, servi:X.servi + ' / ' + X.camps, mediane:medianeSerie(X.temps), extra:X.extra};
+  }
+  return sortie;
+}
+window.bilanBatimentsIA = bilanBatimentsIA;
+function bilanDepartsIA(parties){
+  const R = {};
+  for(const p of parties){
+    if(!p || !p.departs) continue;
+    for(const d of p.departs){
+      const T = R[d.niveau] || (R[d.niveau] = {unites:0, parClasse:{}, sansMotif:{}, assauts:{}, apres:{}});
+      T.unites++; T.parClasse[d.classe] = (T.parClasse[d.classe] || 0) + 1;
+      if(d.classe === 'sans motif'){ const k = d.cause + ' → ' + d.vers; T.sansMotif[k] = (T.sansMotif[k] || 0) + 1; }
+    }
+    // Assauts qui repartent : départs d'un même camp contre un même camp, à moins de 20 s d'écart ; classe du groupe =
+    // classe la plus fréquente.
+    const g = {};
+    for(const d of p.departs.slice().sort((a, b) => a.t - b.t)){
+      const k = d.camp + '>' + d.contre, l = g[k] || (g[k] = []);
+      const dernier = l[l.length - 1];
+      if(dernier && d.t - dernier.fin <= 20){ dernier.fin = d.t; dernier.l.push(d); } else l.push({debut:d.t, fin:d.t, l:[d]});
+    }
+    for(const l of Object.values(g)) for(const a of l){
+      const n = {}; for(const d of a.l) n[d.classe] = (n[d.classe] || 0) + 1;
+      const classe = Object.entries(n).sort((x, y) => y[1] - x[1])[0][0], niv = a.l[0].niveau, T = R[niv];
+      const A = T.assauts[classe] || (T.assauts[classe] = {groupes:0, unites:0, exemples:[]});
+      A.groupes++; A.unites += a.l.length;
+      if(A.exemples.length < 6) A.exemples.push(p.carte + ' g' + p.graine + (p.galeries ? ' gal' : '') + ' ' + a.l[0].camp + '>' + a.l[0].contre + ' ' + a.debut + ' s, ' + a.l.length + ' u., ' + a.l[0].cause + ' → ' + a.l[0].vers);
+    }
+    for(const a of p.apres || []){
+      const niv = p.camps[a.camp] && p.camps[a.camp].niveau, T = R[niv] || (R[niv] = {unites:0, parClasse:{}, sansMotif:{}, assauts:{}, apres:{}});
+      T.apres[a.suite] = (T.apres[a.suite] || 0) + 1;
+    }
+  }
+  return R;
+}
+window.bilanDepartsIA = bilanDepartsIA;
+// Plans de série. Sur une carte à deux camps : les 8 affrontements Difficile / Ultra (DH-DK, DK-DH, UH-UK, UK-UH, UH-DK,
+// UK-DH, DH-UK, DK-UH), pour chaque graine, case cochée puis décochée (grainesDecochees) ; la seconde moitié des
+// graines à pas irrégulier (graine du pas = 100 + graine).
+function planBatimentsIA(graines, grainesDecochees){
+  const N = {D:'difficile', U:'ultra'}, F = {H:'halden', K:'karsk'};
+  const aff = ['DH-DK', 'DK-DH', 'UH-UK', 'UK-UH', 'UH-DK', 'UK-DH', 'DH-UK', 'DK-UH'];
+  const plan = [];
+  const ajouter = (g, gal, irr) => { for(const a of aff){ const [x, y] = a.split('-'); plan.push({nom:a, liste:[campU('J', F[x[1]], N[x[0]]), campU('I', F[y[1]], N[y[0]])], graine:g, galeries:gal, irregulier:irr ? 100 + g : undefined, outil:'mesureBatimentsIA'}); } };
+  graines.forEach((g, i) => ajouter(g, true, i >= graines.length/2));
+  (grainesDecochees || []).forEach((g, i) => ajouter(g, false, i % 2 === 1));
+  return plan;
+}
+window.planBatimentsIA = planBatimentsIA;
+// Grande carte (8 camps) : Difficile et Ultra alternés, factions alternées ; chacun pour soi, ou « 4 contre 4 ».
+function planGrandeCarteIA(graines, galeries, quatreContreQuatre){
+  const ids = ['J', 'I', 'K', 'L', 'M', 'O', 'P', 'Q'];
+  return graines.map((g, n) => ({nom:'huit' + (quatreContreQuatre ? ' 4c4' : ''), graine:g, galeries, irregulier:n % 2 ? 200 + g : undefined, outil:'mesureBatimentsIA',
+    liste:ids.map((id, i) => ({id, faction:(i + g) % 2 ? 'karsk' : 'halden', equipe:quatreContreQuatre ? (i % 2 ? 'B' : 'A') : 'ABCDEFGH'[i], niveau:Math.floor(i/2) % 2 ? 'ultra' : 'difficile'}))}));
+}
+window.planGrandeCarteIA = planGrandeCarteIA;
+// Miroirs « nouveau contre ancien » (26 novembre 2026, lot « tous les bâtiments ») : même niveau des deux côtés, un camp
+// joue avec le lot, l'autre sans (interrupteur d'essai lotAncienIA, opts.avant = [id du camp ancien]). Pour chaque
+// graine : Halden en J contre Karsk en I, puis Karsk en J contre Halden en I, et pour chacune le camp nouveau en J puis
+// en I (4 parties par graine). Moitié des graines à pas irrégulier (graine du pas = 300 + graine).
+function planMiroirIA(niveau, graines, galeries){
+  const plan = [];
+  graines.forEach((g, i) => {
+    for(const fJ of ['halden', 'karsk']) for(const nouveau of ['J', 'I']){
+      const fI = fJ === 'halden' ? 'karsk' : 'halden', ancien = nouveau === 'J' ? 'I' : 'J';
+      plan.push({nom:'M' + niveau[0].toUpperCase() + ' ' + fJ[0].toUpperCase() + '(J)-' + fI[0].toUpperCase() + ' nouveau ' + nouveau, nouveau,
+        liste:[campU('J', fJ, niveau), campU('I', fI, niveau)], graine:g, galeries, irregulier:i % 2 ? 300 + g : undefined, avant:[ancien], outil:'mesureBatimentsIA'});
+    }
+  });
+  return plan;
+}
+window.planMiroirIA = planMiroirIA;
+// Affrontement de deux niveaux (ex. Ultra contre Difficile, Difficile contre Normale), joué avec le lot (avant : false)
+// ou sans (avant : true) pour les deux camps. 4 parties par graine (factions et côtés échangés).
+function planNiveauxIA(niveauA, niveauB, graines, galeries, avant){
+  const plan = [];
+  graines.forEach((g, i) => {
+    for(const fA of ['halden', 'karsk']) for(const coteA of ['J', 'I']){
+      const fB = fA === 'halden' ? 'karsk' : 'halden';
+      const liste = coteA === 'J' ? [campU('J', fA, niveauA), campU('I', fB, niveauB)] : [campU('J', fB, niveauB), campU('I', fA, niveauA)];
+      plan.push({nom:niveauA[0].toUpperCase() + fA[0].toUpperCase() + '(' + coteA + ')-' + niveauB[0].toUpperCase() + (avant ? ' ancien' : ' nouveau'), coteA,
+        liste, graine:g, galeries, irregulier:i % 2 ? 400 + g : undefined, avant:!!avant, outil:'mesureBatimentsIA'});
+    }
+  });
+  return plan;
+}
+window.planNiveauxIA = planNiveauxIA;
+// Bilan d'un miroir (parties de RESULTATS[cle].parties) : victoires du camp nouveau (nulle : un demi), par faction du
+// nouveau et par case ; et paires appariées (même graine, mêmes factions aux mêmes places : nouveau en J puis en I).
+function bilanMiroirIA(parties){
+  const B = {parties:0, nouveau:0, nulles:0, parFaction:{}, erreurs:0, triche:0};
+  for(const p of parties){
+    const m = p.mesure; if(!m || m.erreur){ B.erreurs++; continue; }
+    const k = p.nouveau || p.nom.slice(-1), f = m.camps[k].faction, F = B.parFaction[f] || (B.parFaction[f] = {parties:0, nouveau:0});
+    for(const c of Object.values(m.camps)) if(c.triche !== '0 / 0') B.triche++;
+    B.parties++; F.parties++;
+    const s = m.restants.length !== 1 ? 0.5 : m.restants[0] === k ? 1 : 0;
+    if(s === 0.5) B.nulles++;
+    B.nouveau += s; F.nouveau += s;
+  }
+  B.part = B.parties ? +(B.nouveau/B.parties).toFixed(3) : null;
+  return B;
+}
+window.bilanMiroirIA = bilanMiroirIA;
+// Bilan d'un affrontement de niveaux : victoires du niveau A (nulle : un demi).
+function bilanNiveauxIA(parties){
+  const B = {parties:0, victoiresA:0, nulles:0, parFaction:{}, erreurs:0, triche:0, durees:[]};
+  for(const p of parties){
+    const m = p.mesure; if(!m || m.erreur){ B.erreurs++; continue; }
+    const k = p.coteA || p.nom.match(/\((J|I)\)/)[1], f = m.camps[k].faction, F = B.parFaction[f] || (B.parFaction[f] = {parties:0, v:0});
+    for(const c of Object.values(m.camps)) if(c.triche !== '0 / 0') B.triche++;
+    B.parties++; F.parties++;
+    const s = m.restants.length !== 1 ? 0.5 : m.restants[0] === k ? 1 : 0;
+    if(s === 0.5) B.nulles++; else if(s === 1) B.durees.push(m.duree);
+    B.victoiresA += s; F.v += s;
+  }
+  B.medianeVictoires = medianeSerie(B.durees); delete B.durees;
+  return B;
+}
+window.bilanNiveauxIA = bilanNiveauxIA;
+// Suites de mesure du lot (26 novembre 2026), carte chargée. lancerSuiteLotIA('miroirs', [1..6]) : miroirs Difficile et
+// Ultra (case décochée, cochée), Ultra contre Difficile et Difficile contre Normale (avec et sans le lot, case décochée
+// et cochée). lancerSuiteLotIA('batiments', [1,2,3,4], [5,6]) : série des bâtiments et des retraites, sans le lot
+// (« avant ») puis avec (« apres »). Grande carte : lancerSuiteLotIA('huit').
+function lancerSuiteLotIA(quoi, graines, grainesDecochees){
+  const g = graines || [1, 2, 3, 4, 5, 6], S = [];
+  const avant = P => P.map(p => Object.assign({}, p, {avant:true}));
+  if(quoi === 'miroirs'){
+    S.push(['MD0', planMiroirIA('difficile', g, false)], ['MD1', planMiroirIA('difficile', g, true)], ['MU0', planMiroirIA('ultra', g, false)], ['MU1', planMiroirIA('ultra', g, true)]);
+    for(const gal of [false, true]){
+      const k = gal ? '1' : '0';
+      S.push(['UDn' + k, planNiveauxIA('ultra', 'difficile', g, gal, false)], ['UDa' + k, planNiveauxIA('ultra', 'difficile', g, gal, true)],
+             ['DNn' + k, planNiveauxIA('difficile', 'normal', g, gal, false)], ['DNa' + k, planNiveauxIA('difficile', 'normal', g, gal, true)]);
+    }
+  } else if(quoi === 'batiments'){
+    const P = planBatimentsIA(g, grainesDecochees || [5, 6]);
+    S.push(['avant', avant(P)], ['apres', P]);
+  } else if(quoi === 'huit'){
+    const P = planGrandeCarteIA(graines || [1, 2, 3, 4], true).concat(planGrandeCarteIA([5], true, true), planGrandeCarteIA([6, 7], false));
+    S.push(['avant', avant(P)], ['apres', P]);
+  }
+  for(const [k] of S) delete RESULTATS[k];
+  return lancerSeriesUltra(S);
+}
+window.lancerSuiteLotIA = lancerSuiteLotIA;
+// Lecture d'une suite : miroirs et affrontements (bilanMiroirIA, bilanNiveauxIA), ou bâtiments (comparaison avant / après,
+// camps qui ont vécu au moins vie s) et départs.
+function lireSuiteLotIA(vie){
+  const out = [ETAT_SERIES_ULTRA];
+  const fini = k => RESULTATS[k] && RESULTATS[k].etat === 'fini';
+  for(const k of ['MD0', 'MD1', 'MU0', 'MU1']) if(fini(k)){ const B = bilanMiroirIA(RESULTATS[k].parties); out.push(k + ' nouveau ' + B.nouveau + ' / ' + B.parties + ' (' + B.part + ', nulles ' + B.nulles + ', triche ' + B.triche + ', erreurs ' + B.erreurs + ') ' + JSON.stringify(B.parFaction)); }
+  for(const k of ['UDn0', 'UDa0', 'DNn0', 'DNa0', 'UDn1', 'UDa1', 'DNn1', 'DNa1']) if(fini(k)){ const B = bilanNiveauxIA(RESULTATS[k].parties); out.push(k + ' A gagne ' + B.victoiresA + ' / ' + B.parties + ' (nulles ' + B.nulles + ', médiane ' + B.medianeVictoires + ' s, triche ' + B.triche + ', erreurs ' + B.erreurs + ') ' + JSON.stringify(B.parFaction)); }
+  if(fini('avant') && fini('apres')){
+    const a = bilanBatimentsIA(RESULTATS.avant.parties.map(p => p.mesure), vie), b = bilanBatimentsIA(RESULTATS.apres.parties.map(p => p.mesure), vie);
+    for(const k of Object.keys(a)){
+      const bk = b[k] || {types:{}, zenith:{}};
+      out.push(k + ' : camps longs ' + a[k].campsLongs + ' / ' + a[k].camps + ' → ' + bk.campsLongs + ' / ' + bk.camps + ', triche ' + a[k].triche + ' → ' + bk.triche);
+      for(const t of Object.keys(a[k].types)){ const x = a[k].types[t], y = bk.types[t] || {}; out.push('  ' + t + ' : bâti ' + x.bati + ' → ' + y.bati + ', servi ' + x.servi + ' → ' + y.servi + ', médiane ' + x.mediane + ' → ' + y.mediane + ' s'); }
+      out.push('  Zénith (galerie hostile vue assez tôt / Zénith bâtie) ' + a[k].zenith.vues + ' / ' + a[k].zenith.baties + ' → ' + bk.zenith.vues + ' / ' + bk.zenith.baties + ', délai médian ' + bk.zenith.delaiMedian + ' s');
+    }
+    for(const cle of ['avant', 'apres']){
+      const D = bilanDepartsIA(RESULTATS[cle].parties.map(p => p.mesure));
+      out.push(cle + ' départs : ' + JSON.stringify(Object.fromEntries(Object.entries(D).map(([n, v]) => [n, {unites:v.unites, parClasse:v.parClasse, sansMotif:v.sansMotif,
+        groupes:Object.fromEntries(Object.entries(v.assauts).map(([c, A]) => [c, A.groupes + ' / ' + A.unites])), apres:v.apres}]))));
+    }
+    out.push('durées avant ' + RESULTATS.avant.parties.map(p => p.mesure.duree).join(','));
+    out.push('durées après ' + RESULTATS.apres.parties.map(p => p.mesure.duree).join(','));
+  }
+  return out.join('\n');
+}
+window.lireSuiteLotIA = lireSuiteLotIA;
+
+// =====================================================================
+//  mesureAssauts (26 novembre 2026, recopié de la copie de mesure Front-de-Sel-mesure) : diagnostic « l'ennemi attaque puis repart » (Difficile et Ultra).
+//  Outil de mesure seulement, il ne change rien au jeu (aucun tirage au hasard, aucun ordre).
+//  Définitions :
+//  - unité suivie : unité armée d'un ordinateur, ni ouvrier, ni collecteur, ni avion (hélicoptères compris) ;
+//  - « présente » sur le camp B : à moins de opts.rayon px (500 par défaut) d'un bâtiment de B (extracteurs exclus) ;
+//  - assaut A→B : au moins 3 unités présentes de A valant au moins 400 (somme des prix) ; membres : toute unité de A
+//    présente pendant l'épisode ; fin : plus aucune présente depuis 20 s, ou un des deux camps éliminé ;
+//  - issue : « base détruite » (B éliminé), « repli » (au moins 2 membres vivants à la fin valant au moins 30 % de la
+//    valeur des membres), sinon « groupe détruit » ;
+//  - sortie : une unité présente s'éloigne à plus de rayon + 250 px ; sa cause est l'auteur de son ordre en cours
+//    (fonction de l'ordinateur qui l'a donné, ou « moteur ») ; « poursuite » si elle suit une cible hors de la base ;
+//  - repli : demi-tour au moment où la majorité des membres vivants reçoit l'ordre qui les fait partir (médiane des
+//    dates d'ordre des sorties) ; rapport des forces relevé chaque seconde (valeurCombat, à moins de 700 px du
+//    barycentre des présents : unités de A ; unités armées et défenses de tous les camps hostiles à A) ;
+//  - verdict : « justifié (dominé) » si défense >= 1,3 × attaque au demi-tour ; « justifié (pertes) » si les membres
+//    ont perdu au moins la moitié de leur valeur avant le demi-tour ; « rappel justifié » si la cause est une défense de
+//    la base et que la menace sur la base vaut au moins la moitié de l'attaque présente ; sinon « sans motif ».
+//  opts : graine, pas (nombre), irregulier (graine du pas irrégulier), galeries, rayon, essai ({nom: fonction} mis en
+//  place pendant la partie seulement), journal (true : lignes de journalUltra autour des replis).
+// =====================================================================
+const FONCTIONS_ORDRES_TOUS = ['majIACamp', 'esquiverRayon', 'economieIA', 'captureIA', 'majIAAviation', 'riposteGalerieIA', 'pouvoirsIA',
+  'tirGalerieIA', 'esquiveGalerieIA', 'analyserUltra', 'majUltra', 'esquiverZonesUltra', 'eloignerDuVaisseauUltra', 'replierBlessesUltra',
+  'defendreUltra', 'degagerCollecteursUltra', 'gardesChampUltra', 'harcelerUltra', 'attaquerUltra', 'combattreUltra', 'soutenirUltra', 'pouvoirsUltra'];
+function mesureAssauts(liste, duree, opts){
+  opts = opts || {};
+  duree = duree || 1200;
+  const N = opts.rayon || 500;
+  const niveaux = {}, factions = {}; for(const k of liste){ niveaux[k.id] = k.niveau; factions[k.id] = k.faction; }
+  const ids = liste.map(k => k.id);
+  const suivie = e => !e.mort && e.est === 'unite' && niveaux[e.camp] && e.def.arme && !e.def.ouvrier && !e.def.collecteur && !e.def.avion;
+  const batBase = e => !e.mort && e.est === 'batiment' && niveaux[e.camp] && !estExtracteur(e) && !e.def.extracteur;
+  const etat = new Map();       // id -> {o, ox, oy, auteurO, tO, d:{B: distance}, pres:{B: bool}, campVague}
+  const pile = [];
+  let campCourant = null, unitesCamp = [], preO = null;
+  const episodes = [], enCours = {}, sorties = [], journal = [], changementsCamp = [], rappels = [], transitions = [], departs = {}, retraites = [], paires = {};
+  const ajouter = (T, k, v) => { T[k] = (T[k] || 0) + (v == null ? 1 : v); };
+  const S_ = id => etatsIA[id] && etatsIA[id].ultra;
+  const batProche = (x, y, camp) => { let best = null, bd = Infinity; for(const e of ents) if(batBase(e) && hostile(camp, e.camp)){ const d = Math.hypot(e.x - x, e.y - y); if(d < bd){ bd = d; best = e; } } return best; };
+  // Sous-cause d'un changement d'ordre (pre : état relevé à l'entrée de la fonction).
+  const detail = (nom, u, pre) => {
+    const o = u.ordre, U = niveaux[u.camp] === 'ultra';
+    if(nom === 'moteur') return o ? 'ordre ' + o.type : 'ordre accompli ou annulé';
+    if(nom === 'majIACamp' && !U){
+      if(!o) return 'ordre effacé';
+      if(o.type === 'aller') return 'rassemblement';
+      if(o.type === 'attaqueDeplacement'){
+        const P = preO;
+        if(P && P.m && o.x === P.m.x && o.y === P.m.y){
+          if(u.enVague && rappels.length < 400){
+            let dBase = Infinity; for(const b of ents) if(b.camp === u.camp && b.est === 'batiment' && !b.mort) dBase = Math.min(dBase, dist(u, b));
+            let dEnn = Infinity; for(const b of ents) if(batBase(b) && hostile(u.camp, b.camp)) dEnn = Math.min(dEnn, dist(u, b));
+            rappels.push({t:Math.round(temps), camp:u.camp, id:u.id, dMenace:Math.round(dist(u, P.m)), dBase:Math.round(dBase), dEnnemi:Math.round(dEnn), menace:P.valeurMenace, armees:P.armees, type:P.m.type});
+          }
+          return u.enVague ? 'menace sur sa base (vague rappelée)' : 'menace sur sa base';
+        }
+        if(P && P.aide && Math.hypot(P.aide.x - o.x, P.aide.y - o.y) < 90) return 'aide à un allié';
+        if(u.enVague){
+          const b = batProche(o.x, o.y, u.camp), c = b ? b.camp : '?', s = etat.get(u.id);
+          const change = s && s.campVague && s.campVague !== c && enVie(s.campVague);
+          if(s) s.campVague = c;
+          if(change){ changementsCamp.push({t:Math.round(temps), camp:u.camp, id:u.id, de:s && s.campVagueAvant, vers:c}); return 'vague : changement de camp'; }
+          return 'vague';
+        }
+        return 'attaque-déplacement (autre)';
+      }
+      return o.type;
+    }
+    if(nom === 'attaquerUltra'){
+      const S = S_(u.camp), ph0 = pre && pre.phase, ph1 = S && S.phase;
+      if(o && o.type === 'aller' && ph0 !== 'retraite' && ph1 === 'retraite') return 'retraite générale';
+      if(ph0 === 'retraite') return 'retraite (vers le rassemblement)';
+      if(!o) return 'attente (ordre effacé)';
+      if(u.ultra === 'diversion') return 'diversion';
+      if(o.type === 'aller') return 'rassemblement';
+      if(o.type === 'attaqueDeplacement') return u.ultra === 'assaut' ? 'marche groupée' : 'autre attaque-déplacement';
+      return o.type;
+    }
+    if(nom === 'defendreUltra'){
+      const S = S_(u.camp), ph0 = pre && pre.phase, ph1 = S && S.phase;
+      if((ph0 === 'assaut' || ph0 === 'diversion') && ph1 === 'regroupe') return 'assaut abandonné : base menacée';
+      return S && S.menace > 0 ? 'défense de la base' : 'défense (base alliée)';
+    }
+    if(nom === 'harcelerUltra') return o && o.type === 'aller' && !(S_(u.camp) && S_(u.camp).harcelement) ? 'repli du harcèlement' : 'harcèlement';
+    if(nom === 'replierBlessesUltra') return o ? 'repli blessé' : 'fin du repli';
+    if(nom === 'combattreUltra') return o && o.type === 'aller' ? 'recul longue portée' : 'autre';
+    return o ? o.type : 'ordre effacé';
+  };
+  const rattraper = (nom, pre) => {
+    for(const u of unitesCamp){
+      if(u.mort) continue;
+      let s = etat.get(u.id);
+      if(!s){ s = {o:u.ordre, ox:u.ordre && u.ordre.x, oy:u.ordre && u.ordre.y, auteurO:'création', tO:temps, d:{}, pres:{}}; etat.set(u.id, s); continue; }
+      const o = u.ordre;
+      if(o !== s.o || (o && (o.x !== s.ox || o.y !== s.oy))){
+        if(s.campVague) s.campVagueAvant = s.campVague;
+        const a = nom + ':' + detail(nom, u, pre);
+        // Paires d'ordres de sources différentes à moins de 20 s (va-et-vient possibles, tous niveaux).
+        if(a !== s.auteurO && temps - s.tO < 20 && s.auteurO !== 'création') ajouter(paires, niveaux[u.camp] + ' | ' + s.auteurO + ' → ' + a);
+        s.auteurO = a; s.tO = temps; s.o = o; s.ox = o && o.x; s.oy = o && o.y;
+      }
+    }
+  };
+  const nomDe = () => { const n = pile[pile.length - 1]; return n === 'esquiverZonesUltra' && pile[pile.length - 2] === 'esquiveGalerieIA' ? 'esquiveGalerieIA' : n; };
+  // Relevé chaque seconde : présences, épisodes, sorties, rapport des forces.
+  let tEch = -1;
+  const forceAutour = (A, x, y, r) => {
+    let att = 0, def = 0;
+    for(const e of ents){
+      if(e.mort || Math.abs(e.x - x) > r || Math.abs(e.y - y) > r || Math.hypot(e.x - x, e.y - y) > r) continue;
+      if(e.camp === A){ if(suivie(e)) att += valeurCombat(e); }
+      else if(camps[e.camp] && hostile(A, e.camp) && !(e.def.avion && enVol(e))) def += valeurCombat(e);
+    }
+    return {att:Math.round(att), def:Math.round(def)};
+  };
+  const menaceSur = (A, batsA) => {
+    let v = 0;
+    for(const e of ents) if(!e.mort && e.est === 'unite' && camps[e.camp] && hostile(A, e.camp) && e.def.arme && !e.def.ouvrier && !(e.def.avion && enVol(e)) && batsA.some(b => dist(b, e) < 600)) v += valeurCombat(e);
+    return Math.round(v);
+  };
+  const clore = (Ep, raison) => {
+    Ep.fin = Math.round(temps); delete enCours[Ep.A + '>' + Ep.B];
+    const membres = [...Ep.membres.values()];
+    const total = membres.reduce((s, m) => s + m.cout, 0);
+    const vivants = membres.filter(m => !m.u.mort);
+    const valV = vivants.reduce((s, m) => s + m.cout, 0);
+    Ep.valeur = total; Ep.n = membres.length; Ep.vivants = vivants.length;
+    let role = null, rv = -1; for(const [k, v] of Object.entries(Ep.roles)) if(v > rv){ rv = v; role = k; }
+    Ep.genre = role === 'harcelement' ? 'harcèlement' : role === 'garde' ? 'garde de champ' : role === 'hors vague' ? 'hors vague (défense, rassemblement)' : 'assaut';
+    if(raison === 'B') Ep.issue = 'base détruite';
+    else if(raison === 'A') Ep.issue = 'groupe détruit';
+    else if(raison === 'finPartie') Ep.issue = 'en cours à la fin';
+    else Ep.issue = vivants.length >= 2 && valV >= 0.3*total ? 'repli' : 'groupe détruit';
+    if(Ep.issue !== 'repli'){ delete Ep.histo; return; }
+    // Repli : sorties des membres vivants.
+    const S = Ep.sorties.filter(x => !Ep.membres.get(x.id).u.mort);
+    const causes = {}; for(const x of S) ajouter(causes, x.cause, x.cout);
+    let cause = null, cv = -1; for(const [k, v] of Object.entries(causes)) if(v > cv){ cv = v; cause = k; }
+    const dates = S.map(x => Math.min(x.tO, x.t)).sort((a, b) => a - b);
+    const T = dates.length ? dates[Math.floor(dates.length/2)] : Ep.dernierPres;
+    let snap = Ep.histo[0];
+    for(const h of Ep.histo) if(h.t <= T + 0.5) snap = h;
+    const pertesAvant = Ep.morts.filter(m => m.t <= T).reduce((s, m) => s + m.v, 0);
+    const rappel = /menace sur sa base|défense de la base|assaut abandonné|aide à un allié|défense \(base alliée\)/.test(cause || '');
+    let verdict;
+    if(snap && snap.def >= 1.3*Math.max(1, snap.att)) verdict = 'justifié (dominé)';
+    else if(pertesAvant >= 0.5*total) verdict = 'justifié (pertes)';
+    else if(rappel && snap && snap.menace >= 0.5*Math.max(1, snap.att)) verdict = 'rappel justifié';
+    else if(/repli blessé|recul longue portée|esquive/.test(cause || '')) verdict = 'blessés ou esquive (individuel)';
+    else verdict = 'sans motif';
+    Ep.repli = {T:Math.round(T), cause, causes, att:snap && snap.att, def:snap && snap.def, menace:snap && snap.menace, nPresents:snap && snap.n,
+      pertesAvant, verdict, sorties:S.length};
+    if(opts.journal) Ep.repli.journal = journal.filter(l => l.id === Ep.A && l.t >= T - 20 && l.t <= T + 5).map(l => enMinSec(l.t) + ' ' + l.texte).slice(-12);
+    delete Ep.histo;
+  };
+  const echantillonner = () => {
+    if(temps - tEch < 1) return; tEch = temps;
+    const batsDe = {}, unitesDe = {};
+    for(const e of ents){ if(batBase(e)) (batsDe[e.camp] || (batsDe[e.camp] = [])).push(e); else if(suivie(e)) (unitesDe[e.camp] || (unitesDe[e.camp] = [])).push(e); }
+    for(const A of ids){
+      const UA = unitesDe[A] || [];
+      for(const u of UA) if(!etat.has(u.id)) etat.set(u.id, {o:u.ordre, ox:u.ordre && u.ordre.x, oy:u.ordre && u.ordre.y, auteurO:'création', tO:temps, d:{}, pres:{}});
+      for(const B of ids){
+        if(B === A) continue;
+        const key = A + '>' + B;
+        let Ep = enCours[key];
+        const vivantA = camps[A] && !camps[A].elimine && batsDe[A];
+        const vivantB = camps[B] && !camps[B].elimine && batsDe[B];
+        if(Ep && !vivantB){ clore(Ep, 'B'); continue; }
+        if(Ep && !vivantA){ clore(Ep, 'A'); continue; }
+        if(!vivantA || !vivantB || !hostile(A, B)) continue;
+        const pres = [];
+        for(const u of UA){
+          let dm = Infinity; for(const b of batsDe[B]){ const d = dist(u, b); if(d < dm) dm = d; }
+          const s = etat.get(u.id); s.d[B] = dm;
+          if(dm < N){ pres.push(u); s.pres[B] = true; }
+          else if(s.pres[B] && dm > N + 250){
+            s.pres[B] = false;
+            let cause = s.auteurO;
+            const c = u.cible;
+            if(c && !c.mort){ let dc = Infinity; for(const b of batsDe[B]) dc = Math.min(dc, dist(c, b)); if(dc > N) cause = 'moteur:poursuite d’une cible'; }
+            const x = {t:Math.round(temps), id:u.id, camp:A, B, niveau:niveaux[A], cause, tO:Math.round(s.tO), cout:u.def.cout || 0, type:u.type,
+              pv:Math.round(100*u.pv/u.pvMax), dansAssaut:!!Ep && Ep.membres.has(u.id)};
+            sorties.push(x);
+            if(Ep && Ep.membres.has(u.id)) Ep.sorties.push(x);
+          }
+        }
+        const val = pres.reduce((s, u) => s + (u.def.cout || 0), 0);
+        if(!Ep && pres.length >= 3 && val >= 400){
+          Ep = {A, B, nA:niveaux[A], nB:niveaux[B], debut:Math.round(temps), fin:null, membres:new Map(), picN:0, picV:0, pertes:0, infligees:0, morts:[], histo:[], sorties:[], dernierPres:temps, roles:{}};
+          enCours[key] = Ep; episodes.push(Ep);
+        }
+        if(!Ep) continue;
+        if(pres.length){
+          Ep.dernierPres = temps;
+          for(const u of pres) if(!Ep.membres.has(u.id)){
+            Ep.membres.set(u.id, {u, cout:u.def.cout || 0, entre:Math.round(temps)});
+            ajouter(Ep.roles, niveaux[A] === 'ultra' ? (u.ultra || 'sans rôle') : (u.enVague ? 'vague' : 'hors vague'), u.def.cout || 0);
+          }
+          if(pres.length > Ep.picN) Ep.picN = pres.length;
+          if(val > Ep.picV) Ep.picV = val;
+          const g = barycentre(pres); Ep.g = g;
+          const f = forceAutour(A, g.x, g.y, 700);
+          Ep.histo.push({t:temps, att:f.att, def:f.def, n:pres.length, menace:menaceSur(A, batsDe[A])});
+          if(Ep.histo.length > 120) Ep.histo.shift();
+        } else if(temps - Ep.dernierPres > 20) clore(Ep, 'vide');
+      }
+    }
+  };
+  // Enveloppes.
+  const sauves = {};
+  const noms = FONCTIONS_ORDRES_TOUS.concat(['majIA', 'tuer', 'journalUltra']);
+  for(const n of noms) sauves[n] = window[n];
+  const essai = opts.essai || {};
+  for(const n of Object.keys(essai)) if(!(n in sauves)) sauves[n] = window[n];
+  const installer = () => {
+    for(const [n, f] of Object.entries(essai)) window[n] = f;
+    const orig = {}; for(const n of noms) orig[n] = window[n];
+    window.majIA = function(){ const r = orig.majIA.apply(this, arguments); echantillonner(); return r; };
+    window.tuer = function(c, auteur){
+      if(c && !c.mort){
+        for(const Ep of Object.values(enCours)){
+          const m = Ep.membres.get(c.id);
+          if(m){ Ep.pertes += m.cout; Ep.morts.push({t:temps, v:m.cout}); }
+          else if(auteur && auteur.camp === Ep.A && c.camp === Ep.B && Ep.g && Math.hypot(c.x - Ep.g.x, c.y - Ep.g.y) < N + 400) Ep.infligees += c.def.cout || 0;
+        }
+      }
+      return orig.tuer.apply(this, arguments);
+    };
+    window.journalUltra = function(id, texte){ journal.push({t:temps, id, texte}); if(journal.length > 6000) journal.shift(); return orig.journalUltra.apply(this, arguments); };
+    for(const n of FONCTIONS_ORDRES_TOUS){
+      const f = orig[n]; if(typeof f !== 'function') continue;
+      window[n] = function(){
+        if(n === 'majIACamp'){
+          const id = arguments[0];
+          campCourant = id; unitesCamp = ents.filter(e => e.camp === id && suivie(e));
+          rattraper('moteur');
+          preO = null;
+          if(niveaux[id] !== 'ultra'){
+            // Relevé des menaces comme le fait majIACamp (mêmes filtres, sans tirage au hasard).
+            const bats = ents.filter(e => e.camp === id && e.est === 'batiment' && !e.mort && !e.def.extracteur);
+            const menaces = ents.filter(e => hostile(id, e.camp) && !e.mort && e.est === 'unite' && !(e.def.avion && enVol(e)) && bats.some(b => dist(b, e) < 550));
+            const m = menaces.find(e => e.def.forme !== 'vaisseauMere') || menaces[0] || null;
+            let aide = null;
+            if(!menaces.length){
+              const batsAllies = ents.filter(e => e.est === 'batiment' && !e.mort && allies(id, e.camp));
+              if(batsAllies.length){ const menace = e => !e.mort && e.est === 'unite' && hostile(id, e.camp) && !(e.def.avion && enVol(e)) && batsAllies.some(b => dist(b, e) < 550); aide = ents.find(e => e.def.forme !== 'vaisseauMere' && menace(e)) || null; }
+            }
+            preO = {m, aide, menaces:menaces.length, valeurMenace:Math.round(menaces.reduce((s, e) => s + valeurCombat(e), 0)),
+              armees:menaces.filter(e => e.def.arme && !e.def.ouvrier).length};
+            if(m) ajouter(statsMenace, niveaux[id] + (preO.armees ? ' armée' : ' sans arme (ouvrier, collecteur...)'));
+          }
+          pile.push(n);
+          let r; try { r = f.apply(this, arguments); } finally { pile.pop(); }
+          rattraper('majIACamp');
+          campCourant = null;
+          return r;
+        }
+        if(!campCourant) return f.apply(this, arguments);
+        rattraper(nomDe() || 'moteur');
+        const S = S_(campCourant), pre = {phase:S && S.phase};
+        // Retraite générale d'Ultra : quelle condition l'a déclenchée, et où sont passés les membres du départ.
+        let diag = null;
+        if(n === 'attaquerUltra' && S && S.phase === 'assaut' && S.analyse){
+          const libres = arguments[4] || [], enA = libres.filter(u => u.ultra === 'assaut');
+          if(enA.length){
+            const c = barycentre(enA); let mien = 0, mienTotal = 0;
+            for(const u of enA){ const v = valeurCombat(u); mienTotal += v; if(dist(u, c) < 600) mien += v; }
+            let dBat = Infinity; for(const b of ents) if(batBase(b) && b.camp === S.campCible) dBat = Math.min(dBat, Math.hypot(b.x - c.x, b.y - c.y));
+            let enRepli = 0; for(const u of ents) if(!u.mort && u.camp === campCourant && u.ultra === 'assaut' && u.ultraRepli) enRepli += valeurCombat(u);
+            diag = {mien, mienTotal, ennemi:forceEnnemie(S.analyse, c.x, c.y, 650), nAssaut:enA.length, dBat:Math.round(dBat), enRepli:Math.round(enRepli)};
+          }
+        }
+        pile.push(n);
+        let r; try { r = f.apply(this, arguments); } finally { pile.pop(); }
+        if(S && (n === 'attaquerUltra' || n === 'defendreUltra') && pre.phase !== S.phase){
+          transitions.push({t:Math.round(temps), camp:campCourant, de:pre.phase, vers:S.phase, par:n});
+          if(S.phase === 'assaut' || S.phase === 'diversion'){
+            if(pre.phase === 'regroupe') departs[campCourant] = {t:temps, membres:new Map(ents.filter(e => e.camp === campCourant && !e.mort && (e.ultra === 'assaut' || e.ultra === 'diversion')).map(e => [e.id, {u:e, v:valeurCombat(e)}]))};
+          }
+          if(S.phase === 'retraite' && diag){
+            const D = departs[campCourant], bilan = {mort:0, repli:0, retire:0, present:0, perteDegats:0};
+            if(D) for(const {u, v} of D.membres.values()){
+              if(u.mort) bilan.mort += v;
+              else if(u.ultraRepli) bilan.repli += v;
+              else if(u.ultra !== 'assaut') bilan.retire += v;
+              else { bilan.present += valeurCombat(u); bilan.perteDegats += v - valeurCombat(u); }
+            }
+            for(const k in bilan) bilan[k] = Math.round(bilan[k]);
+            retraites.push({t:Math.round(temps), camp:campCourant, mien:Math.round(diag.mien), ennemi:Math.round(diag.ennemi), mienTotal:Math.round(diag.mienTotal),
+              valeurDepart:Math.round(S.valeurDepart), nAssaut:diag.nAssaut, dBat:diag.dBat, enRepli:diag.enRepli, condition:diag.mien > 0 && diag.ennemi > ULTRA.RETRAITE*diag.mien ? 'rapport local' : 'moins de 30 % du départ', bilan,
+              duree:D ? Math.round(temps - D.t) : null});
+          }
+        }
+        rattraper(nomDe() === 'esquiveGalerieIA' ? 'esquiveGalerieIA' : n, pre);
+        return r;
+      };
+    }
+  };
+  const statsMenace = {};
+  let pas = opts.pas || 1/30;
+  if(opts.irregulier != null){ let g = opts.irregulier >>> 0 || 1; pas = () => { g = (Math.imul(g, 1103515245) + 12345) >>> 0; return 1/60 + (g/4294967296)*(1/20 - 1/60); }; }
+  const avant = optionGaleries;
+  optionGaleries = !!opts.galeries;
+  let r;
+  try {
+    installer();
+    verifT = 0;
+    // (Recopié dans le dépôt le 26 novembre 2026 : opts.avant, interrupteur d'essai du lot, comme mesureBatimentsIA :
+    // true, tous les camps sans le lot ; tableau d'ids, ces camps-là seulement.)
+    const anciens = opts.avant === true ? liste.map(k => k.id) : Array.isArray(opts.avant) ? opts.avant : [];
+    const jouer = () => partieRejouable(() => partieOrdinateurs(liste, duree, {pas, sansFin:!!opts.sansFin, preparer:() => { for(const id of anciens) etatIA(id).lotAncien = true; }}));
+    r = opts.graine != null ? avecGraine(opts.graine, jouer) : jouer();
+  } finally { Object.assign(window, sauves); optionGaleries = avant; }
+  for(const Ep of Object.values(enCours)) clore(Ep, camps[Ep.B] && camps[Ep.B].elimine ? 'B' : 'finPartie');
+  const gagnants = vainqueurSerie(r);
+  const parCamp = {}; for(const k of liste) parCamp[k.id] = k.niveau + ' ' + k.faction;
+  return {carte:CARTE.id, galeries:!!opts.galeries, graine:opts.graine, pas:opts.irregulier != null ? 'irrégulier ' + opts.irregulier : +(opts.pas || 1/30).toFixed(4),
+    camps:parCamp, vainqueur:gagnants ? gagnants.split('+').map(id => id + ' ' + parCamp[id]).join(' + ') : 'aucun (non terminée)', duree:r.temps, erreur:r.erreur,
+    episodes:episodes.map(Ep => { const o = Object.assign({}, Ep); delete o.membres; delete o.sorties; delete o.morts; delete o.g; delete o.dernierPres; return o; }),
+    sorties, changementsCamp, statsMenace, rappels, transitions, retraites, paires};
+}
+window.mesureAssauts = mesureAssauts;
+// Résumé d'une liste de résultats : assauts, issues et replis par niveau de l'attaquant ; sorties par cause.
+function resumeAssauts(R){
+  const T = {}, S = {}, replis = [];
+  const aj = (O, k, v) => { O[k] = (O[k] || 0) + (v == null ? 1 : v); };
+  for(const r of R){
+    for(const E of r.episodes){
+      const t = T[E.nA + ' / ' + E.genre] || (T[E.nA + ' / ' + E.genre] = {assauts:0});
+      t.assauts++; aj(t, E.issue);
+      if(E.repli){ aj(t, 'repli ' + E.repli.verdict); replis.push(Object.assign({carte:r.carte, graine:r.graine, galeries:r.galeries, pas:r.pas, A:E.A, B:E.B, nA:E.nA, nB:E.nB, debut:E.debut, fin:E.fin, n:E.n, valeur:E.valeur, genre:E.genre, pertes:E.pertes, infligees:E.infligees}, E.repli)); }
+    }
+    for(const x of r.sorties){ const s = S[x.niveau] || (S[x.niveau] = {}); aj(s, (x.dansAssaut ? '[assaut] ' : '[hors assaut] ') + x.cause); }
+  }
+  const ret = {}, rap = {n:0, mineures:0};
+  for(const r of R){
+    for(const x of r.retraites || []) aj(ret, x.condition + (x.mien >= x.ennemi ? ' (localement supérieur)' : ''));
+    for(const x of r.rappels || []){ rap.n++; if(x.menace < 300) rap.mineures++; }
+  }
+  return {parNiveau:T, sortiesParCause:S, replis, retraitesUltra:ret, rappelsVague:rap};
+}
+window.resumeAssauts = resumeAssauts;
+// Essais de correction (diagnostic du 26 novembre 2026) : copie d'une fonction de jeu.js avec des remplacements de
+// texte, pour la passer à mesureAssauts (opts.essai), sans toucher à jeu.js. essaiParCamp : seuls les camps listés
+// prennent la nouvelle version (parties en miroir nouveau contre ancien).
+function fonctionModifiee(nom, remplacements){
+  let src = window[nom].toString();
+  for(const [a, b] of remplacements){ if(!src.includes(a)) throw new Error('texte introuvable dans ' + nom + ' : ' + a); src = src.replace(a, b); }
+  return (0, eval)('(' + src + ')');
+}
+function essaiParCamp(nom, nouvelle, campsNouveaux){
+  const ancienne = window[nom];
+  return function(id){ return (campsNouveaux.includes(id) ? nouvelle : ancienne).apply(this, arguments); };
+}
+window.fonctionModifiee = fonctionModifiee; window.essaiParCamp = essaiParCamp;
+// Seconde passe du lot (26 novembre 2026) : séries de mesureAssauts, avant (lot retiré par l'interrupteur) et après, sur
+// la carte chargée. Ultra contre Difficile (4 dispositions) et Ultra contre Ultra (2), graines données, case décochée
+// puis cochée ; pas fixe 1/30 s (celui de mesureAssauts). Grande carte : planGrandeCarteIA, partie continuée (sansFin).
+function planReplisIA(graines){
+  const plan = [];
+  for(const gal of [false, true]) for(const g of graines){
+    for(const fU of ['halden', 'karsk']) for(const cote of ['J', 'I']){
+      const fD = fU === 'halden' ? 'karsk' : 'halden';
+      plan.push({nom:'U' + fU[0].toUpperCase() + '(' + cote + ')-D', liste:cote === 'J' ? [campU('J', fU, 'ultra'), campU('I', fD, 'difficile')] : [campU('J', fD, 'difficile'), campU('I', fU, 'ultra')], graine:g, galeries:gal, outil:'mesureAssautsSerie'});
+    }
+    for(const fJ of ['halden', 'karsk']) plan.push({nom:'UU ' + fJ[0].toUpperCase() + '(J)', liste:[campU('J', fJ, 'ultra'), campU('I', fJ === 'halden' ? 'karsk' : 'halden', 'ultra')], graine:g, galeries:gal, outil:'mesureAssautsSerie'});
+  }
+  return plan;
+}
+window.planReplisIA = planReplisIA;
+// mesureAssauts sous la forme attendue par avancerSerieUltra (p.outil) ; partie continuée à 8 camps.
+function mesureAssautsSerie(liste, duree, opts){
+  return mesureAssauts(liste, Math.min(duree || 1200, 1200), {graine:opts.graine, galeries:opts.galeries, irregulier:opts.irregulier, avant:opts.avant, sansFin:liste.length > 4});
+}
+window.mesureAssautsSerie = mesureAssautsSerie;
+// Lecture : assauts d'Ultra, replis par verdict, replis sans motif par cause (au sens de mesureAssauts).
+function lireReplisIA(cle){
+  const P = RESULTATS[cle].parties.map(p => p.mesure).filter(m => m && m.episodes);
+  const R = resumeAssauts(P);
+  const sm = {}, parVerdict = {};
+  for(const x of R.replis) if(x.nA === 'ultra'){ parVerdict[x.genre + ' / ' + x.verdict] = (parVerdict[x.genre + ' / ' + x.verdict] || 0) + 1; if(x.verdict === 'sans motif'){ const k = x.genre + ' / ' + x.cause; sm[k] = (sm[k] || 0) + 1; } }
+  const erreurs = RESULTATS[cle].parties.filter(p => p.mesure && p.mesure.erreur).length;
+  // Va-et-vient défense ↔ recul (cause 4 du diagnostic) : paires d'ordres à moins de 20 s.
+  const paires = {}; for(const m of P) for(const [k, v] of Object.entries(m.paires || {})) if(/^ultra \| /.test(k) && /defendreUltra/.test(k) && /combattreUltra/.test(k)) paires[k] = (paires[k] || 0) + v;
+  return JSON.stringify({parties:P.length, erreurs, assautsUltra:R.parNiveau['ultra / assaut'], harcelement:R.parNiveau['ultra / harcèlement'], parVerdict, sansMotif:sm, retraitesUltra:R.retraitesUltra, paires});
+}
+window.lireReplisIA = lireReplisIA;

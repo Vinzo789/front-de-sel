@@ -1443,6 +1443,83 @@ cartes gardent le jeu en ligne à quatre camps.
   grande carte par défaut en chacun pour soi à huit, places 3 à 8 en « ordinateur aléatoire » ; raccourcis à
   huit dans le salon ; pas de baisse d'effectif en ligne à huit camps.
 
+### Ordinateur Difficile et Ultra : tous les bâtiments, plus de demi-tour (27 novembre 2026, `?v=51`)
+
+Demande du propriétaire (26 novembre 2026) : « À partir de difficile et ultra, il faut que l'ennemi utilise tous
+les bâtiments (y compris galerie de tir et batterie de défense) et élabore de bonnes stratégies. Pas de bug style
+l'ennemi attaque puis repart. » Publié avec la grande carte en ligne, dans la même version 51. **Objectifs
+atteints en partie seulement** (voir « Non atteint »). Facile, Normale et les missions ne changent pas. Documents
+de travail (non publiés) : `travaux/ia-ultra/MESURES-BATIMENTS.md`, `MESURES-RETRAITES.md`,
+`DIAGNOSTIC-RETRAITES.md`, `EMPREINTES-FACILE-NORMALE.md`.
+
+- **Méthode** : séries de parties d'ordinateurs à graine fixe, rejouées avant et après ; miroirs nouveau contre
+  ancien (même graine, côtés échangés). Tout le nouveau code est derrière `lotIA(id)` et les réglages `LOT_IA`
+  (`jeu.js`) ; l'interrupteur d'essai `lotAncien` rend l'ancien comportement à un camp (posé seulement par les
+  outils chargés avec `?verif`). Il reste dans `jeu.js`, exprès, pour rejouer les miroirs.
+- **Difficile, bâtiments** (`economieIA`, `defenseDueIA`, `zenithVoulueIA`) : son aéroport vide bloquait tout
+  son plan (le prix d'un char restait gardé avant l'avion, jamais payé) : après 45 s d'attente ce prix n'est plus
+  gardé ; épargne de 4 crédits par seconde pour le bâtiment suivant quand son armée vaut la plus forte armée
+  adverse, jamais retenue quand il est en retard ; dépôt avancé pour Halden (deux reconstructions au plus) ;
+  Batterie Parasol dès qu'une galerie adverse est terminée ; Batterie Zénith dès qu'un adversaire a une galerie.
+- **Difficile, vagues** (`majIACamp`) : une vague au contact (1 100 px) n'est plus rappelée pour une menace
+  mineure ni pour aider un allié ; elle garde son camp cible jusqu'à sa chute.
+- **Ultra** (`attaquerUltra`, `forcesTeteUltra`, `combattreUltra`, `defendreUltra`, `replierBlessesUltra`,
+  `productionUltra`) : plus de retraite pour la seule usure, forces jugées à la tête de l'assaut (hélicoptères
+  compris) ; une unité libre proche rejoint l'assaut ; une unité au contact n'est plus renvoyée vers le centre de
+  son groupe ; un assaut n'est abandonné que pour une menace d'au moins 300 qui dépasse ce qui reste à la base ;
+  un blessé dont l'abri est à plus de 1 000 px recule 300 px derrière son groupe au lieu de rentrer (cause
+  principale des assauts qui se vidaient sans aucune perte puis repartaient) ; la défense ne renvoie plus en
+  avant une unité qui vient de reculer ; un assaut anéanti laisse une mémoire d'échec ; épargne de 4 crédits par
+  seconde pour ses bâtiments après 600 s.
+- **Mesures rapportées par les agents** (non rejouées par l'orchestrateur) :
+  - aéroport de Difficile qui fait sortir des avions : Port-Calmes 5 sur 18 → 16 sur 22 (case cochée) et 2 sur
+    12 → 7 sur 11 (décochée) ; Gorges 9 sur 27 → 17 sur 30 et 1 sur 9 → 6 sur 14 ;
+  - Zénith bâtie par des ordinateurs pour la première fois (2 des 4 camps qui avaient vu une galerie adverse à
+    Port-Calmes) ;
+  - assauts mesurés sur la version 51 d'avant le lot, 320 parties (`mesureAssauts`) : Difficile 438 assauts,
+    aucun repli ; Ultra 417 assauts, 90 replis dont 26 sans motif ;
+  - replis d'Ultra, avant → final (assauts ; replis ; dont sans motif) : Port-Calmes 95 ; 23 ; 2 → 104 ; 14 ; 0 ;
+    Gorges 95 ; 18 ; 11 → 83 ; 12 ; 1 ; grande carte (3 parties) 42 ; 14 ; 2 → 30 ; 10 ; 0 ;
+  - va-et-vient de défense d'Ultra : 1 638 → 109 à Port-Calmes, 1 975 → 97 à Gorges (seconde passe) ;
+  - miroirs nouveau contre ancien, sur 24 parties par case : Difficile 12,5 ; 11,5 ; 12 ; 12,5 ; Ultra 12 ; 13 ;
+    13 ; 14 ;
+  - Ultra contre Difficile : 80 → 80,5 sur 96 ; Difficile contre Normale : 72,5 → 69,5 sur 96 ;
+  - nulles à 25 min, Ultra contre Difficile sur 32 parties : Port-Calmes 0 → 1, Gorges 1 → 3 ;
+  - règle de mesure des replis (choisie par l'agent) : assaut = au moins 3 unités armées valant 400 à moins de
+    500 px des bâtiments ennemis ; repli justifié si la défense vaut 1,3 fois l'attaque ou si le groupe a perdu
+    la moitié de sa valeur.
+- **Vu passer par l'orchestrateur**, code final, pages neuves : duel `7d442efb` inchangé ; quatre camps
+  **`2f6c871f`** (avant : `69b4664e` ; cette partie contient Ultra et Difficile) ; partie Normale contre Facile
+  `4864d7fc`, inchangée ; `testerDefense()` 84 sur 84 (un verdict ajouté) ; `avecGraine(7, () =>
+  testerGaleries())` 72 sur 72 ; `testerExtracteurs()` 29 sur 29 ; `testerUltra()` 3 sur 3 à Port-Calmes ;
+  `testerGrandeCarteEnLigne()` 19 sur 19, `testerGaleriesEnLigne()` 19 sur 19, `testerDefenseEnLigne()` 21 sur 21. Après la seconde passe (avant les corrections de
+  relecture) : partie de 20 min à huit ordinateurs Difficile et Ultra, galeries cochées, pas irrégulier, sans
+  erreur ni écart de réserves.
+- **Relecture indépendante** (lecture seule, après la seconde passe) : rien de bloquant ; quatre défauts
+  importants corrigés ensuite par l'agent (épargne de Difficile retenue sous attaque ; hélicoptères non comptés
+  dans le jugement de retraite d'Ultra ; blessés reculés laissés seuls ; un verdict d'essai assoupli qui cachait
+  une défaite, remis à l'origine une fois la cause corrigée). Ces corrections n'ont pas été relues par un tiers.
+- **Non atteint** :
+  - « tous les bâtiments » : tourelle et bunker restent rares ; la galerie de Halden (Aiguille) rare ; Ultra ne
+    pose presque jamais de Parasol, de radar ni de Zénith ; aucune défense antimissile vue sur la grande carte ;
+  - « de bonnes stratégies » : aucun gain de force prouvé ; l'ordinateur n'est ni nettement plus fort ni
+    nettement plus faible (les écarts ci-dessus sont dans le bruit à ce nombre de parties) ;
+  - `testerUltra()` sur Gorges : 3 sur 4, **échec assumé** du cas « UH(J)-D g1, pas irrégulier 101 » (un
+    opérateur fait un va-et-vient à 864 s en revenant vers un point d'étape périmé) ; non rejoué par
+    l'orchestrateur ;
+  - deux cas de `testerUltra` restent assouplis : « UU H(J) g1 » (partie nulle à 25 min, vainqueur non exigé) et
+    « UH(J)-D g2 » à Gorges (« pas de défaite » au lieu de « victoire ») ; cause : la défense qui respecte la
+    position de tir ;
+  - le harcèlement d'Ultra (voulu) reste ce qu'un joueur voit le plus comme « attaque puis repart » ; à huit
+    camps, Ultra change parfois d'objectif en route (décision laissée au propriétaire).
+- **Non vérifié** : le jeu à la souris ; un joueur humain face à ces ordinateurs (toutes les mesures opposent des
+  ordinateurs ; Difficile n'y fait aucun repli, la plainte du propriétaire vient peut-être d'une situation que
+  ces parties ne reproduisent pas) ; les cartes autres que Port-Calmes, Gorges et la grande carte.
+- **Choix faits sans le propriétaire, à valider** : les seuils de `LOT_IA` (45 s, 4 crédits par seconde,
+  1 100 px, 300, 250 px, 600 s, 1 000 px et 300 px pour les blessés) ; dépôt avancé pour Halden seulement ;
+  Zénith dès qu'une galerie adverse est vue, voulue pour toute la partie ; garder l'interrupteur d'essai dans le
+  jeu ; publier malgré l'échec assumé d'un cas d'essai.
+
 ### Commandes
 
 Souris pour sélectionner et ordonner, molette ou touches + et − (rangée
