@@ -1384,6 +1384,65 @@ escarmouche hors ligne.
   l'élimination du propriétaire ; le nom « Extracteur » et son allure (pompe à saumure) ; les seuils de
   l'ordinateur.
 
+#### Grande carte en ligne (26 novembre 2026, `?v=51`)
+
+Demande du propriétaire : « mettre ces nouveautés pour le mode multijoueur ». Décidé par lui : quatre joueurs
+humains au plus ; sur la Couronne de Varenne, des ordinateurs complètent jusqu'à huit camps ; le jeu en ligne est
+fait avant le lot 4 (bâtiments à occuper), qui sera fait d'emblée pour le solo et le jeu en ligne. Les cinq autres
+cartes gardent le jeu en ligne à quatre camps.
+
+- **Carte admise en ligne** : `horsLigne` retiré de la carte ; `carteHorsLigne` reste pour une future carte
+  (champ `horsLigne`, ou carte de plus de 5 750 px). L'hôte l'héberge, l'invité recharge sur elle, `?echo` y
+  fonctionne (`&camps=5` à `8`).
+- **Positions** (`reseau.js`, codec) : toujours 2 octets par coordonnée ; sur la grande carte, au 1/10 de px (de
+  −400 à 6 153 px) au lieu du 1/16, annoncé par le bit 3 de l'octet de drapeaux de l'en-tête. Sur les cartes de
+  80 × 56, les octets sont ceux d'avant.
+- **Camps, équipes, sièges** : camps M, O, P, Q et bâtiment `extracteur` ajoutés en fin des tables du codec ;
+  `reseau.js` admet 8 sièges et 8 équipes, mais 4 humains au plus (`humainsMax`), aux quatre premières places ;
+  `jeu.js` ramène à 4 et 4 sur les autres cartes (`campsMaxEnLigne`, `equipesEnLigne`). Salon de la grande
+  carte : sept autres emplacements, les trois premiers humain, ordinateur ou fermé, les quatre suivants ordinateur
+  ou fermé. 30 unités par camp de 5 à 8 camps.
+- **Extracteurs en ligne** : posés par l'hôte ; état transmis dans l'extension du bâtiment (propriétaire, camp
+  qui capture, contestée, avancement, heure du dernier versement) ; ordre `capturer` envoyé par l'invité et
+  validé par l'hôte ; revenu calculé chez l'hôte seulement.
+- **Versions** : `PROTO` reste 2 ; c'est le numéro `?v=` qui sépare les versions. Le contrôle de version passe
+  maintenant avant celui du reste de la description du salon (`validerDescription`, `o.versionJeu`), pour qu'un
+  joueur resté sur une autre version lise « version différente ». Limite : un joueur resté en version 50 ou
+  avant, devant un salon de la grande carte, lit encore « aucun salon ne répond » (son ancien code rejette le
+  salon à huit places) ; il doit recharger la page.
+- **Débit mesuré par l'agent qui a programmé** (non rejoué par l'orchestrateur) : Gorges à 4 camps, 303 octets
+  par instantané en médiane, 3 344 octets/s ; Couronne à 8 camps en début de partie, 628 et 6 944 ; Couronne à
+  8 × 30 unités en marche vers le centre, 635 en médiane, 2 759 au plus, 11 329 octets/s, pire fenêtre de 5 s à
+  27 508 octets/s ; vrai salon HiveMQ à deux onglets : 4 191 octets au plus par instantané (limite 256 Ko),
+  aucun instantané perdu ni tronqué sur 1 007, retard d'affichage médian 0,13 s, 0,77 s au pire. Aucune parade
+  n'a été jugée nécessaire.
+- **Vu passer par l'orchestrateur**, code final : duel `7d442efb`, quatre camps `69b4664e` ; `testerDefense()`
+  83 sur 83 ; `avecGraine(7, () => testerGaleries())` 72 sur 72 ; `testerExtracteurs()` 29 sur 29 et 2 sur 2
+  (ces quatre suites avant les deux corrections de relecture, d'une ligne chacune) ;
+  `testerGrandeCarteEnLigne()` 19 sur 19 (page `?echo&carte=couronneVarenne&camps=8&perte=0&verif`) ;
+  `testerGaleriesEnLigne()` 19 sur 19 ; `testerDefenseEnLigne()` 21 sur 21 ; contrôle de version : une
+  description d'une autre version est rendue pour le refus « version », la même description sans cette option
+  reste invalide.
+- **Rapporté par l'agent, non rejoué** : vrai salon HiveMQ à deux onglets sur la Couronne (8 emplacements vus
+  par l'invité, capture ordonnée par l'invité, revenu crédité, modèle à la couleur du camp) ;
+  `essai-codec.html?essai=codec` 26 sur 26 ; positions au-delà de 3 700 px égales à 0,05 px près.
+- **Échec isolé de `testerDefenseEnLigne()`** (voir lot 3) : l'agent l'a reproduit une fois sur dix sous une
+  autre forme (« chantier de la Zénith jamais ouvert ») et l'attribue à l'essai lui-même, pas au réseau : ses
+  délais sont comptés en temps réel et un missile de l'essai peut tuer l'ouvrier dont il a besoin. L'essai n'a
+  pas été corrigé ; l'échec « proposition lourde jamais reçue » n'a pas été reproduit.
+- **Relecture indépendante** (lecture seule) : rien de bloquant. Corrigés ensuite par l'orchestrateur, non relus
+  par un tiers : contrôle de version avant le reste de la description ; un extracteur reçu du réseau est refusé
+  sur une carte qui n'en a pas.
+- **Non vérifié** : le jeu à la souris dans un vrai salon ; plus de deux humains ; une partie longue ; un vrai
+  retour d'invité par rechargement de page sur le serveur public (simulé en `?echo` seulement) ; le serveur de
+  secours Mosquitto ; la fluidité chez un invité.
+- **Limites connues** : chez l'invité, la fiche d'un ouvrier distant n'affiche pas « Capture : en route » ; un
+  joueur qui a le code du salon peut toujours forger des instantanés (limite déjà admise) ; `CAMPS_EN_LIGNE`
+  n'est plus utilisé.
+- **Choix faits sans le propriétaire, à valider** : précision au 1/10 de px sur la grande carte ; salon de la
+  grande carte par défaut en chacun pour soi à huit, places 3 à 8 en « ordinateur aléatoire » ; raccourcis à
+  huit dans le salon ; pas de baisse d'effectif en ligne à huit camps.
+
 ### Commandes
 
 Souris pour sélectionner et ordonner, molette ou touches + et − (rangée

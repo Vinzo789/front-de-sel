@@ -18,7 +18,8 @@ la bibliothèque 3D three.js est chargée au démarrage.
 - Escarmouche contre un à trois ordinateurs, sur cinq cartes, avec des équipes
   libres et quatre niveaux de difficulté.
 - Une grande carte à huit camps, « Couronne de Varenne » : huit bases en couronne
-  autour d'une ville, jusqu'à sept ordinateurs. Hors ligne seulement.
+  autour d'une ville, jusqu'à sept ordinateurs. En ligne aussi : quatre joueurs au plus,
+  des ordinateurs pour les autres camps.
   Dix extracteurs neutres s'y capturent : clic droit d'un ouvrier, dix secondes à côté ;
   chacun rapporte ensuite des réserves à son propriétaire.
 - Réglages de l'escarmouche : réserves de départ (de 0 à 2 500) et charge des

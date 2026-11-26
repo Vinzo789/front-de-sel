@@ -74,10 +74,17 @@ const REGLAGES = {
   delaiSalonMs:6000,         // délai pour trouver la description du salon (« code inconnu »)
   delaiAccueilMs:8000,       // délai de réponse de l'hôte à une arrivée
   pseudoMax:16,
-  equipesMax:4,
+  // Grande carte en ligne (26 novembre 2026, décision du propriétaire) : 8 sièges et 8 équipes au plus, dont 4 humains
+  // au plus (l'hôte et trois invités) ; un siège humain a toujours un indice inférieur à humainsMax (les sièges 4 à 7
+  // sont des ordinateurs ou des places fermées). Ce sont les bornes de la FORME des messages ; jeu.js borne en plus
+  // chaque carte (4 sièges et 4 équipes sur les cartes de 80 × 56, comme avant).
+  equipesMax:8,
+  siegesMax:8,
+  humainsMax:4,
   // (20 novembre 2026, galeries de tir et défense antimissile en ligne : fabMissile, tirGalerie, fabMunition, repInter.)
   // (22 novembre 2026, lot B de la défense antimissile : fabLourd, commande d'un missile lourd.)
-  typesOrdres:['aller', 'droit', 'attaqueDep', 'arreter', 'rally', 'batir', 'produire', 'retirer', 'pouvoir', 'fabMissile', 'tirGalerie', 'fabMunition', 'repInter', 'fabLourd'],
+  // (26 novembre 2026, grande carte en ligne : capturer, capture d'un extracteur par des ouvriers.)
+  typesOrdres:['aller', 'droit', 'attaqueDep', 'arreter', 'rally', 'batir', 'produire', 'retirer', 'pouvoir', 'fabMissile', 'tirGalerie', 'fabMunition', 'repInter', 'fabLourd', 'capturer'],
   // --- Défense contre les messages forgés (serveur public : n'importe qui peut publier) ---
   tailleRattrapageMax:262144,  // réponse de rattrapage (jusqu'à 200 événements)
   confirmationWillMs:2500,     // « parti » sans preuve (dernière volonté) : confirmé si aucun battement valable pendant ce délai
@@ -319,7 +326,9 @@ function valeurListe(x, liste){
 }
 function validerSiege(e, o, avecEtat){
   if(!estObjet(e)) return null;
-  if(!entier(e.index, 0, 3) || !campValide(e.camp) || !entier(e.equipe, 1, REGLAGES.equipesMax) || !TYPES_SIEGE.includes(e.type)) return null;
+  if(!entier(e.index, 0, REGLAGES.siegesMax - 1) || !campValide(e.camp) || !entier(e.equipe, 1, REGLAGES.equipesMax) || !TYPES_SIEGE.includes(e.type)) return null;
+  // (26 novembre 2026) Siège humain seulement aux indices 0 à humainsMax − 1 : jamais plus de quatre humains.
+  if(e.type === 'humain' && e.index >= REGLAGES.humainsMax) return null;
   const faction = valeurListe(e.faction, o.factions), niveau = valeurListe(e.niveau, o.niveaux);
   if(faction === undefined || niveau === undefined) return null;
   if(e.pseudo != null && typeof e.pseudo !== 'string') return null;
@@ -331,7 +340,7 @@ function validerSiege(e, o, avecEtat){
   return r;
 }
 function validerSieges(l, o, avecEtat){
-  if(!Array.isArray(l) || l.length < 1 || l.length > 4) return null;
+  if(!Array.isArray(l) || l.length < 1 || l.length > REGLAGES.siegesMax) return null;   // (4 jusqu'au 26 novembre 2026)
   const vus = new Set(), r = [];
   for(const e of l){ const s = validerSiege(e, o, avecEtat); if(!s || vus.has(s.index)) return null; vus.add(s.index); r.push(s); }
   return r;
@@ -343,6 +352,10 @@ function validerDescription(d, o){
   const base = {proto:d.proto, jeu, carte:null, empreinte:null, etat:d.etat, extra:null, emplacements:[]};
   if(d.etat === 'ferme'){ base.will = d.will === true; return base; }
   if(d.proto !== PROTO) return base;                       // autre protocole : seul le refus de version compte
+  // Autre version du jeu (26 novembre 2026) : même chose, AVANT de contrôler le reste. Sans cela, un joueur resté sur
+  // une ancienne version voyait « aucun salon ne répond » au lieu de « version différente » dès que le format de la
+  // description changeait (salon à huit places). o.versionJeu n'est donné qu'avant l'entrée dans le salon.
+  if(o && o.versionJeu != null && jeu !== o.versionJeu) return base;
   if(d.carte != null){ if(typeof d.carte !== 'string' || !RE_CARTE.test(d.carte)) return null; base.carte = d.carte; }
   if(d.empreinte != null){ if(typeof d.empreinte !== 'string' || !RE_EMPREINTE.test(d.empreinte)) return null; base.empreinte = d.empreinte; }
   if(d.extra != null){ const x = simplifier(d.extra); if(!x.ok) return null; base.extra = x.v; }
@@ -938,6 +951,8 @@ function definirTypes(t){
     r[k] = l.map(String); r.idx[k] = new Map(r[k].map((n, i) => [n, i]));
     if(r.idx[k].size !== r[k].length) throw new Error('definirTypes : doublon dans « ' + k + ' ».');
   }
+  // (26 novembre 2026) positionsLarges : positions à l'échelle large dans les instantanés encodés ici (voir qPos).
+  r.positionsLarges = !!(t && t.positionsLarges === true);
   T = r;
   return true;
 }
@@ -952,8 +967,18 @@ function nomDe(table, i){ const n = T.idx && T[table][i]; if(n === undefined) th
 const ENTETE = 20;
 const borne = (x, a, b) => x < a ? a : x > b ? b : x;
 const K_ANG = 256/(2*Math.PI);
-const qPos = x => borne(Math.round(((+x || 0) + 400)*16), 0, 65535);
-const dPos = q => q/16 - 400;
+// Positions (u16). Échelle normale : 1/16 px, de −400 à 3 695,9 px (cartes de 80 × 56 cases, 3 200 × 2 240 px).
+// Échelle large (26 novembre 2026, grande carte en ligne, 140 × 98 cases = 5 600 × 3 920 px) : 1/10 px, de −400 à
+// 6 153,5 px ; erreur d'arrondi 0,05 px au plus (0,031 en échelle normale). Mêmes deux octets par coordonnée : la taille
+// des instantanés ne change pas. L'échelle est choisie par l'hôte (definirTypes, positionsLarges) et annoncée par le
+// bit 3 de l'octet de drapeaux de chaque instantané ; le décodeur suit ce bit, jamais un réglage local. Échelle normale :
+// bit à 0, octets identiques à ceux d'avant. echPos est posée au début de chaque encodage et de chaque décodage
+// (fonctions synchrones), avant toute quantification.
+const ECHELLE_POS = 16, ECHELLE_POS_LARGE = 10, BIT_POS_LARGE = 8;
+let echPos = ECHELLE_POS;
+const qPos = x => borne(Math.round(((+x || 0) + 400)*echPos), 0, 65535);
+const dPos = q => q/echPos - 400;
+function echelleEncodeur(){ echPos = T && T.positionsLarges ? ECHELLE_POS_LARGE : ECHELLE_POS; }
 function qAng(a){ let v = Math.round((+a || 0)*K_ANG) % 256; if(v < 0) v += 256; return v; }
 const dAng = q => q/K_ANG;
 function qFrac(pv, pvMax){ if(!(pvMax > 0)) return 0; let f = Math.round((+pv || 0)/pvMax*255); if(pv > 0 && f < 1) f = 1; return borne(f, 0, 255); }
@@ -1009,18 +1034,36 @@ function qUnite(u){
 // tient sur l'u8 : 240 s au plus). Une galerie sans lourd s'encode exactement comme en version 45. La Batterie Zénith
 // est une batterie comme la Parasol (bit 1, mêmes champs) ; sa pose de tir dure aussi 4,5 s (même
 // CYCLE_INTERCEPTION dans r3d-batiments.js), l'âge de intT tient donc sur un u8.
+// Extracteur (26 novembre 2026, grande carte en ligne) : bit 7 de x (libre jusque-là), puis u8 cap, [u8 k], u8 rev.
+// cap = 0 sans capture en cours ; sinon bit 7 = capture en cours, bit 6 = contestée, bits 0-5 = indice du camp qui
+// capture + 1 (0 : aucun camp, capture contestée dès l'arrivée). k (présent si capture) = s de capture cumulées en
+// 1/20 s (12,75 s au plus ; la capture dure 10 s). rev = âge du dernier versement en 1/50 s (0-254 ; un versement
+// toutes les 5 s, soit 250 au plus), 255 = aucun revenu (extracteur neutre). L'heure du dernier versement est gardée
+// absolue (comme tirT) : entre deux versements l'enregistrement ne change pas et n'est pas renvoyé ; seule une capture
+// en cours le fait renvoyer à chaque instantané. Données prises dans b.extr = {capture:{camp, t, conteste} | null,
+// versementT (heure de jeu du dernier versement, ou null)}. Sans b.extr (tout autre bâtiment) : bit à 0, rien d'écrit,
+// octets d'avant.
+function qExtracteur(b){
+  const e = b.extr && typeof b.extr === 'object' ? b.extr : null;
+  if(!e) return null;
+  const K = e.capture && typeof e.capture === 'object' ? e.capture : null;
+  const ic = K && K.camp != null ? indexDe('camps', K.camp) + 1 : 0;
+  if(ic > 63) throw new Error('Codec : indice de camp trop grand pour un extracteur.');
+  return {cap:K ? 128 | (K.conteste === true ? 64 : 0) | ic : 0, k:K ? u8r((+K.t || 0)*20) : 0, rev:horloge(e.versementT)};
+}
 const nib = v => borne(Math.round(+v || 0), 0, 15);
 const secHaut = t => borne(Math.ceil((+t || 0) - 1e-6), 0, 255);   // (1e-6 : comme l'affichage de la fiche, ligneEtatGalerie)
 function qBatiment(b){
   const g = b.gal && typeof b.gal === 'object' ? b.gal : null, p = b.para && typeof b.para === 'object' ? b.para : null;
-  const g0 = g ? horloge(g.t0) : -1, it = p ? horloge(b.intT) : -1;
+  const g0 = g ? horloge(g.t0) : -1, it = p ? horloge(b.intT) : -1, ex = qExtracteur(b);
   return {
     id:b.id & 0xFFFF, pvMax:u16r(b.pvMax), pv:qFrac(b.pv, b.pvMax), pr:qFrac01(b.progres), at:qAng(b.angleT),
     enC:!!b.enCours, bl:!!b.bloque,
     file:(b.file || []).slice(0, 255).map(t => indexDe('unites', t)), av:qFrac01(b.avancement),
     rally:b.rally ? [qPos(b.rally.x), qPos(b.rally.y)] : null, tir:horloge(b.tirT),
     type:indexDe('batiments', b.type), camp:indexDe('camps', b.camp), c:u8r(b.c), r:u8r(b.r),
-    x:(g ? 1 : 0) | (p ? 2 : 0) | (g && g.lourd > 0 ? 16 : 0) | (g && g.fabLourd > 0 ? 32 : 0) | (g && g.cycleLourd === true ? 64 : 0),
+    x:(g ? 1 : 0) | (p ? 2 : 0) | (g && g.lourd > 0 ? 16 : 0) | (g && g.fabLourd > 0 ? 32 : 0) | (g && g.cycleLourd === true ? 64 : 0) | (ex ? 128 : 0),
+    ec:ex ? ex.cap : 0, ek:ex ? ex.k : 0, er:ex ? ex.rev : 0,
     gs:g ? nib(g.stock) | (nib(g.fab) << 4) : 0, gf:g ? secHaut(g.fabT) : 0, g0,
     gn:g && g0 >= 0 ? nib(g.n) | (nib(g.tires) << 4) : 0,
     ps:p ? nib(p.stock) | (nib(p.fab) << 4) : 0, pf:p ? secHaut(p.fabT) : 0, it,
@@ -1041,6 +1084,7 @@ function memeBat(a, b){
   if(a.pv !== b.pv || a.pr !== b.pr || a.at !== b.at || a.enC !== b.enC || a.bl !== b.bl || a.av !== b.av || a.tir !== b.tir) return false;
   // Extension (galerie, batterie : 20 novembre 2026)
   if(a.x !== b.x || a.gs !== b.gs || a.gf !== b.gf || a.g0 !== b.g0 || a.gn !== b.gn || a.ps !== b.ps || a.pf !== b.pf || a.it !== b.it) return false;
+  if(a.ec !== b.ec || a.ek !== b.ek || a.er !== b.er) return false;   // extracteur (26 novembre 2026)
   if(a.file.length !== b.file.length) return false;
   for(let i = 0; i < a.file.length; i++) if(a.file[i] !== b.file[i]) return false;
   if(!a.rally !== !b.rally) return false;
@@ -1078,6 +1122,7 @@ function ecrireBatiment(w, q, nouveau, tq){
     w.u8(x);
     if(x & 1){ w.u8(q.gs); w.u8(q.gf); if(x & 4){ w.u16(ag); w.u8(q.gn); } }
     if(x & 2){ w.u8(q.ps); w.u8(q.pf); if(x & 8) w.u8(ai); }
+    if(x & 128){ const av = age(q.er, tq); w.u8(q.ec); if(q.ec & 128) w.u8(q.ek); w.u8(av >= 0 && av < 255 ? av : 255); }   // extracteur (26 novembre 2026)
   }
 }
 
@@ -1089,8 +1134,9 @@ function encoderQ(etat, q, baseQ, n){
   const proj = etat.projectiles || [], eff = etat.effets || [];
   const nP = Math.min(255, proj.length), nE = Math.min(255, eff.length);
   w.u8(PROTO); w.u8(baseQ ? 0 : 1); w.u16(n); w.u32(Math.round(temps*1000)); w.u16(baseQ ? baseQ.n : n);
-  // Drapeaux : bits 0-1 troncature des projectiles et effets, bit 2 hôte en pause (etat.pause === true).
-  w.u8(camps.length); w.u8((proj.length > 255 ? 1 : 0) | (eff.length > 255 ? 2 : 0) | (etat.pause === true ? 4 : 0));
+  // Drapeaux : bits 0-1 troncature des projectiles et effets, bit 2 hôte en pause (etat.pause === true), bit 3 positions
+  // à l'échelle large (26 novembre 2026, voir qPos).
+  w.u8(camps.length); w.u8((proj.length > 255 ? 1 : 0) | (eff.length > 255 ? 2 : 0) | (etat.pause === true ? 4 : 0) | (echPos === ECHELLE_POS_LARGE ? BIT_POS_LARGE : 0));
   w.u16(0); w.u16(0); w.u16(0); w.u8(nP); w.u8(nE);   // effectifs complétés plus bas
   // Camps
   const pouvoirs = T.pouvoirs;
@@ -1147,6 +1193,7 @@ const cacheBases = new WeakMap();
 // un état déjà encodé en complet (il doit porter le même `n` que lors de cet encodage).
 function encoder(etat, base){
   if(!T) throw new Error('Codec : appeler Reseau.definirTypes avant d’encoder.');
+  echelleEncodeur();
   let bq = null;
   if(base){ bq = cacheBases.get(base); if(!bq){ bq = quantifierEtat(base); cacheBases.set(base, bq); } }
   return encoderQ(etat, quantifierEtat(etat), bq, (etat.n | 0) & 0xFFFF);
@@ -1181,6 +1228,7 @@ function decoder(octets, base){
     bi = indexDecode(base);
   }
   try{
+    echPos = (E.drapeaux & BIT_POS_LARGE) ? ECHELLE_POS_LARGE : ECHELLE_POS;   // échelle annoncée par l'instantané
     const L = new Lecteur(octets); L.p = ENTETE;
     const temps = E.temps;
     const ageVers = a => Math.round((temps - a/50)*1000)/1000;
@@ -1237,6 +1285,11 @@ function decoder(octets, base){
           b.para = {stock:s & 15, fab:s >> 4, fabT:f};
           b.intT = x & 8 ? ageVers(L.u8()) : null;
         }
+        // Extracteur (26 novembre 2026) : voir qExtracteur.
+        if(x & 128){
+          const cap = L.u8(), k = cap & 128 ? L.u8() : 0, rev = L.u8(), ic = cap & 63;
+          b.extr = {capture:cap & 128 ? {camp:ic ? nomDe('camps', ic - 1) : null, t:k/20, conteste:(cap & 64) !== 0} : null, versementT:rev === 255 ? null : ageVers(rev)};
+        }
       }
       if(!(bi && bi.bats.has(id))) nouveauxB.push(id);
       bats.set(id, b);
@@ -1280,6 +1333,7 @@ function creerEmetteur(opts = {}){
       n = (n + 1) & 0xFFFF; if(n === 0) n = 1;
       const t = maintenant();
       const complet = forcer || demande || !baseQ || t - dernierComplet >= periode;
+      echelleEncodeur();
       const q = quantifierEtat(etat);
       const octets = encoderQ(etat, q, complet ? null : baseQ, n);
       if(complet){ q.n = n; baseQ = q; dernierComplet = t; demande = false; }
@@ -1384,13 +1438,16 @@ class SalonHote extends Diffuseur {
     this.id = nouvelId(); this.versionJeu = String(o.versionJeu == null ? '' : o.versionJeu);
     this.carte = o.carte == null ? null : o.carte; this.empreinte = o.empreinteCarte == null ? null : o.empreinteCarte;
     this.etat = 'ouvert'; this.ferme = false; this.debut = null;
-    const empl = (o.emplacements || EMPLACEMENTS_DEFAUT).slice(0, 4);
+    // (26 novembre 2026, grande carte en ligne : 8 emplacements au plus, 4 jusque-là ; un emplacement humain au-delà
+    // du quatrième est refusé, comme tout le salon : l'hôte ne peut pas ouvrir plus de quatre places humaines.)
+    const empl = (o.emplacements || EMPLACEMENTS_DEFAUT).slice(0, REGLAGES.siegesMax);
     if(empl.length < 2) throw erreurReseau('config', 'Il faut au moins deux emplacements.');
+    if(empl.some((e, i) => e && e.type === 'humain' && i >= REGLAGES.humainsMax)) throw erreurReseau('config', 'Quatre places de joueur au plus (les places 5 à 8 sont des ordinateurs ou fermées).');
     this.sieges = empl.map((e, i) => { const s = {index:i, camp:String(e.camp), equipe:(e.equipe | 0) || (i + 1),
       type:TYPES_SIEGE.includes(e.type) ? e.type : 'ferme', faction:e.faction == null ? null : e.faction, niveau:e.niveau == null ? null : e.niveau, hote:false};
       viderOccupant(s); return s; });
     const ih = o.siegeHote | 0, h = this.sieges[ih];
-    if(!h) throw erreurReseau('config', 'Siège de l’hôte inexistant.');
+    if(!h || ih >= REGLAGES.humainsMax) throw erreurReseau('config', 'Siège de l’hôte inexistant.');
     Object.assign(h, {type:'humain', hote:true, id:this.id, pseudo:nettoyerPseudo(o.pseudonyme) || 'Hôte', pret:true, presence:'la'});
     this.siege = ih; this.camp = h.camp;
     this.vus = new Set(); this.expulses = new Set(); this.confies = new Set();
@@ -1815,6 +1872,7 @@ class SalonHote extends Diffuseur {
       if(!TYPES_SIEGE.includes(champs.type)) return false;
       if(s.hote && champs.type !== 'humain') return false;
       if(s.id && !s.hote && champs.type !== 'humain') return false;    // occupé : expulser d'abord
+      if(champs.type === 'humain' && i >= REGLAGES.humainsMax) return false;   // (26 novembre 2026) quatre humains au plus
       s.type = champs.type;
     }
     if(champs.equipe != null){ const e = champs.equipe | 0; if(e < 1 || e > REGLAGES.equipesMax) return false; s.equipe = e; }
@@ -2264,7 +2322,7 @@ class SalonInvite extends Diffuseur {
   _description(octets, genre){
     if(octets.length > REGLAGES.tailleDescriptionMax){ this._ignorer('description'); return; }
     // (Une description vide, effacement du message conservé, n'arrive plus ici : le canal la jette sans effet.)
-    const d = validerDescription(lireJson(octets), this.vo);
+    const d = validerDescription(lireJson(octets), this.entre ? this.vo : Object.assign({}, this.vo, {versionJeu:this.versionJeu}));
     if(!d){ this._ignorer('description'); return; }
     // Description d'un salon qui vit sur un AUTRE serveur (recopiée telle quelle d'un serveur public à l'autre) : ignorée.
     // (Comparaison sans la casse ni la barre finale : la même adresse personnalisée tapée deux fois à la main.)
@@ -2650,6 +2708,8 @@ global.Reseau = {
   // siège, enveloppe. Aucune n'agit sur un salon.
   Sceau:{sha256, hmac, deriverSalon, cleSiege, sceller, ouvrir},
   Codec:{encoder, decoder, lireEntete, creerEmetteur, creerRecepteur, types:() => T ? Object.fromEntries(Object.keys(TABLES_VIDES).map(k => [k, T[k].slice()])) : null},
+  // Contrôles de forme des messages reçus (essais, 26 novembre 2026) : fonctions pures, rendent une copie propre ou null.
+  Validation:{description:(d, o) => validerDescription(d, o || {}), debut:(x, o) => validerDebut(x, o || {}), sieges:(l, o) => validerSieges(l, o || {}, false)},
   simuler(p){ busDefaut = p ? new Bus(p) : null; return busDefaut; },
   nouveauBus(p){ return new Bus(p || {}); },
   journal(actif){ journalActif = !!actif; return journalActif; },

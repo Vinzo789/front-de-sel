@@ -311,7 +311,8 @@ CARTES.valBrunelles = {
 };
 
 // ---------------------------------------------------------------------
-//  Couronne de Varenne (novembre 2026) : grande carte à huit camps, escarmouche hors ligne.
+//  Couronne de Varenne (novembre 2026) : grande carte à huit camps ; en ligne depuis le 26 novembre 2026
+//  (quatre joueurs humains au plus, les autres camps tenus par l'ordinateur).
 //  Huit bases en couronne, une ville au centre. Données fabriquées par
 //  travaux/carte8/fabrique_carte.py (non publié). Champ « taille » : voir jeu.js, section 1.
 // ---------------------------------------------------------------------
@@ -319,9 +320,8 @@ CARTES.valBrunelles = {
 CARTES.couronneVarenne = {
   id: 'couronneVarenne',
   nom: 'Couronne de Varenne',
-  description: 'Grande carte à huit bases en couronne autour d’une ville ; les champs riches sont en ville. Hors ligne seulement.',
+  description: 'Grande carte à huit bases en couronne autour d’une ville ; les champs riches sont en ville. En ligne : quatre joueurs au plus, huit camps.',
   taille: { cols: 140, lignes: 98 },   // les autres cartes font 80 × 56
-  horsLigne: true,                     // absente des parties en ligne
   graine: 80825,
   ambiance: 'midi',
   cote: null,

@@ -2342,6 +2342,365 @@ function testerDefenseEnLigne(cle){
 window.testerDefenseEnLigne = testerDefenseEnLigne;
 
 // ---------------------------------------------------------------------
+//  Grande carte en ligne (26 novembre 2026) : la Couronne de Varenne à huit camps, en mode ?echo.
+//  Page : front-de-sel.html?echo&carte=couronneVarenne&camps=8&perte=0&verif, attendre echo.pret, puis
+//    testerGrandeCarteEnLigne('gc')   → le rapport arrive dans RESULTATS.gc (environ une minute plus tard)
+//  Mené en temps réel par le minuteur du Worker, comme testerDefenseEnLigne. L'invité (I) donne ses ordres par
+//  executerOrdre → réseau simulé → hôte. Pour aller vite, dans le monde de l'hôte et par les seules données du moteur :
+//  un ouvrier de I posé à côté d'un extracteur, un autre extracteur donné à K (rendu allié de I le temps d'un essai),
+//  K éliminé en détruisant ses bâtiments. Comparé à chaque instantané appliqué par l'invité : positions des unités
+//  contre celles de l'hôte au même instant (tolérance du codec : 0,05 px en échelle large), réserves de I.
+//  Verdicts {nom, ok, detail} ; aucune donnée ne quitte la page (boucle locale de reseau.js).
+// ---------------------------------------------------------------------
+function testerGrandeCarteEnLigne(cle){
+  if(modeReseau !== 'echo' || !echo.pret || !mondes || !CARTE || CARTE.id !== 'couronneVarenne')
+    return Promise.resolve([{nom:'page ?echo&carte=couronneVarenne&camps=8&perte=0&verif prête', ok:false, detail:{modeReseau, pret:echo.pret, carte:CARTE && CARTE.id}}]);
+  const H = mondes.hote, V = [], verdict = (nom, ok, detail) => V.push({nom, ok:!!ok, detail});
+  if(cle) RESULTATS[cle] = 'en cours';
+  const TOL = 0.05 + 1e-6, r2 = v => v == null ? v : Math.round(v*1000)/1000;
+  // --- Contrôles sans réseau (fonctions pures) ---
+  const campsH = dansMonde(H, () => campsEnJeu()), campsI = campsEnJeu();
+  verdict('huit camps dans les deux mondes (J, I, K, L, M, O, P, Q), mêmes équipes (A à H) et factions',
+    campsH.length === 8 && campsI.join() === campsH.join() && campsI.join() === CAMPS_JOUEURS.join()
+      && campsI.every(id => camps[id].equipe === dansMonde(H, () => camps[id].equipe) && camps[id].faction === dansMonde(H, () => camps[id].faction)),
+    {campsH, campsI, equipes:campsI.map(id => camps[id].equipe).join('')});
+  verdict('règles par carte : Couronne admise en ligne (8 camps, équipes A-H), Gorges et Port-Calmes à 4 camps et équipes A-D',
+    !carteHorsLigne(CARTE) && campsMaxEnLigne(CARTE) === 8 && equipesEnLigne(CARTE) === EQUIPES_SOLO
+      && ['gorgesVarseche', 'portCalmes'].every(k => campsMaxEnLigne(CARTES[k]) === 4 && equipesEnLigne(CARTES[k]) === EQUIPES && !carteHorsLigne(CARTES[k])),
+    {max:campsMaxEnLigne(CARTE)});
+  const S = (index, type, camp, equipe) => ({index, camp, equipe, type, faction:type === 'ferme' ? null : 'halden', niveau:null, pseudo:null, hote:index === 0});
+  const huit = CAMPS_JOUEURS.map((c, i) => S(i, i < 4 ? 'humain' : 'ordinateur', c, i + 1));
+  const VA = Reseau.Validation;
+  const forme = {
+    huitValides:!!VA.sieges(huit),
+    cinquiemeHumain:VA.sieges(huit.map((s, i) => i === 4 ? Object.assign({}, s, {type:'humain'}) : s)),
+    neufSieges:VA.sieges(huit.concat([S(8, 'ordinateur', 'J', 1)])),
+    equipe9:VA.sieges(huit.map((s, i) => i === 7 ? Object.assign({}, s, {equipe:9}) : s)),
+    campInconnu:VA.sieges(huit.map((s, i) => i === 7 ? Object.assign({}, s, {camp:'Z'}) : s)),
+    descriptionHumain6:VA.description({proto:Reseau.PROTO, jeu:'x', etat:'ouvert', carte:'couronneVarenne', emplacements:huit.map((s, i) => i === 6 ? Object.assign({}, s, {type:'humain'}) : s)}),
+    debutHumain5:VA.debut({carte:'couronneVarenne', sieges:huit.map((s, i) => i === 5 ? Object.assign({}, s, {type:'humain'}) : s)}),
+  };
+  verdict('reseau.js : huit sièges acceptés ; cinquième humain, neuvième siège, équipe 9, camp inconnu refusés (sièges, description, données de lancement)',
+    forme.huitValides && [forme.cinquiemeHumain, forme.neufSieges, forme.equipe9, forme.campInconnu, forme.descriptionHumain6, forme.debutHumain5].every(x => x === null),
+    {huitValides:forme.huitValides, refus:Object.keys(forme).filter(k => k !== 'huitValides' && forme[k] === null)});
+  const P = k => ({id:k.id, faction:k.faction, equipe:k.equipe, ia:k.ia, emplacement:k.emplacement});
+  const debutOk = campsI.map(id => P(Object.assign({id}, camps[id])));
+  const deb = camps2 => campsDuDebut({carte:CARTE.id, camps:camps2});
+  const jeuRefus = {
+    cinqHumains:deb(debutOk.map((k, i) => i <= 4 ? Object.assign({}, k, {ia:false}) : k)),
+    quatreHumains:deb(debutOk.map((k, i) => i <= 3 ? Object.assign({}, k, {ia:false}) : k)),
+    campN:deb(debutOk.map((k, i) => i === 7 ? Object.assign({}, k, {id:'N'}) : k)),
+    campZ:deb(debutOk.map((k, i) => i === 7 ? Object.assign({}, k, {id:'Z'}) : k)),
+    equipeI:deb(debutOk.map((k, i) => i === 7 ? Object.assign({}, k, {equipe:'I'}) : k)),
+    neufCamps:deb(debutOk.concat([Object.assign({}, debutOk[7], {emplacement:8})])),
+    doublon:deb(debutOk.map((k, i) => i === 7 ? Object.assign({}, k, {id:'J'}) : k)),
+  };
+  const listeOk = deb(debutOk);
+  const quatre = jeuRefus.quatreHumains; delete jeuRefus.quatreHumains;
+  verdict('jeu.js (campsDuDebut) : huit camps acceptés (dont quatre humains) ; cinq humains, camp N ou Z, équipe I, neuf camps, camp en double refusés',
+    listeOk && listeOk.length === 8 && quatre && quatre.length === 8 && Object.values(jeuRefus).every(x => x === null), {acceptes:listeOk && listeOk.length, refus:Object.keys(jeuRefus).filter(k => jeuRefus[k] === null)});
+  // Hôte : salon de huit emplacements sur un bus privé (aucune donnée ailleurs), cinq humains refusés, place 5 jamais humaine.
+  const salonsEssai = (async () => {
+    const r = {};
+    const base = {versionJeu:'essai', carte:CARTE.id, siegeHote:0, pseudonyme:'Essai', transport:Reseau.nouveauBus({retard:0, gigue:0, perte:0})};
+    try { await Reseau.creerSalon(Object.assign({}, base, {emplacements:huit.map((s, i) => ({camp:s.camp, equipe:i + 1, type:i <= 4 ? 'humain' : 'ordinateur'}))})); r.cinqHumains = 'ACCEPTÉ'; }
+    catch(e){ r.cinqHumains = e.motif || e.message; }
+    try {
+      const Sx = await Reseau.creerSalon(Object.assign({}, base, {transport:Reseau.nouveauBus({retard:0, gigue:0, perte:0}),
+        emplacements:huit.map((s, i) => ({camp:s.camp, equipe:i + 1, type:i < 4 ? 'humain' : 'ordinateur'}))}));
+      r.sieges = Sx.listeSieges().length; r.place5Humain = Sx.modifierEmplacement(4, {type:'humain'}); r.place5Ferme = Sx.modifierEmplacement(4, {type:'ferme'});
+      r.place4Humain = Sx.modifierEmplacement(3, {type:'humain'});
+      await Sx.fermer();
+    } catch(e){ r.erreur = e.message; }
+    return r;
+  })();
+  // --- Déroulé en temps réel ---
+  echo.piloteExterne = true;
+  window.enregistrerVictoire = () => {};
+  const histo = [];
+  echo.apresPasHote = () => {
+    const h = {T:temps, pos:new Map(), resI:camps.I.reserves};
+    for(const e of ents) if(!e.mort && e.est === 'unite') h.pos.set(e.id, [e.x, e.y]);
+    histo.push(h); if(histo.length > 120) histo.shift();
+  };
+  const M = {comparaisons:0, loin:0, ecartMax:0, horsTol:0, ex:[], reservesComp:0, reservesEcart:0, instantanes:0, tronques:0, erreurs:[], messages:[],
+    capturesVues:[], versementsVus:0, revPrec:null};
+  const surEtat = s => { M.instantanes++; if(s && s.tronque) M.tronques++; };
+  // Champs au contenu doublé (lot 2) : chaque événement « minerai » appliqué tel quel par l'invité (écouteur posé après
+  // celui du jeu), quantités jusqu'à 12 000.
+  M.minerai = {evenements:0, ecarts:0, plusGrand:0, maxInvite:Math.max(...noeuds.map(n => n.max)), maxHote:dansMonde(H, () => Math.max(...noeuds.map(n => n.max)))};
+  const surEvt = ev => {
+    if(ev && ev.t === 'message' && ev.camp === 'I') M.messages.push(ev.texte);
+    if(ev && ev.t === 'minerai' && Array.isArray(ev.r)){ M.minerai.evenements++; ev.r.forEach((v, i) => { M.minerai.plusGrand = Math.max(M.minerai.plusGrand, v); if(!noeuds[i] || noeuds[i].reste !== v) M.minerai.ecarts++; }); }
+  };
+  echo.salonInvite.on('etat', surEtat); echo.salonInvite.on('evenement', surEvt);
+  const ids = {};
+  echo.apresPasInvite = () => {
+    const s0 = invite.courant; if(!s0) return;
+    const h = histo.find(x => Math.abs(x.T - s0.T) < 0.0015); if(!h) return;
+    for(const [id, u] of s0.unites){
+      const p = h.pos.get(id); if(!p) continue;
+      const d = Math.max(Math.abs(u.x - p[0]), Math.abs(u.y - p[1]));
+      M.comparaisons++; if(p[0] > 3700 || p[1] > 3700) M.loin++;
+      if(d > M.ecartMax) M.ecartMax = d;
+      if(d > TOL){ M.horsTol++; if(M.ex.length < 5) M.ex.push({id, hote:p, invite:[u.x, u.y]}); }
+    }
+    const cI = s0.camps.find(c => c.camp === 'I');
+    if(cI){ M.reservesComp++; M.reservesEcart = Math.max(M.reservesEcart, Math.abs(cI.reserves - h.resI)); }
+    if(ids.ext){
+      const b = invite.index.get(ids.ext);
+      if(b && b.capture && b.capture.camp === 'I'){ const t = r2(b.capture.t); if(!M.capturesVues.length || M.capturesVues[M.capturesVues.length - 1] !== t) M.capturesVues.push(t); }
+      if(b && b.camp === 'I'){ if(M.revPrec != null && b.revenuT < M.revPrec - 2) M.versementsVus++; M.revPrec = b.revenuT; }
+    }
+  };
+  // Délais de chaque étape comptés en secondes de JEU de l'hôte (et non en temps réel) : un volet masqué ou une page
+  // chargée ralentit la simulation sans faire échouer l'essai (défaut relevé sur testerDefenseEnLigne).
+  const tempsHote = () => dansMonde(H, () => temps);
+  let phase = 0, phaseT = tempsHote(), pas = 0;
+  const info = {}, debut = performance.now();
+  const suite = () => { phase++; phaseT = tempsHote(); };
+  const delaiDepasse = s => tempsHote() - phaseT > s;
+  const hEnt = id => dansMonde(H, () => entiteParId(id));
+  return new Promise(fin => {
+    let arret = null, fini = false;
+    const terminer = async raison => {
+      if(fini) return; fini = true;
+      if(arret) arret();
+      echo.apresPasHote = echo.apresPasInvite = null; echo.piloteExterne = false;
+      echo.salonInvite.off('etat', surEtat); echo.salonInvite.off('evenement', surEvt);
+      dansMonde(H, () => { if(camps.K) camps.K.equipe = 'C'; }); if(camps.K) camps.K.equipe = 'C';
+      if(raison) verdict('déroulé complet (' + raison + ')', false, {phase, info});
+      verdict('positions au-delà de 3 700 px : égales chez l’hôte et l’invité à la tolérance du codec (0,05 px), au même instant',
+        M.loin > 100 && M.horsTol === 0 && M.ecartMax <= TOL, {comparaisons:M.comparaisons, auDela3700:M.loin, ecartMax:r2(M.ecartMax), horsTolerance:M.horsTol, exemples:M.ex});
+      verdict('réserves de I : aucun écart entre l’invité et l’hôte au même instant', M.reservesComp > 100 && M.reservesEcart === 0, {comparaisons:M.reservesComp, ecartMax:M.reservesEcart});
+      const restesH = dansMonde(H, () => noeuds.map(n => Math.round(n.reste))), restesI = noeuds.map(n => Math.round(n.reste));
+      M.minerai.ecartFinal = Math.max(...restesH.map((v, i) => Math.abs(v - restesI[i])));
+      verdict('champs au contenu doublé : capacités identiques (12 000 au plus des deux côtés), événements « minerai » appliqués tels quels par l’invité',
+        M.minerai.maxInvite === 12000 && M.minerai.maxHote === 12000 && M.minerai.evenements >= 3 && M.minerai.ecarts === 0 && M.minerai.plusGrand > 5000, M.minerai);
+      verdict('aucun instantané tronqué (projectiles et effets) en début de partie', M.instantanes > 100 && M.tronques === 0,
+        {instantanes:M.instantanes, tronques:M.tronques, octets:echo.salonHote.statistiques().instantanes});
+      const se = await salonsEssai;
+      verdict('hôte (reseau.js) : salon à cinq humains refusé ; huit sièges ; place 5 jamais humaine (ordinateur ou fermée), place 4 humaine permise',
+        se.cinqHumains === 'config' && se.sieges === 8 && se.place5Humain === false && se.place5Ferme === true && se.place4Humain === true, se);
+      verdict('aucune erreur pendant l’essai', !M.erreurs.length, M.erreurs);
+      const res = {verdicts:V, reussis:V.filter(v => v.ok).length + ' / ' + V.length, dureeReelle:r2((performance.now() - debut)/1000), info,
+        messages:M.messages.slice(-12), ordres:hoteReseau.ordres};
+      if(cle) RESULTATS[cle] = res;
+      fin(res);
+    };
+    const etape = () => {
+      if(phase === 0){
+        const ex = [...invite.index.values()].filter(e => e.def.extracteur);
+        if(ex.length < 10){ if(delaiDepasse(8)) terminer('extracteurs jamais vus chez l’invité (' + ex.length + ')'); return; }
+        const exH = dansMonde(H, () => ents.filter(e => !e.mort && e.def.extracteur).map(e => ({id:e.id, camp:e.camp, c:e.c, r:e.r})));
+        verdict('extracteurs présents chez l’invité : les dix, mêmes cases et mêmes propriétaires que chez l’hôte, fiche « Propriétaire : neutre »',
+          exH.length === 10 && exH.every(h => { const b = invite.index.get(h.id); return b && b.c === h.c && b.r === h.r && b.camp === h.camp; })
+            && ex.filter(b => b.camp === 'N').every(b => ligneProprioExtracteur(b, 'I') === 'Propriétaire : neutre'),
+          {hote:exH.map(h => h.camp + '@' + h.c + ',' + h.r).join(' ')});
+        // Cible : l'extracteur neutre le plus proche du QG de I ; un ouvrier de I posé à côté (monde de l'hôte).
+        const prep = dansMonde(H, () => {
+          const qI = ents.find(b => b.camp === 'I' && b.type === 'qg' && !b.mort);
+          const neutres = ents.filter(e => !e.mort && e.def.extracteur && e.camp === 'N' && !e.capture);
+          neutres.sort((a, b) => Math.hypot(a.x - qI.x, a.y - qI.y) - Math.hypot(b.x - qI.x, b.y - qI.y));
+          const x = neutres[0], ouv = ents.filter(u => !u.mort && u.camp === 'I' && u.est === 'unite' && u.def.ouvrier);
+          const loin = neutres.slice(1).sort((a, b) => Math.min(...campsEnJeu().map(c => { const q = ents.find(e => e.camp === c && e.type === 'qg'); return q ? Math.hypot(b.x - q.x, b.y - q.y) : 1e9; }))
+            - Math.min(...campsEnJeu().map(c => { const q = ents.find(e => e.camp === c && e.type === 'qg'); return q ? Math.hypot(a.x - q.x, a.y - q.y) : 1e9; })))[0];
+          const u = ouv[0]; u.ordre = null; u.chemin = null; u.x = x.x - x.rayon - 22; u.y = x.y;
+          return {ext:x.id, ext2:loin.id, ouv:u.id, ouv2:ouv[1].id, extX:x.x, extY:x.y};
+        });
+        Object.assign(ids, prep); info.cible = prep;
+        suite();
+      } else if(phase === 1){
+        const u = invite.index.get(ids.ouv);
+        if(u && Math.hypot(u.x - ids.extX, u.y - ids.extY) < 120){
+          const r = executerOrdre('I', {type:'capturer', ids:[ids.ouv], cibleId:ids.ext});
+          verdict('invité : ordre « capturer » accepté sur l’état affiché et envoyé', r.ok && r.envoye, r);
+          suite();
+        } else if(delaiDepasse(6)) terminer('ouvrier jamais vu près de l’extracteur');
+      } else if(phase === 2){
+        const v = dansMonde(H, () => { const u = entiteParId(ids.ouv), b = entiteParId(ids.ext); return {ordre:u && u.ordre && u.ordre.type, cap:b && b.capture ? Object.assign({}, b.capture) : null}; });
+        if(v.ordre === 'capturer' && v.cap && v.cap.camp === 'I'){ verdict('hôte : ordre validé, l’ouvrier de I capture (capture au nom de I)', true, v); suite(); }
+        else if(delaiDepasse(6)) terminer('capture jamais commencée chez l’hôte');
+      } else if(phase === 3){
+        const b = invite.index.get(ids.ext);
+        if(b && b.capture && b.capture.camp === 'I' && b.capture.t >= 3){
+          info.ficheCapture = ligneCaptureExtracteur(b);
+          verdict('invité : capture en cours visible (anneau : capture.camp = I, avancement qui croît ; fiche « Capture en cours : N s (Rouge) »)',
+            /^Capture en cours : \d+ s \(/.test(info.ficheCapture) && M.capturesVues.length >= 3 && M.capturesVues.every((t, i) => !i || t > M.capturesVues[i - 1]),
+            {fiche:info.ficheCapture, avancements:M.capturesVues.slice(0, 12)});
+          suite();
+        } else if(delaiDepasse(10)) terminer('capture jamais vue chez l’invité');
+      } else if(phase === 4){
+        const b = invite.index.get(ids.ext), bh = hEnt(ids.ext);
+        if(b && b.camp === 'I' && bh && bh.camp === 'I'){
+          try { dessiner(0.05); } catch(e){ M.erreurs.push('dessin : ' + e.message); }   // modèle refait à la couleur du nouveau camp
+          info.capture = {camp:b.camp, couleur:couleurCamp(b.camp), proprio:ligneProprioExtracteur(b, 'I'), capture:b.capture, messages:M.messages.filter(m => /xtracteur/.test(m))};
+          verdict('capture : propriétaire I chez l’hôte et l’invité, couleur du camp (minicarte, modèle), fiche « Propriétaire : vous », message « Extracteur capturé » reçu par l’invité',
+            info.capture.couleur === COULEURS_CAMPS.I && info.capture.proprio === 'Propriétaire : vous' && b.capture === null
+              && info.capture.messages.some(m => /^Extracteur capturé/.test(m)), info.capture);
+          info.resAvant = camps.I.reserves; info.tCapture = temps; M.revPrec = null;
+          suite();
+        } else if(delaiDepasse(16)) terminer('extracteur jamais passé à I');
+      } else if(phase === 5){
+        // Revenu : deux versements au moins vus par l'invité (s accumulées qui repartent de zéro), fiche du propriétaire.
+        if(M.versementsVus >= 2){
+          const b = invite.index.get(ids.ext);
+          info.revenu = {versementsVus:M.versementsVus, fiche:ligneRevenuExtracteur(b, 'I'), reservesAvant:Math.round(info.resAvant), reservesApres:Math.round(camps.I.reserves)};
+          verdict('revenu versé par l’hôte et visible chez l’invité : versements vus, fiche « prochain versement dans N s », réserves égales à celles de l’hôte (voir plus bas)',
+            /prochain versement dans \d+ s$/.test(info.revenu.fiche), info.revenu);
+          suite();
+        } else if(delaiDepasse(16)) terminer('versements jamais vus chez l’invité (' + M.versementsVus + ')');
+      } else if(phase === 6){
+        // Extracteur allié : K mis dans l'équipe de I (les deux mondes), un extracteur donné à K chez l'hôte.
+        dansMonde(H, () => { camps.K.equipe = camps.I.equipe; const b = entiteParId(ids.ext2); b.camp = 'K'; b.capture = null; b.revenuT = 0; });
+        camps.K.equipe = camps.I.equipe;
+        suite();
+      } else if(phase === 7){
+        const b = invite.index.get(ids.ext2);
+        if(b && b.camp === 'K'){
+          const r = executerOrdre('I', {type:'capturer', ids:[ids.ouv2], cibleId:ids.ext2});
+          info.refusLocal = r;
+          info.refusHoteAvant = hoteReseau.ordres.refuses; info.messagesAvant = M.messages.length;
+          echo.salonInvite.envoyerOrdre({o:'capturer', ids:[ids.ouv2], cibleId:ids.ext2});   // sans le contrôle local
+          suite();
+        } else if(delaiDepasse(6)) terminer('extracteur de K jamais vu chez l’invité');
+      } else if(phase === 8){
+        const dit = M.messages.slice(info.messagesAvant).includes('Cet extracteur appartient à un allié.');
+        if((dit && hoteReseau.ordres.refuses > info.refusHoteAvant) || delaiDepasse(5)){
+          const o = dansMonde(H, () => { const u = entiteParId(ids.ouv2); return u && u.ordre ? u.ordre.type : null; });
+          verdict('capture d’un extracteur allié refusée : par l’invité sur place (motif dit), puis par l’hôte quand l’ordre arrive sans contrôle local (refus dit à l’invité, ouvrier sans ordre de capture)',
+            !info.refusLocal.ok && info.refusLocal.motif === 'Cet extracteur appartient à un allié.' && dit && hoteReseau.ordres.refuses > info.refusHoteAvant && o !== 'capturer',
+            {local:info.refusLocal, ditParHote:dit, ordreHote:o, motifs:hoteReseau.ordres.motifs});
+          dansMonde(H, () => { camps.K.equipe = 'C'; }); camps.K.equipe = 'C';
+          // K éliminé (bâtiments détruits chez l'hôte) : ses extracteurs redeviennent neutres.
+          dansMonde(H, () => { for(const e of ents) if(!e.mort && e.camp === 'K' && e.est === 'batiment' && !e.def.extracteur) tuer(e, null); });
+          suite();
+        }
+      } else if(phase === 9){
+        const bh = hEnt(ids.ext2), b = invite.index.get(ids.ext2);
+        const elimH = dansMonde(H, () => camps.K.elimine);
+        if(elimH && bh && bh.camp === 'N' && b && b.camp === 'N'){
+          verdict('propriétaire éliminé : son extracteur redevient neutre chez l’hôte et chez l’invité (gris, « Propriétaire : neutre »)',
+            ligneProprioExtracteur(b, 'I') === 'Propriétaire : neutre', {elimineHote:elimH, elimineInvite:!!camps.K.elimine});
+          // Retour d'un invité (page rechargée) : monde de l'invité refait à neuf, propriétaires repris des instantanés.
+          info.avantRetour = {entites:invite.index.size};
+          const publics = campsEnJeu().map(id => ({id, faction:camps[id].faction, equipe:camps[id].equipe, ia:camps[id].ia, emplacement:camps[id].emplacement}));
+          preparerMondeInvite(publics, 'I'); definirCampLocal('I');
+          suite();
+        } else if(delaiDepasse(8)) terminer('extracteur de K jamais redevenu neutre (' + JSON.stringify({elimH, hote:bh && bh.camp, invite:b && b.camp}) + ')');
+      } else if(phase === 10){
+        const ex = [...invite.index.values()].filter(e => e.def.extracteur);
+        if(ex.length >= 10 && invite.appliques > 5){
+          const exH = dansMonde(H, () => ents.filter(e => !e.mort && e.def.extracteur).map(e => e.id + ':' + e.camp).sort().join(' '));
+          const exI = ex.map(e => e.id + ':' + e.camp).sort().join(' ');
+          verdict('retour d’un invité (monde refait à neuf) : mêmes propriétaires d’extracteurs que chez l’hôte (I pour le capturé), K éliminé',
+            exH === exI && invite.index.get(ids.ext).camp === 'I' && !!camps.K.elimine, {hote:exH, invite:exI});
+          terminer();
+        } else if(delaiDepasse(8)) terminer('extracteurs jamais revus après le retour');
+      }
+    };
+    const tic = () => {
+      if(fini) return;
+      const du = Math.min(4, Math.floor((performance.now() - debut)/50) - pas);
+      for(let k = 0; k < du && !fini; k++){ pasEcho(0.05); pas++; }
+      if(!fini) etape();
+    };
+    arret = Reseau.minuteur(50, () => { try { tic(); } catch(e){ M.erreurs.push(e.message + ' | ' + String(e.stack || '').split('\n').slice(1, 3).join(' | ')); terminer('erreur'); } });
+  });
+}
+window.testerGrandeCarteEnLigne = testerGrandeCarteEnLigne;
+
+// ---------------------------------------------------------------------
+//  Mesure du débit du jeu en ligne (26 novembre 2026), mode ?echo (boucle locale : retard et pertes de l'adresse).
+//  mesurerDebitEnLigne({duree:60, bataille:false, centre:false, cle:'d'}) → RESULTATS.d
+//  bataille : chaque camp complété à 30 unités de combat près de son QG (monde de l'hôte, données du moteur), puis
+//  toutes ses unités armées envoyées vers le centre de la carte (ordre attaqueDeplacement) : grosse bataille au milieu.
+//  Mesuré : octets de chaque instantané envoyé par l'hôte (complets à part), octets par seconde (moyenne, pire fenêtre
+//  de 5 s), instantanés tronqués (drapeau de l'en-tête, plus de 255 projectiles ou effets), entités, projectiles et
+//  effets par instantané, temps d'encodage chez l'hôte, et retard d'affichage de l'invité (temps de l'hôte moins
+//  instant affiché par l'invité, même page). Un instantané est envoyé une fois par l'hôte au serveur, qui le relaie à
+//  chaque invité : ces octets par seconde valent pour l'envoi de l'hôte et pour la réception de chaque invité.
+// ---------------------------------------------------------------------
+function mesurerDebitEnLigne(opts){
+  opts = Object.assign({duree:60, bataille:false, cle:null, unites:30}, opts || {});
+  if(modeReseau !== 'echo' || !echo.pret || !mondes) return Promise.resolve({erreur:'ouvrir la page avec ?echo&verif et attendre echo.pret'});
+  if(opts.cle) RESULTATS[opts.cle] = 'en cours';
+  const H = mondes.hote, SH = echo.salonHote, orig = SH.envoyerEtat;
+  const L = [], lag = [], M = {tronques:0, recus:0, erreurs:[]};
+  window.enregistrerVictoire = () => {};
+  let prep = null;
+  if(opts.bataille) prep = dansMonde(H, () => {
+    const r = {};
+    for(const id of campsEnJeu()){
+      const qg = ents.find(b => b.camp === id && b.type === 'qg' && !b.mort); if(!qg) continue;
+      const F = faction(id), types = (F.production.caserne || []).concat(F.production.usine || []).filter(t => UNITES[t] && UNITES[t].arme && !UNITES[t].ouvrier && !UNITES[t].collecteur && !UNITES[t].repare && !UNITES[t].avion);
+      let n = ents.filter(u => !u.mort && u.camp === id && u.est === 'unite').length, k = 0;
+      // centre:true (pire cas) : les renforts sont posés en couronne à 450 px du centre de la carte, la bataille commence
+      // tout de suite et partout à la fois ; sinon près du QG.
+      const ia = campsEnJeu().indexOf(id), ang = ia/campsEnJeu().length*Math.PI*2;
+      const ox = opts.centre ? LARG/2 + Math.cos(ang)*450 : qg.x, oy = opts.centre ? HAUT/2 + Math.sin(ang)*450 - 120 : qg.y;
+      while(n < opts.unites){ const p = pointLibre(ox + ((k % 6) - 2.5)*34, oy + 120 + Math.floor(k/6)*34); creerUnite(types[k % types.length], id, p.x, p.y); n++; k++; }
+      const armee = ents.filter(u => !u.mort && u.camp === id && u.est === 'unite' && u.def.arme && !u.def.ouvrier && !u.def.collecteur).map(u => u.id);
+      const o = executerOrdre(id, {type:'attaqueDeplacement', ids:armee.slice(0, 200), x:LARG/2 + (Math.random() - 0.5)*200, y:HAUT/2 + (Math.random() - 0.5)*200, cibleId:null});
+      r[id] = {unites:n, armee:armee.length, ordre:o.ok};
+    }
+    return r;
+  });
+  SH.envoyerEtat = function(etat, o){
+    const t0 = performance.now(), r = orig.call(this, etat, o), dt = performance.now() - t0;
+    if(r) L.push({t:performance.now(), T:etat.temps, octets:r.octets, complet:r.complet, ms:dt, entites:etat.unites.length + etat.batiments.length,
+      proj:etat.projectiles.length, eff:etat.effets.length});
+    return r;
+  };
+  const surEtat = s => { M.recus++; if(s && s.tronque) M.tronques++; };
+  echo.salonInvite.on('etat', surEtat);
+  echo.piloteExterne = true;
+  echo.apresPasInvite = () => { if(invite.init) lag.push(dansMonde(H, () => temps) - invite.Ta); };
+  const debut = performance.now();
+  let pas = 0;
+  const q = (l, p) => { if(!l.length) return null; const s = l.slice().sort((a, b) => a - b); return Math.round(s[Math.min(s.length - 1, Math.floor(p*s.length))]*1000)/1000; };
+  const moy = l => l.length ? Math.round(l.reduce((a, b) => a + b, 0)/l.length*10)/10 : null;
+  return new Promise(fin => {
+    let arret = null, fini = false;
+    const terminer = () => {
+      if(fini) return; fini = true;
+      if(arret) arret();
+      SH.envoyerEtat = orig; echo.salonInvite.off('etat', surEtat);
+      echo.apresPasInvite = null; echo.piloteExterne = false;
+      try { bilan(); } catch(e){ const r = {erreur:e.message, pile:String(e.stack || '').split('\n').slice(0, 3).join(' | ')}; if(opts.cle) RESULTATS[opts.cle] = r; fin(r); }
+    };
+    const bilan = () => {
+      const duree = (performance.now() - debut)/1000, tot = L.reduce((s, x) => s + x.octets, 0);
+      // Débits rapportés au temps de JEU de l'hôte (10 instantanés par seconde de jeu ; en partie réelle, l'hôte suit
+      // l'horloge), pour que les chiffres ne dépendent pas de la charge du poste d'essai. Pire fenêtre de 5 s de jeu.
+      const dureeJeu = L.length > 1 ? L[L.length - 1].T - L[0].T : 0;
+      let pire = 0; for(let i = 0, j = 0, s = 0; i < L.length; i++){ s += L[i].octets; while(L[i].T - L[j].T > 5 - 1e-6){ s -= L[j].octets; j++; } if(L[i].T - L[0].T >= 5 - 1e-6) pire = Math.max(pire, s/5); }
+      const diffs = L.filter(x => !x.complet).map(x => x.octets), comps = L.filter(x => x.complet).map(x => x.octets);
+      const res = {carte:CARTE.id, camps:campsEnJeu().length, bataille:prep, dureeReelle:Math.round(duree*10)/10, tempsHote:Math.round(dansMonde(H, () => temps)*10)/10,
+        instantanes:L.length, parSecondeDeJeu:dureeJeu > 0 ? Math.round(L.length/dureeJeu*10)/10 : null,
+        octetsParInstantane:{moyen:moy(L.map(x => x.octets)), differences:{moyen:moy(diffs), median:q(diffs, 0.5), p95:q(diffs, 0.95), max:diffs.length ? Math.max(...diffs) : null},
+          complets:{n:comps.length, moyen:moy(comps), max:comps.length ? Math.max(...comps) : null}},
+        octetsParSecondeDeJeu:{moyen:dureeJeu > 0 ? Math.round(tot/dureeJeu) : null, pireFenetre5s:Math.round(pire)},
+        entitesMax:Math.max(0, ...L.map(x => x.entites)), projectilesMax:Math.max(0, ...L.map(x => x.proj)), effetsMax:Math.max(0, ...L.map(x => x.eff)),
+        tronques:{hote:L.filter(x => x.proj > 255 || x.eff > 255).length, invite:M.tronques, recusInvite:M.recus},
+        encodageMs:{moyen:moy(L.map(x => x.ms)), max:Math.round(Math.max(0, ...L.map(x => x.ms))*10)/10},
+        retardAffichageS:{median:q(lag, 0.5), p95:q(lag, 0.95), max:q(lag, 1)},
+        invite:echo.salonInvite.statistiques().instantanes, erreurs:M.erreurs,
+        enVie:campsEnJeu().filter(id => dansMonde(H, () => !camps[id].elimine)).length};
+      if(opts.cle) RESULTATS[opts.cle] = res;
+      fin(res);
+    };
+    const tic = () => {
+      if(fini) return;
+      const du = Math.min(4, Math.floor((performance.now() - debut)/50) - pas);
+      for(let k = 0; k < du && !fini; k++){ pasEcho(0.05); pas++; if(pas*0.05 >= opts.duree) terminer(); }
+    };
+    arret = Reseau.minuteur(50, () => { try { tic(); } catch(e){ M.erreurs.push(e.message); terminer(); } });
+  });
+}
+window.mesurerDebitEnLigne = mesurerDebitEnLigne;
+
+// ---------------------------------------------------------------------
 //  Galeries de tir (novembre 2026) : essais automatiques des règles du cahier des charges
 //  (travaux/galerie/CAHIER-DES-CHARGES.md), pour les deux camps, par simulation sans rendu et sans attendre le
 //  temps réel. À lancer depuis front-de-sel.html?verif (escarmouche, pas de mission) :

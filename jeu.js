@@ -487,7 +487,7 @@ function definirCampLocal(id){
 // Huit camps au plus depuis novembre 2026 (grande carte, hors ligne) ; N et X sont pris (neutres, envahisseurs).
 const CAMPS_JOUEURS = ['J', 'I', 'K', 'L', 'M', 'O', 'P', 'Q'];   // ordre fixe : emplacements, bandeau, boucles
 const COULEURS_CAMPS = {J:'#3fa7ff', I:'#e2533f', K:'#58c96b', L:'#e8c33f', M:'#f08a2e', O:'#a878e8', P:'#3fd0c4', Q:'#f07fb4'};
-const CAMPS_EN_LIGNE = CAMPS_JOUEURS.slice(0, 4);                  // le jeu en ligne ne connaît que J, I, K, L
+const CAMPS_EN_LIGNE = CAMPS_JOUEURS.slice(0, 4);                  // en ligne sur les cartes de 80 × 56 : J, I, K, L (huit camps sur la grande carte depuis le 26 novembre 2026 : campsMaxEnLigne)
 const NOMS_COULEURS = {J:'Bleu', I:'Rouge', K:'Vert', L:'Jaune', M:'Orange', O:'Violet', P:'Turquoise', Q:'Rose'};
 // Camps de joueurs présents dans la partie (2 en mission et en duel, jusqu'à 4 en escarmouche).
 function campsEnJeu(){ return CAMPS_JOUEURS.filter(id => camps[id]); }
@@ -7264,8 +7264,9 @@ const TYPES_ORDRES = ['droit', 'attaqueDeplacement', 'arret', 'ralliement', 'con
   'pouvoir', 'pause', 'abandon', 'alliance', 'proposerTreve', 'fabriquerMissile', 'tirGalerie', 'fabriquerMunition', 'repondreInterception',
   'fabriquerMissileLourd', 'capturer'];
 // Extracteurs (25 novembre 2026, lot 3) : 'capturer' {ids (ouvriers), cibleId (extracteur)} ; le clic droit d'ouvriers
-// sur un extracteur neutre ou ennemi y mène aussi (appliquerOrdreDroit), et l'ordinateur s'en sert (captureIA). Sans
-// code réseau : refusé en ligne (l'extracteur n'y existe d'ailleurs pas).
+// sur un extracteur neutre ou ennemi y mène aussi (appliquerOrdreDroit), et l'ordinateur s'en sert (captureIA). En
+// ligne depuis le 26 novembre 2026 (grande carte) : code réseau 'capturer', contrôlé chez l'invité sur l'état affiché,
+// puis validé de nouveau par l'hôte comme tout ordre.
 // Lot B (cahier § 12.1) : 'fabriquerMissileLourd' {id} ; code réseau 'fabLourd' depuis le 22 novembre 2026 (§ 12.7),
 // accepté en ligne quand l'hôte a coché « Galeries de tir ». 'fabriquerMunition' vaut pour les deux batteries, et
 // 'tirGalerie' tire ce que la galerie contient (légers ou lourd).
@@ -8533,13 +8534,28 @@ function afficherEscarmouche(){
   el('sousTitre').textContent = 'ESCARMOUCHE · CARTE : ' + (CARTE ? CARTE.nom : '').toUpperCase();
   construireChoixCarte();
   construireEmplacements();
-  // Une carte hors ligne (grande carte à huit camps) ne s'héberge pas : le bouton est absent.
+  // Une carte hors ligne ne s'héberge pas : le bouton est absent. (26 novembre 2026 : la grande carte à huit camps se
+  // joue en ligne, voir carteHorsLigne.)
   const bH = el('bHeberger'); if(bH) bH.classList.toggle('cache', carteHorsLigne(CARTE));
   jouerMusique('menu');
 }
-// Carte réservée au jeu hors ligne : champ horsLigne, ou taille différente de 80 × 56 (le jeu en ligne ne
-// transporte que des positions de la carte habituelle et quatre camps). Fonction pure.
-function carteHorsLigne(c){ return !!(c && (c.horsLigne || c.taille)); }
+// Carte réservée au jeu hors ligne : champ horsLigne, ou carte plus grande que ce que transporte le codec du jeu en
+// ligne. Fonction pure. (26 novembre 2026 : jusque-là, toute carte de taille différente de 80 × 56 était hors ligne ;
+// le codec transporte désormais des positions jusqu'à 6 153 px, échelle large de reseau.js, et 8 camps. La
+// Couronne de Varenne, 5 600 × 3 920 px, n'a plus de champ horsLigne. Le mécanisme reste pour de futures cartes.)
+const LARGEUR_MAX_EN_LIGNE = 5750;   // px, bord de la carte : 5 750 + 400 de marge (MARGE_CARTE) < 6 153 (échelle large)
+function carteHorsLigne(c){
+  if(!c) return false;
+  if(c.horsLigne) return true;
+  const t = c.taille;
+  return !!(t && !(t.cols*TUILE <= LARGEUR_MAX_EN_LIGNE && t.lignes*TUILE <= LARGEUR_MAX_EN_LIGNE));
+}
+// Jeu en ligne (26 novembre 2026, décision du propriétaire) : 8 camps au plus sur une carte de plus de quatre
+// emplacements (Couronne de Varenne), dont 4 humains au plus ; 4 camps ailleurs, comme avant. Équipes : 8 sur
+// cette carte (EQUIPES_SOLO), 4 ailleurs (EQUIPES). Fonctions pures.
+function campsMaxEnLigne(c){ const n = c ? emplacementsCarte(c).length : 0; return n > 4 ? Math.min(CAMPS_JOUEURS.length, n) : 4; }
+function equipesEnLigne(c){ return campsMaxEnLigne(c) > 4 ? EQUIPES_SOLO : EQUIPES; }
+const HUMAINS_MAX_EN_LIGNE = 4;
 
 // ---------- Escarmouche : emplacements, factions et équipes ----------
 // Quatre emplacements. Le premier est le joueur (Halden ou Karsk, équipe A à D) ; les trois autres :
@@ -10237,9 +10253,11 @@ function demarrer(facJ, config, options){
     const fant = F.production.caserne[0];
     for(let k=0;k<3;k++){ const p = positionSortie(qg); creerUnite(fant, camp, p.x + (k-1)*20, p.y + 40); }
   }
-  // Extracteurs neutres (25 novembre 2026, lot 3) : escarmouche hors ligne seulement, carte à champ « extracteurs ».
-  // Ailleurs (autres cartes, vitrine ?demo, jeu en ligne) rien n'est créé, ni aucun tirage au hasard fait.
-  if(!MISSION && modeReseau === null && !window.MODE_DEMO && !(options && options.campLocal)) poserExtracteurs(CARTE);
+  // Extracteurs neutres (25 novembre 2026, lot 3) : escarmouche sur une carte à champ « extracteurs ». Ailleurs (autres
+  // cartes, missions, vitrine ?demo) rien n'est créé, ni aucun tirage au hasard fait. En ligne depuis le 26 novembre
+  // 2026 : posés par l'hôte (demarrerHote, monde de l'hôte du mode ?echo) ; l'invité n'appelle jamais demarrer, il les
+  // reçoit par les instantanés.
+  if(!MISSION && !window.MODE_DEMO) poserExtracteurs(CARTE);
   statsCamps = {};   // statistiques de fin, par camp (les unités de départ ne comptent pas)
   el('menu').classList.add('cache');
   for(const id of ['barre','panneau','mini']) el(id).classList.remove('cache');
@@ -10545,15 +10563,23 @@ function tablesReseau(){
   if(!armes.has('missileGalerie')) armes.add('missileGalerie');
   // (22 novembre 2026, lot B en ligne : la Batterie Zénith y entre, en dernier, comme dans BATIMENTS : les indices des
   // bâtiments d'avant ne changent pas.)
-  const t = {unites:Object.keys(UNITES), batiments:Object.keys(BATIMENTS), camps:['J', 'I', 'K', 'L', 'N', 'X'],
+  // (26 novembre 2026, grande carte en ligne : les camps M, O, P, Q sont ajoutés EN FIN de table, et l'extracteur, non
+  // énumérable dans BATIMENTS, en fin de la table des bâtiments déclarée au codec (batimentsCodec ; « batiments » reste
+  // Object.keys(BATIMENTS), que les essais comparent) : les indices d'avant ne changent pas, et une partie sur les cinq
+  // autres cartes s'encode octet pour octet comme avant.)
+  const t = {unites:Object.keys(UNITES), batiments:Object.keys(BATIMENTS), camps:['J', 'I', 'K', 'L', 'N', 'X', 'M', 'O', 'P', 'Q'],
     pouvoirs:[...pouvoirs].sort(), projectiles:PROJECTILES_RESEAU, armes:[...armes].sort(), effets:EFFETS_RESEAU};
+  t.batimentsCodec = t.batiments.concat(['extracteur']);
   t.armesEffet = [null].concat(t.armes); t.roles = [null].concat([...roles].sort());
   t.ensembleArmes = new Set(t.armes);
   return (tablesReseau.t = t);
 }
 function declarerTypesReseau(){
   const t = tablesReseau();
-  Reseau.definirTypes({unites:t.unites, batiments:t.batiments, camps:t.camps, pouvoirs:t.pouvoirs, projectiles:t.projectiles, armes:t.armes, effets:t.effets});
+  // positionsLarges (26 novembre 2026) : carte dont le bord et sa marge dépassent l'échelle normale du codec (3 695 px) ;
+  // les cartes de 80 × 56 (3 200 + 400) restent à l'échelle normale.
+  Reseau.definirTypes({unites:t.unites, batiments:t.batimentsCodec, camps:t.camps, pouvoirs:t.pouvoirs, projectiles:t.projectiles, armes:t.armes, effets:t.effets,
+    positionsLarges:Math.max(LARG, HAUT) + MARGE_CARTE > 3695});
 }
 const indiceOu0 = (liste, v) => { const i = liste.indexOf(v == null ? null : v); return i < 0 ? 0 : i; };
 const octet = v => Math.max(0, Math.min(255, Math.round(+v || 0)));
@@ -10703,6 +10729,12 @@ function fabriquerInstantane(){
       // Batterie Parasol terminée (lot 2) : munitions, fabrication, heure du dernier tir (caisson). Les accords
       // d'avance (para.autorise) ne partent pas : l'invité lit sa réponse dans l'événement « interception ».
       if(e.para && !e.enCours){ const p = e.para; r.para = {stock:p.stock, fab:p.fab, fabT:p.fabT}; if(typeof e.intT === 'number') r.intT = e.intT; }
+      // Extracteur (26 novembre 2026, grande carte en ligne) : capture en cours (camp, s cumulées, contestée) et heure du
+      // dernier versement (temps − revenuT, seulement s'il rapporte : propriétaire en jeu) ; extension du codec,
+      // qExtracteur. Son propriétaire est le camp du bâtiment.
+      if(e.def.extracteur){ const K = e.capture, Cp = camps[e.camp], rapporte = !!Cp && !Cp.elimine && CAMPS_JOUEURS.includes(e.camp);
+        r.extr = {capture:K ? {camp:K.camp && CAMPS_JOUEURS.includes(K.camp) ? K.camp : null, t:K.t || 0, conteste:K.conteste === true} : null,
+          versementT:rapporte ? temps - (e.revenuT || 0) : null}; }
       etat.batiments.push(r);
     }
   }
@@ -10776,7 +10808,8 @@ const CODES_ORDRES = {droit:'droit', attaqueDeplacement:'attaqueDep', arret:'arr
   produire:'produire', retirer:'retirer', pouvoir:'pouvoir',
   // Galeries de tir et défense antimissile en ligne (20 novembre 2026) ; mêmes codes dans REGLAGES.typesOrdres (reseau.js).
   fabriquerMissile:'fabMissile', tirGalerie:'tirGalerie', fabriquerMunition:'fabMunition', repondreInterception:'repInter',
-  fabriquerMissileLourd:'fabLourd'};   // lot B en ligne (22 novembre 2026) ; même code dans REGLAGES.typesOrdres
+  fabriquerMissileLourd:'fabLourd',   // lot B en ligne (22 novembre 2026) ; même code dans REGLAGES.typesOrdres
+  capturer:'capturer'};               // extracteurs en ligne (26 novembre 2026) ; même code dans REGLAGES.typesOrdres
 const TYPES_ORDRES_RESEAU = Object.assign(Object.create(null), Object.fromEntries(Object.entries(CODES_ORDRES).map(([t, c]) => [c, t])));
 function ordreVersReseau(o){
   const code = Object.prototype.hasOwnProperty.call(CODES_ORDRES, o.type) ? CODES_ORDRES[o.type] : null;
@@ -10911,6 +10944,7 @@ function uniteRecue(u){
 }
 function batimentRecu(b){
   if(!b || !entierEntre(b.id, 1, 65535) || !aCle(BATIMENTS, b.type) || !aCle(camps, b.camp)) return null;
+  if(b.type === 'extracteur' && !extracteursCarte(CARTE).length) return null;   // pas d'extracteur sur une carte qui n'en a pas
   if(!entierEntre(b.c, 0, COLS - 1) || !entierEntre(b.r, 0, LIGNES - 1) || !(estNombre(b.pvMax) && b.pvMax > 0)) return null;
   const r = Object.assign({}, b);
   r.pv = bornerNb(b.pv, 0, b.pvMax, 0); r.progres = bornerNb(b.progres, 0, 1, 1); r.avancement = bornerNb(b.avancement, 0, 1, 0);
@@ -10920,7 +10954,19 @@ function batimentRecu(b){
   r.gal = galerieRecue(b);
   r.para = batterieRecue(b);
   r.intT = r.para && estNombre(b.intT) ? bornerNb(b.intT, 0, 1e7, 0) : null;
+  r.extr = extracteurRecu(b);
   return r;
+}
+// État d'un extracteur reçu (26 novembre 2026, grande carte en ligne) : seulement pour un extracteur ; camp qui capture
+// parmi les camps de la partie (ou null), s de capture bornées à la durée, contestée booléen strict, heure du dernier
+// versement finie bornée (ou null) ; sinon null. Fonction pure.
+function extracteurRecu(b){
+  const e = b.extr, D = BATIMENTS[b.type];
+  if(!e || typeof e !== 'object' || !D || !D.extracteur) return null;
+  const K = e.capture && typeof e.capture === 'object' ? e.capture : null;
+  const camp = K && CAMPS_JOUEURS.includes(K.camp) && aCle(camps, K.camp) ? K.camp : null;
+  return {capture:K ? {camp, equipe:camp ? equipeDe(camp) : null, t:bornerNb(K.t, 0, EXTRACTEUR.duree, 0), conteste:K.conteste === true} : null,
+    versementT:estNombre(e.versementT) ? bornerNb(e.versementT, 0, 1e7, 0) : null};
 }
 // État d'une Batterie Parasol reçu (20 novembre 2026, défense en ligne) : seulement pour une batterie, entiers 0-15
 // (au plus stockMax), fabT fini borné ; sinon null. Fonction pure. (22 novembre 2026 : ou une Batterie Zénith.)
@@ -10980,7 +11026,8 @@ function recevoirInstantane(s){
     I.tampon.length = 0; I.courant = null; I.precedent = null; I.init = false; I.reculs = 0; I.resynchros++; d = null;
   } else I.reculs = 0;
   const snap = {T:s.temps, recu:performance.now()/1000, n:s.n, unites:new Map(), batiments:new Map(), camps:[], projectiles:[], effets:[]};
-  for(const c of Array.isArray(s.camps) ? s.camps.slice(0, 8) : []){ const r = campRecu(c); if(r) snap.camps.push(r); }
+  // (26 novembre 2026 : 8 camps de joueurs, plus N et X, jusqu'à 10 enregistrements ; 8 avant, qui suffisaient à 4 camps.)
+  for(const c of Array.isArray(s.camps) ? s.camps.slice(0, CAMPS_JOUEURS.length + 2) : []){ const r = campRecu(c); if(r) snap.camps.push(r); }
   for(const u of U){ const r = uniteRecue(u); if(r && !snap.unites.has(r.id)) snap.unites.set(r.id, r); }
   for(const b of B){ const r = batimentRecu(b); if(r && !snap.unites.has(r.id) && !snap.batiments.has(r.id)) snap.batiments.set(r.id, r); }
   for(const p of Array.isArray(s.projectiles) ? s.projectiles.slice(0, 255) : []){ const r = projectileRecu(p); if(r) snap.projectiles.push(r); }
@@ -11031,6 +11078,7 @@ function creerBatimentInvite(r){
   // Batterie Parasol (défense en ligne) : comme creerBatiment ; b.intT absent tant qu'elle n'a pas tiré. (22 novembre
   // 2026 : Batterie Zénith de même.)
   if(D.defense && GENRES_BATTERIES.includes(D.defense.genre)) b.para = {stock:0, fab:0, fabT:0, autorise:{}};
+  if(D.extracteur) Object.assign(b, {capture:null, revenuT:0});   // extracteur (26 novembre 2026) : comme creerBatiment
   empreinteBatiment(b, true);
   ents.push(b); invite.index.set(b.id, b);
   return b;
@@ -11068,6 +11116,17 @@ function majBatimentInvite(b, r){
     const p = b.para, q = r.para;
     p.stock = q ? q.stock : 0; p.fab = q ? q.fab : 0; p.fabT = q ? q.fabT : 0;
     if(r.intT != null) b.intT = r.intT; else delete b.intT;
+  }
+  // Extracteur (26 novembre 2026) : capture en cours et revenu, tels que l'hôte les tient (anneau, fiche). Son
+  // propriétaire est b.camp, recopié plus haut (modèle et minicarte suivent).
+  if(b.def.extracteur){ const q = r.extr; b.capture = q && q.capture ? Object.assign({}, q.capture) : null; b.versementT = q ? q.versementT : null; }
+}
+// Invité, à chaque image (26 novembre 2026) : s accumulées vers le prochain versement d'un extracteur (fiche), déduites
+// de l'heure du dernier versement reçue, comme majExtracteurs les tient chez l'hôte. Sans extracteur, ne fait rien.
+function majExtracteursInvite(){
+  for(const b of ents){
+    if(b.mort || !b.def.extracteur) continue;
+    b.revenuT = b.versementT == null ? 0 : Math.max(0, Math.min(EXTRACTEUR.periode, temps - b.versementT));
   }
 }
 // Invité, à chaque image (20 novembre 2026, galeries en ligne, lot 1) : ce que majGalerie tient chez l'hôte pour le
@@ -11216,6 +11275,7 @@ function avancerInvite(dt){
   }
   interpolerInvite(dt);
   majGaleriesInvite();   // galeries de tir (20 novembre 2026) : sans galerie, ne fait rien
+  majExtracteursInvite();   // extracteurs (26 novembre 2026) : sans extracteur, ne fait rien
   viderInterceptionsInvite();   // défense antimissile : sans événement reçu, ne fait rien
   // Projectiles et effets : vie locale (comme miseAJour), impact posé par l'invité lui-même.
   const P = projectiles;
@@ -11354,6 +11414,14 @@ function envoyerOrdreInvite(camp, ordre){
   // ici, comme en solo (ok:false, mêmes motifs), au lieu d'un « ok » sans effet. Le camp éliminé est dit au joueur.
   const C = camps[camp];
   if(C && C.elimine) return {ok:false, motif:'Votre camp est éliminé : vous êtes spectateur.', code:'elimine', genre:'info'};
+  // Capture d'un extracteur (26 novembre 2026, grande carte en ligne) : contrôlée sur l'état affiché par le même
+  // validerOrdre que le solo (ouvriers du camp, extracteur neutre ou ennemi), refus dit tout de suite ; l'hôte la
+  // valide de nouveau sur son propre état.
+  if(ordre.type === 'capturer'){
+    let v;
+    try { v = validerOrdre(camp, ordre); } catch(err){ v = {motif:'Ordre illisible.', code:'invalide'}; }
+    if(v.motif) return {ok:false, motif:v.motif, code:v.code, genre:v.genre};
+  }
   if(ordre.type === 'pouvoir' && C && typeof ordre.cle === 'string'){
     const P = (POUVOIRS[C.faction] || []).find(p => p.cle === ordre.cle);
     if(P && pouvoirsActifs[camp]){
@@ -11402,6 +11470,7 @@ function preparerMondeInvite(listeCamps, campId){
   ents = []; projectiles = []; effets = []; evenements = []; selection = []; groupes = {}; mode = null;
   temps = 0; enPause = false; partieFinie = false; statsCamps = {}; issuePartie = null;
   population = {J:0, I:0, K:0, L:0, N:0, X:0};
+  for(const id of CAMPS_JOUEURS) population[id] = 0;   // (26 novembre 2026 : M, O, P, Q aussi)
   for(const k in alertes) delete alertes[k];
   popMax = POP_PAR_CAMPS[listeCamps.length] || 60;
   campJoueur = campId; roleMonde = 'invite'; journalReseau = null;
@@ -11478,7 +11547,8 @@ function chargerScriptReseau(){
 // J (confié à l'ordinateur), l'invité I ; K et L (si la carte a 4 emplacements, &camps=4) sont des ordinateurs.
 // L'écran montre la vue de l'invité : on joue I à la souris, ses ordres partent chez l'hôte.
 async function lancerEcho(params){
-  // Une carte hors ligne (grande carte) ne passe pas par le codec du jeu en ligne : pas de mode ?echo.
+  // Une carte hors ligne ne passe pas par le codec du jeu en ligne : pas de mode ?echo. (26 novembre 2026 : la grande
+  // carte n'en est plus une ; ?echo&carte=couronneVarenne&camps=8 y joue à huit camps.)
   if(carteHorsLigne(CARTE)){ echo.pret = false; echo.erreur = 'Cette carte ne se joue pas en ligne.'; console.warn('[Echo] ' + echo.erreur); el('menu').classList.remove('cache'); afficherEscarmouche(); return; }
   modeReseau = 'echo'; echo.pret = false; echo.erreur = null;
   // ?echo&galeries=1 : galeries de tir dans les deux mondes (20 novembre 2026, outil d'essai) ; sans lui, réglage décoché.
@@ -11489,9 +11559,14 @@ async function lancerEcho(params){
     declarerTypesReseau();
     const n = (k, d) => { const v = parseFloat(params.get(k)); return isFinite(v) && v >= 0 ? v : d; };
     echo.bus = Reseau.simuler({retard:n('retard', 150), gigue:n('gigue', 30), perte:Math.min(1, n('perte', 5)/100)});
-    const nb = Math.min(emplacementsCarte(CARTE).length, params.get('camps') === '2' ? 2 : 4) >= 4 ? 4 : 2;
+    let nb = Math.min(emplacementsCarte(CARTE).length, params.get('camps') === '2' ? 2 : 4) >= 4 ? 4 : 2;
+    // Grande carte (26 novembre 2026) : &camps=5 à 8 ajoute des ordinateurs M, O, P, Q (équipes E à H, factions
+    // alternées) ; sans ce paramètre, quatre camps comme ailleurs. Les autres cartes ne changent pas.
+    const nv = parseInt(params.get('camps'), 10), maxEcho = campsMaxEnLigne(CARTE);
+    if(maxEcho > 4 && nv > 4) nb = Math.min(maxEcho, nv);
     const config = [{id:'J', faction:'halden', equipe:'A', ia:false}, {id:'I', faction:'karsk', equipe:'B', ia:false}];
-    if(nb === 4) config.push({id:'K', faction:'karsk', equipe:'C', ia:true}, {id:'L', faction:'halden', equipe:'D', ia:true});
+    if(nb >= 4) config.push({id:'K', faction:'karsk', equipe:'C', ia:true}, {id:'L', faction:'halden', equipe:'D', ia:true});
+    for(let i = 4; i < nb; i++) config.push({id:CAMPS_JOUEURS[i], faction:i % 2 ? 'karsk' : 'halden', equipe:EQUIPES_SOLO[i], ia:true});
     surprise.demandee = false;   // mode Surprises désactivé en multijoueur
     demarrer('halden', config);
     confierCampAOrdinateur('J', difficulte);
@@ -11598,27 +11673,39 @@ function etapeConnexion(e){
 function montrerSalon(vue){ enLigne.vue = vue; montrerEcran('ecranSalon'); el('sousTitre').textContent = 'EN LIGNE · CARTE : ' + (CARTE ? CARTE.nom : '').toUpperCase(); rendreSalon(); }
 function configSalonDefaut(){
   const f = (configEcran || lireConfigCamps()).joueur.faction;
+  // Grande carte en ligne (26 novembre 2026) : sept autres emplacements ; par défaut, chacun pour soi à huit, une place
+  // de joueur et six ordinateurs aléatoires (équipes C à H). Ailleurs : comme avant.
+  if(campsMaxEnLigne(CARTE) > 4) return {hote:{faction:f, equipe:'A'}, autres:Array.from({length:campsMaxEnLigne(CARTE) - 1},
+    (_, i) => ({type:i === 0 ? 'humain' : 'aleatoire', equipe:EQUIPES_SOLO[i + 1]}))};
   return {hote:{faction:f, equipe:'A'}, autres:[{type:'humain', equipe:'B'}, {type:'ferme', equipe:'C'}, {type:'ferme', equipe:'D'}]};
 }
 const TYPES_EMPL_SALON = [['humain', 'Joueur (en attente)'], ['halden', 'Ordinateur Halden'], ['karsk', 'Ordinateur Karsk'], ['aleatoire', 'Ordinateur aléatoire'], ['ferme', 'Fermé']];
-// Configuration de l'écran -> emplacements de reseau.js ({camp, equipe 1-4, type, faction}).
+// Types proposés pour l'emplacement i des « autres » (0 = place 2) : à partir de la place 5 (grande carte), ordinateur
+// ou fermé seulement (quatre joueurs humains au plus, hôte compris ; 26 novembre 2026).
+function typesEmplSalon(i){ return i + 1 >= HUMAINS_MAX_EN_LIGNE ? TYPES_EMPL_SALON.filter(t => t[0] !== 'humain') : TYPES_EMPL_SALON; }
+// Configuration de l'écran -> emplacements de reseau.js ({camp, equipe 1-4, type, faction} ; équipes 1-8 et huit
+// emplacements sur la grande carte, 26 novembre 2026). Une place humaine au-delà de la quatrième devient fermée.
 function emplacementsSalon(cfg){
-  const r = [{camp:'J', equipe:EQUIPES.indexOf(cfg.hote.equipe) + 1, type:'humain', faction:cfg.hote.faction}];
-  cfg.autres.forEach((a, i) => {
-    const camp = CAMPS_JOUEURS[i + 1], equipe = EQUIPES.indexOf(a.equipe) + 1;
-    if(a.type === 'humain') r.push({camp, equipe, type:'humain', faction:opposeFaction(cfg.hote.faction)});
+  const EQ = equipesEnLigne(CARTE);
+  const r = [{camp:'J', equipe:EQ.indexOf(cfg.hote.equipe) + 1, type:'humain', faction:cfg.hote.faction}];
+  cfg.autres.slice(0, campsMaxEnLigne(CARTE) - 1).forEach((a, i) => {
+    const camp = CAMPS_JOUEURS[i + 1], equipe = EQ.indexOf(a.equipe) + 1;
+    if(a.type === 'humain' && i + 1 >= HUMAINS_MAX_EN_LIGNE) r.push({camp, equipe, type:'ferme', faction:null});
+    else if(a.type === 'humain') r.push({camp, equipe, type:'humain', faction:opposeFaction(cfg.hote.faction)});
     else if(a.type === 'ferme') r.push({camp, equipe, type:'ferme', faction:null});
     else r.push({camp, equipe, type:'ordinateur', faction:a.type});
   });
   return r;
 }
 function appliquerRaccourciSalon(cle){
-  const R = RACCOURCIS_CAMPS.find(r => r[0] === cle); if(!R) return;
+  // (26 novembre 2026 : sur la grande carte, les raccourcis à huit en plus ; les emplacements absents d'un raccourci à
+  // quatre sont fermés, comme sur l'écran hors ligne.)
+  const R = raccourcisEcran().find(r => r[0] === cle); if(!R) return;
   const cfg = enLigne.config, eq = R[2];
   cfg.hote.equipe = eq[0];
   cfg.autres.forEach((a, i) => {
     const e = eq[i + 1];
-    if(e === null){ if(!siegeOccupe(i + 1)) a.type = 'ferme'; }
+    if(e == null){ if(!siegeOccupe(i + 1)) a.type = 'ferme'; }
     else { if(a.type === 'ferme') a.type = i === 0 ? 'humain' : 'aleatoire'; a.equipe = e; }
   });
   pousserConfigSalon(); rendreSalon();
@@ -11635,7 +11722,7 @@ function pousserConfigSalon(){
     S.modifierEmplacement(i, champs);
   });
 }
-function optionsEquipes(v, attr){ return `<select ${attr}>${EQUIPES.map(e => `<option value="${e}"${e === v ? ' selected' : ''}>Équipe ${e}</option>`).join('')}</select>`; }
+function optionsEquipes(v, attr){ return `<select ${attr}>${equipesEnLigne(CARTE).map(e => `<option value="${e}"${e === v ? ' selected' : ''}>Équipe ${e}</option>`).join('')}</select>`; }
 function etatSiegeTexte(s, moi){
   if(s.type === 'ferme') return {t:'fermé', c:''};
   if(s.type === 'ordinateur') return {t:'ordinateur', c:''};
@@ -11656,7 +11743,7 @@ function rendreSalon(){
       <select data-k="hfaction"><option value="halden"${cfg.hote.faction === 'halden' ? ' selected' : ''}>Halden</option><option value="karsk"${cfg.hote.faction === 'karsk' ? ' selected' : ''}>Karsk</option></select>
       ${optionsEquipes(cfg.hote.equipe, 'data-k="hequipe"')}</div>`];
     cfg.autres.forEach((a, i) => lignes.push(`<div class="empl${a.type === 'ferme' ? ' ferme' : ''}"><span class="pastille" style="background:${a.type === 'ferme' ? 'transparent' : COULEURS_CAMPS[CAMPS_JOUEURS[i + 1]]}"></span>
-      <b class="qui">Place ${i + 2}</b><select data-i="${i}" data-k="type">${TYPES_EMPL_SALON.map(([t, n]) => `<option value="${t}"${t === a.type ? ' selected' : ''}>${n}</option>`).join('')}</select>
+      <b class="qui">Place ${i + 2}</b><select data-i="${i}" data-k="type">${typesEmplSalon(i).map(([t, n]) => `<option value="${t}"${t === a.type ? ' selected' : ''}>${n}</option>`).join('')}</select>
       ${optionsEquipes(a.equipe, `data-i="${i}" data-k="equipe"${a.type === 'ferme' ? ' disabled' : ''}`)}</div>`));
     zone.innerHTML = `<h2>Héberger une partie</h2>
       <p class="note">Carte : <b>${echapper(CARTE.nom)}</b> (pour en changer, revenez à l’écran précédent). Les ordinateurs jouent en difficulté
@@ -11668,7 +11755,7 @@ function rendreSalon(){
       ${notes}<div class="boutons"><button class="grand principal" id="bOuvrirSalon" type="button"${enLigne.occupe ? ' disabled' : ''}>${enLigne.occupe ? echapper(enLigne.etapeTexte || 'Connexion au serveur…') : 'Ouvrir le salon'}</button>
       <button class="grand" id="bSalonRetour" type="button">Retour</button></div>${pied}`;
     const racc = el('salonRacc');
-    for(const [cle, nom] of RACCOURCIS_CAMPS){ const b = document.createElement('button'); b.type = 'button'; b.className = 'petit'; b.textContent = nom; b.onclick = () => appliquerRaccourciSalon(cle); racc.appendChild(b); }
+    for(const [cle, nom] of raccourcisEcran()){ const b = document.createElement('button'); b.type = 'button'; b.className = 'petit'; b.textContent = nom; b.onclick = () => appliquerRaccourciSalon(cle); racc.appendChild(b); }   // (grande carte : « Chacun pour soi à 8 », « 4 contre 4 » en plus, 26 novembre 2026)
     brancherSelectsSalon(zone);
     el('salonDiff').onchange = ev => { difficulte = ev.target.value; const d = el('difficulte'); if(d) d.value = difficulte; };
     brancherCaseGaleriesSalon();
@@ -11683,10 +11770,10 @@ function rendreSalon(){
       const occupe = s.id && !s.hote, cfgA = i ? enLigne.config.autres[i - 1] : null;
       const fac = s.hote ? `<select data-k="hfaction"><option value="halden"${s.faction === 'halden' ? ' selected' : ''}>Halden</option><option value="karsk"${s.faction === 'karsk' ? ' selected' : ''}>Karsk</option></select>`
         : s.type === 'humain' ? `<span class="etatSiege">${occupe ? nomFactionSalon(s.faction) : 'au choix du joueur'}</span>` : '';
-      const type = s.hote ? '' : `<select data-i="${i - 1}" data-k="type"${occupe ? ' disabled' : ''}>${TYPES_EMPL_SALON.map(([t, n]) => `<option value="${t}"${t === cfgA.type ? ' selected' : ''}>${n}</option>`).join('')}</select>`;
+      const type = s.hote ? '' : `<select data-i="${i - 1}" data-k="type"${occupe ? ' disabled' : ''}>${typesEmplSalon(i - 1).map(([t, n]) => `<option value="${t}"${t === cfgA.type ? ' selected' : ''}>${n}</option>`).join('')}</select>`;
       return `<div class="empl${s.type === 'ferme' ? ' ferme' : ''}${s.hote ? ' moi' : ''}"><span class="pastille" style="background:${s.type === 'ferme' ? 'transparent' : COULEURS_CAMPS[s.camp]}"></span>
         <b class="qui">${echapper(s.hote ? (s.pseudo || 'Hôte') : occupe ? s.pseudo : 'Place ' + (i + 1))}</b>${type}${fac}
-        ${optionsEquipes(EQUIPES[s.equipe - 1], s.hote ? 'data-k="hequipe"' : `data-i="${i - 1}" data-k="equipe"${s.type === 'ferme' ? ' disabled' : ''}`)}
+        ${optionsEquipes(equipesEnLigne(CARTE)[s.equipe - 1], s.hote ? 'data-k="hequipe"' : `data-i="${i - 1}" data-k="equipe"${s.type === 'ferme' ? ' disabled' : ''}`)}
         <span class="etatSiege ${et.c}">${echapper(et.t)}</span>${occupe ? `<button class="petit" type="button" data-expulser="${i}">Retirer</button>` : ''}</div>`;
     });
     const pb = problemeLancementSalon();
@@ -11701,7 +11788,7 @@ function rendreSalon(){
       <button class="grand" id="bFermerSalon" type="button">Fermer le salon</button></div>
       <p class="probleme">${echapper(pb || '')}</p>${pied}`;
     const racc = el('salonRacc');
-    for(const [cle, nom] of RACCOURCIS_CAMPS){ const b = document.createElement('button'); b.type = 'button'; b.className = 'petit'; b.textContent = nom; b.onclick = () => appliquerRaccourciSalon(cle); racc.appendChild(b); }
+    for(const [cle, nom] of raccourcisEcran()){ const b = document.createElement('button'); b.type = 'button'; b.className = 'petit'; b.textContent = nom; b.onclick = () => appliquerRaccourciSalon(cle); racc.appendChild(b); }   // (grande carte : « Chacun pour soi à 8 », « 4 contre 4 » en plus, 26 novembre 2026)
     brancherSelectsSalon(zone);
     brancherCaseGaleriesSalon();
     for(const b of zone.querySelectorAll('[data-expulser]')) b.onclick = () => { S.expulser(+b.dataset.expulser, 'Retiré par l’hôte.'); rendreSalon(); };
@@ -11729,9 +11816,12 @@ function rendreSalon(){
   if(v === 'rejoindre' && S){
     // Description reçue du réseau (défaut S1) : seuls les emplacements bien formés sont montrés (index entier 0-3
     // distinct, camp, type et équipe en liste blanche) ; tout texte est échappé, la couleur vient de la table locale.
+    // (26 novembre 2026, grande carte en ligne : bornes de la carte annoncée par l'hôte, 8 emplacements et 8 équipes sur la
+    // Couronne de Varenne, 4 et 4 ailleurs ; place humaine seulement aux index 0-3.)
     const d = S.description() || {emplacements:[]}, vusIdx = new Set();
-    const empls = (Array.isArray(d.emplacements) ? d.emplacements : []).filter(s => s && entierEntre(s.index, 0, 3) && CAMPS_JOUEURS.includes(s.camp) && ['humain', 'ordinateur', 'ferme'].includes(s.type)
-      && entierEntre(s.equipe, 1, EQUIPES.length) && !vusIdx.has(s.index) && vusIdx.add(s.index));
+    const carteD = aCle(CARTES, d.carte) ? CARTES[d.carte] : CARTE, nbD = campsMaxEnLigne(carteD), EQD = equipesEnLigne(carteD);
+    const empls = (Array.isArray(d.emplacements) ? d.emplacements : []).filter(s => s && entierEntre(s.index, 0, nbD - 1) && CAMPS_JOUEURS.includes(s.camp) && ['humain', 'ordinateur', 'ferme'].includes(s.type)
+      && !(s.type === 'humain' && s.index >= HUMAINS_MAX_EN_LIGNE) && entierEntre(s.equipe, 1, EQD.length) && !vusIdx.has(s.index) && vusIdx.add(s.index));
     const lignes = empls.map(s => {
       const moi = s.index === S.siege, et = etatSiegeTexte(s, moi);
       const libre = s.type === 'humain' && !s.occupe;
@@ -11740,7 +11830,7 @@ function rendreSalon(){
       const qui = typeof s.pseudo === 'string' && s.pseudo ? s.pseudo : s.type === 'ordinateur' ? 'Ordinateur' : s.type === 'ferme' ? 'Fermé' : 'Place libre';
       return `<div class="empl${s.type === 'ferme' ? ' ferme' : ''}${moi ? ' moi' : ''}"><span class="pastille" style="background:${s.type === 'ferme' ? 'transparent' : couleurDuCamp(s.camp)}"></span>
         <b class="qui">${echapper(qui)}</b>${fac}
-        <span class="etatSiege">équipe ${echapper(EQUIPES[s.equipe - 1])}</span><span class="etatSiege ${et.c}">${echapper(et.t)}</span>
+        <span class="etatSiege">équipe ${echapper(EQD[s.equipe - 1])}</span><span class="etatSiege ${et.c}">${echapper(et.t)}</span>
         ${libre ? `<button class="petit" type="button" data-siege="${Number(s.index)}">Prendre cette place</button>` : ''}</div>`;
     });
     const mien = empls.find(s => s.index === S.siege) || {};
@@ -11799,7 +11889,7 @@ function listeDepuisSalon(L, tirer){
   return L.filter(s => s.type === 'ordinateur' || (s.type === 'humain' && s.id)).map(s => {
     let f = s.faction === 'halden' || s.faction === 'karsk' ? s.faction : null;
     if(!f) f = s.type === 'ordinateur' && tirer ? (Math.random() < 0.5 ? 'halden' : 'karsk') : 'halden';
-    return {id:s.camp, faction:f, equipe:EQUIPES[s.equipe - 1] || 'A', ia:s.type === 'ordinateur', pseudo:s.type === 'humain' ? s.pseudo : null};
+    return {id:s.camp, faction:f, equipe:equipesEnLigne(CARTE)[s.equipe - 1] || 'A', ia:s.type === 'ordinateur', pseudo:s.type === 'humain' ? s.pseudo : null};
   });
 }
 
@@ -11916,7 +12006,7 @@ function verifierFinEnLigne(){
   let issue = issueEnLigne(campLocal());
   // Invité, fin confirmée : l'équipe gagnante annoncée par l'hôte fait foi sur l'état affiché, qu'un joueur qui a le
   // code peut fausser juste avant la fin (septième tour : DÉFAITE affichée au vainqueur, ou l'inverse).
-  if(modeReseau === 'invite' && enLigne.finConfirmee && EQUIPES.includes(enLigne.equipeFin) && camps[campLocal()]){
+  if(modeReseau === 'invite' && enLigne.finConfirmee && equipesEnLigne(CARTE).includes(enLigne.equipeFin) && camps[campLocal()]){
     const v = equipeDe(campLocal()) === enLigne.equipeFin, F = faction(campLocal());
     issue = {victoire:v, texte:v ? F.victoire : F.defaite};
   }
@@ -12042,8 +12132,8 @@ async function rejoindreSalon(saisie, pseudo, o){
   // Carte de l'hôte : la page est rechargée sur elle (le décor 3D n'est construit qu'une fois), puis rejoint seule.
   // Seule une carte du catalogue est admise (clé propre de CARTES), et une seule fois (&auto=1 : pas de boucle).
   const d = S.description() || {};
-  // Carte hors ligne (grande carte) : jamais en ligne, que l'hôte l'annonce ou que la page de l'invité soit
-  // déjà dessus sans carte annoncée.
+  // Carte hors ligne : jamais en ligne, que l'hôte l'annonce ou que la page de l'invité soit déjà dessus sans carte
+  // annoncée. (26 novembre 2026 : la grande carte n'en est plus une ; l'invité la recharge comme les autres.)
   if(carteHorsLigne(CARTE) && (!d.carte || d.carte === CARTE.id)){
     enLigne.erreur = 'Cette carte ne se joue pas en ligne : choisissez-en une autre avant de rejoindre.';
     try { await S.quitter(); } catch(err){} libererVerrouSiege(); rendreSalon(); return;
@@ -12138,15 +12228,19 @@ async function identifiantPrisParUnAutreOnglet(code){
 // Description de la partie ('debut') contrôlée avec les tables du jeu (défaut S1) : camp parmi J, I, K, L (distincts),
 // faction Halden ou Karsk, équipe A-D, emplacement entier distinct de la carte, pseudonyme nettoyé ; la couleur
 // n'est jamais reprise. Renvoie la liste des camps, ou null si la description ne tient pas.
+// (26 novembre 2026, grande carte en ligne : sur une carte de plus de quatre emplacements, jusqu'à 8 camps parmi J, I,
+// K, L, M, O, P, Q et équipes A-H ; 4 humains au plus (camps sans ia) ; ailleurs, comme avant.)
 function campsDuDebut(debut){
-  if(!debut || typeof debut !== 'object' || !Array.isArray(debut.camps) || debut.camps.length < 2 || debut.camps.length > 4) return null;
+  const max = campsMaxEnLigne(CARTE), admis = CAMPS_JOUEURS.slice(0, max), EQ = equipesEnLigne(CARTE);
+  if(!debut || typeof debut !== 'object' || !Array.isArray(debut.camps) || debut.camps.length < 2 || debut.camps.length > max) return null;
   if(debut.carte != null && (!CARTE || debut.carte !== CARTE.id)) return null;
-  if(carteHorsLigne(CARTE)) return null;   // grande carte : jamais en ligne
+  if(carteHorsLigne(CARTE)) return null;   // carte hors ligne : jamais en ligne
+  if(debut.camps.filter(k => !(k && k.ia === true)).length > HUMAINS_MAX_EN_LIGNE) return null;
   const nbEmpl = emplacementsCarte(CARTE).length, vusId = new Set(), vusEmpl = new Set(), liste = [];
   for(const k of debut.camps){
-    if(!k || typeof k !== 'object' || !CAMPS_EN_LIGNE.includes(k.id) || vusId.has(k.id)) return null;
+    if(!k || typeof k !== 'object' || !admis.includes(k.id) || vusId.has(k.id)) return null;
     if(k.faction !== 'halden' && k.faction !== 'karsk') return null;
-    if(!EQUIPES.includes(k.equipe)) return null;
+    if(!EQ.includes(k.equipe)) return null;
     if(!entierEntre(k.emplacement, 0, nbEmpl - 1) || vusEmpl.has(k.emplacement)) return null;
     vusId.add(k.id); vusEmpl.add(k.emplacement);
     const pseudo = typeof k.pseudo === 'string' ? Reseau.nettoyerPseudo(k.pseudo) : '';
@@ -12201,7 +12295,7 @@ function finInviteReseau(d){
     // l'annonce) : les éliminations lues font foi tout de suite.
     enLigne.finConfirmee = true;
     // Équipe gagnante annoncée par l'hôte (lettre A-D contrôlée) : elle décide de l'issue affichée (verifierFinEnLigne).
-    const eqG = d.donnees && EQUIPES.includes(d.donnees.equipe) ? d.donnees.equipe : null;
+    const eqG = d.donnees && equipesEnLigne(CARTE).includes(d.donnees.equipe) ? d.donnees.equipe : null;   // (A-H sur la grande carte)
     enLigne.equipeFin = eqG;
     if(!enLigne.finMontree){ try { verifierFin(); } catch(err){} }
     // Filet (dernier instantané perdu, erreur ci-dessus) : l'issue se lit quand même dans l'équipe annoncée.
